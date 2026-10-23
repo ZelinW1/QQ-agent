@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR } from './config.js';
+import { buildChatProfileFrom, resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
 import { customSearch } from './web-search.js';
 import { listModels, chatCompletion, resolveApiKey, estimateCost, cacheHitRate } from './llm.js';
 import { resolveOfficialPrice, listOfficialPrices } from './model-prices.js';
@@ -63,22 +64,33 @@ export function createRoutes(deps) {
    * Skill 可用性判断的运行期上下文。
    * 必须和 orchestrator 用同一份输入，否则会出现
    * "设置页说可用、运行时空工具列表"的口径分裂。
+   *
+   * @param {string} [chatKey] 指定会话时，判据改用该会话的配置快照
+   *   （分会话的工具/技能/视觉开关），并把 chatKey 放进 runtimeContext。
+   *   不传则维持全局口径 —— **既有调用方行为不变**。
+   *
+   * ⚠️ 为什么必须支持 chatKey：依赖 chatKey 的扩展（如 ban-state）在
+   *    "UI 用全局档、运行时用会话档"时会显示不一致。带上它之后，
+   *    同一会话的设置页与运行时看到的是同一份判据。
    */
-  const skillRuntimeContext = () => {
+  const skillRuntimeContext = (chatKey = null) => {
     const cfg = getConfig();
+    const profile = chatKey ? resolveChatProfile(chatKey, cfg) : null;
     return {
-      skills: skillManager,
-      toolsCfg: cfg.tools || {},
+      skills: profile ? skillsViewForProfile(skillManager, profile) : skillManager,
+      toolsCfg: profile ? profile.tools : (cfg.tools || {}),
       // 与 orchestrator 同款判定：vision 开关开着，且当前模型没有被
       // 视觉扫描判定为 no-vision（曾经只看前半项，模型不支持时
       // 设置页仍显示视觉工具可用，运行时却剔除）
-      visionEnabled: cfg.api?.vision !== false
-        && modelImageVerdict(cfg.api?.provider, cfg.api?.model) !== 'no-vision',
-      searchEnabled: cfg.webSearch?.enabled !== false,
+      visionEnabled: profile
+        ? profile.visionEnabled
+        : (cfg.api?.vision !== false && modelImageVerdict(cfg.api?.provider, cfg.api?.model) !== 'no-vision'),
+      searchEnabled: profile ? profile.searchEnabled : (cfg.webSearch?.enabled !== false),
       runtimeContext: {
         model: cfg.api?.model || '',
         provider: cfg.api?.provider || '',
-        source: 'api'
+        source: 'api',
+        ...(chatKey ? { chatKey } : {})
       }
     };
   };
@@ -744,16 +756,32 @@ export function createRoutes(deps) {
         try {
           if (req.method === 'POST') overrides = (await bodyOf(req)) || {};
         } catch { overrides = {}; }
-        const effective = Object.keys(overrides).length
-          ? deepMergeConfig(structuredClone(cfg), structuredClone(overrides))
+        // chatKey 是**预览目标会话**，不是配置补丁：必须先摘出来，
+        // 否则它会被当成配置字段合并进去（config.chatKey 无意义，且会污染预览）。
+        const previewChatKey = String(overrides?.chatKey || '').trim() || null;
+        const patch = { ...overrides };
+        delete patch.chatKey;
+
+        const effective = Object.keys(patch).length
+          ? deepMergeConfig(structuredClone(cfg), structuredClone(patch))
           : cfg;
+        // 指定会话时：用该会话的快照组装，预览才会反映分会话人设/工具/视觉开关。
+        // 不指定时维持原有全局口径（行为不变）。
+        const profile = previewChatKey ? buildChatProfileFrom(effective, previewChatKey) : null;
         const skillContext = {
-          skills: skillManager,
-          toolsCfg: effective.tools || {},
-          visionEnabled: effective.api?.vision !== false
-            && modelImageVerdict(effective.api?.provider, effective.api?.model) !== 'no-vision',
-          searchEnabled: effective.webSearch?.enabled !== false,
-          runtimeContext: { model: effective.api?.model || '', provider: effective.api?.provider || '', source: 'api' }
+          skills: profile ? skillsViewForProfile(skillManager, profile) : skillManager,
+          toolsCfg: profile ? profile.tools : (effective.tools || {}),
+          visionEnabled: profile
+            ? profile.visionEnabled
+            : (effective.api?.vision !== false
+              && modelImageVerdict(effective.api?.provider, effective.api?.model) !== 'no-vision'),
+          searchEnabled: profile ? profile.searchEnabled : (effective.webSearch?.enabled !== false),
+          runtimeContext: {
+            model: effective.api?.model || '',
+            provider: effective.api?.provider || '',
+            source: 'api',
+            ...(previewChatKey ? { chatKey: previewChatKey } : {})
+          }
         };
         const { buildSystemPrompt } = await import('./prompt.js');
         const { buildToolDefs } = await import('./tools.js');
@@ -763,8 +791,13 @@ export function createRoutes(deps) {
           .filter((d) => getToolAvailability(d.id, skillContext).enabled)
           .map((d) => ({ id: d.id, name: d.name, description: d.description, category: d.category }));
         return json(res, 200, {
-          systemPrompt: buildSystemPrompt({ skillContext }),
-          tools
+          // 人设文本用会话快照（主人级人设是运行期机制，预览反映不了，属已知差异）
+          systemPrompt: buildSystemPrompt({
+            skillContext,
+            ...(profile ? { persona: profile.persona, profile } : {})
+          }),
+          tools,
+          chatKey: previewChatKey
         });
       }
     },

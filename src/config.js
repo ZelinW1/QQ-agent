@@ -197,6 +197,21 @@ export const DEFAULT_CONFIG = {
   // 统一模式下不读 personaByChat）—— 否则统一开关形同虚设：旧分会话条目会
   // 继续静默覆盖全局人设，而 UI 已把编辑入口藏起来了。
   personaUnified: true,
+  // ── 会话级配置组合（唯一的分会话配置命名空间）────────────────────────
+  // 形状：{ [chatKey]: { tools?, skills?, api?, webSearch?, sticker? } }
+  //   ⚠️ 键一律用**完整 chatKey**（'group:123' / 'private:456'）。
+  //      历史字段的键格式不统一（groupSliderPos/blocklist 用裸群号 "123"，
+  //      personaByChat 用完整 chatKey），personaForChat 因此背了双格式兼容。
+  //      新命名空间不再助长这个分裂：只认完整 chatKey；裸 id 兼容只保留在
+  //      personaByChat 的读取路径上（兼容老数据），写侧一律写完整 chatKey。
+  //   ⚠️ 只存用户**显式改过**的字段（稀疏覆盖）。'继承'与'显式关掉'必须可区分：
+  //      enabled:false 与"没这个键"语义完全不同，靠合并时"缺失即回落全局"实现。
+  //   ⚠️ 绝不允许放密钥类字段（apiKey/accessToken…）：解析出的快照会被塞进
+  //      运行期上下文并可能回传 UI。
+  //
+  // 合并逻辑**不在这里** —— 唯一实现在 src/chat-profile.js（一处解析，
+  // 避免"同一件事两个真相"）。这里只有存储。
+  chatProfiles: {},
   // 接入白名单
   allow: { groups: [], private: [] },
   deny: { groups: [], private: [] },
@@ -643,14 +658,20 @@ export function setRuntimeConfig(cfg) {
  *    分会话条目继续覆盖会让"所有会话共用这一套人设"的 UI 承诺落空，
  *    且统一模式下 UI 隐藏了分会话编辑入口，用户无从发现也无处改）。
  *    开关关掉后条目恢复生效 —— 数据不删，只是不再参与合并。
+ *
+ * @param {string} chatKey
+ * @param {object} [cfg] 基准配置；省略时取全局当前配置。
+ *   ⚠️ 暴露这个参数是为了让 src/chat-profile.js 能在"临时合并的快照"上复用同一套
+ *      合并逻辑，而不是另写一份（另写一份就必然出现两处口径各自漂移）。
+ *      **普通调用方不要传它** —— 传了就意味着你在自己决定"用哪份配置"。
  */
-export function personaForChat(chatKey) {
-  const base = getConfig().persona || {};
+export function personaForChat(chatKey, cfg = getConfig()) {
+  const base = cfg.persona || {};
   const [kind, id] = String(chatKey || '').split(':');
   if (!id) return base;
   // 统一人设模式：一律用全局，不看 personaByChat
-  if (getConfig().personaUnified !== false) return base;
-  const perChat = getConfig().personaByChat || {};
+  if (cfg.personaUnified !== false) return base;
+  const perChat = cfg.personaByChat || {};
   // 兼容两种键格式：UI 的隐藏 JSON 以 chatKey（group:123）为键保存，
   // 而这里按 id 段（123）查 —— 只认一种格式时保存成功但永不生效
   // （2026-09-17 用户实测踩中：独立人设存了却一直跟随全局）。
@@ -678,11 +699,14 @@ export function personaForChat(chatKey) {
  *
  * 峰谷切换：peakSchedule.enabled 时，先按当前时间判定落在高峰/低谷时段，
  * 用该时段的 sliderPos 换算出档位**覆盖**全局滑条（在 unifiedTier / 分群设置之前生效）。
+ *
+ * @param {string} chatKey
+ * @param {object} [cfg] 基准配置；省略时取全局当前配置。理由同 personaForChat。
  */
-export function storeConfigForChat(chatKey) {
-  const store = getConfig().store || {};
+export function storeConfigForChat(chatKey, cfg = getConfig()) {
+  const store = cfg.store || {};
   // ── 指令禁言：该群被禁言且未到期 → 强制 1 档（仅艾特）──
-  const mutedTier = commandMuteTier(chatKey);
+  const mutedTier = commandMuteTier(chatKey, Date.now(), cfg);
   if (mutedTier !== null) {
     return { ...store, contextTier: 1, randomPercent: 0 };
   }
@@ -731,10 +755,13 @@ function peakWindowActive(ps, at = new Date()) {
 
 /**
  * 指令禁言：该群是否处于禁言期（响应档位被强制为 1 档）。
+ * @param {string} chatKey
+ * @param {number} [at] 判定时刻（测试注入用）
+ * @param {object} [cfg] 基准配置；省略时取全局当前配置。理由同 personaForChat。
  * @returns {number|null} 强制档位（1）；未禁言/已到期返回 null
  */
-export function commandMuteTier(chatKey, at = Date.now()) {
-  const cm = getConfig().commandMute;
+export function commandMuteTier(chatKey, at = Date.now(), cfg = getConfig()) {
+  const cm = cfg.commandMute;
   if (!cm || cm.enabled !== true) return null;
   const [kind, id] = String(chatKey || '').split(':');
   if (kind !== 'group' || !id) return null;

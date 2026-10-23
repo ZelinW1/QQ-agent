@@ -896,6 +896,45 @@ c.section('13. 安全回归');
     assert.ok(p.data && typeof p.data === 'object', 'POST 也应返回预览对象');
   });
 
+  await c.check('/api/prompt-preview：带 chatKey 时预览分会话配置（消灭 UI/运行时口径分裂）', async () => {
+    // ⚠️ 这里刻意用 participation 而不是 roleText：
+    //   roleText 只进**用户提示**的【角色设定】段（见 prompt.js），而预览只组装
+    //   系统提示 —— 用它做断言会"看起来没生效"，其实是预览范围所限，不是 bug。
+    //   participation 会改写系统提示的【该说/不该说】首行，是能落到预览里的分会话字段。
+    const chatA = 'group:77001';
+    const chatB = 'group:77002';
+    const w = await hit('POST', '/api/config', {
+      body: JSON.stringify({
+        chatProfiles: {
+          __replace__: { [chatA]: { persona: { participation: 'low' } } }
+        }
+      }),
+      headers: { 'content-type': 'application/json' }
+    });
+    assert.equal(w.status, 200, `写入 chatProfiles 应 200，实际 ${w.status}`);
+
+    const pa = await hit('POST', '/api/prompt-preview', {
+      body: JSON.stringify({ chatKey: chatA }),
+      headers: { 'content-type': 'application/json' }
+    });
+    const pb = await hit('POST', '/api/prompt-preview', {
+      body: JSON.stringify({ chatKey: chatB }),
+      headers: { 'content-type': 'application/json' }
+    });
+    assert.equal(pa.status, 200);
+    assert.equal(pb.status, 200);
+    assert.equal(pa.data.chatKey, chatA, '响应里回显生效的 chatKey');
+    assert.equal(pb.data.chatKey, chatB);
+    assert.notEqual(pa.data.systemPrompt, pb.data.systemPrompt,
+      'A 群设了安静型参与度，两群的系统提示必须不同（否则分会话配置没生效）');
+    assert.ok(pa.data.systemPrompt.includes('安静型'),
+      'A 群系统提示应体现安静型参与度文案');
+    // chatKey 不得被当成配置字段合并进去
+    const g = await hit('GET', '/api/prompt-preview');
+    assert.equal(g.status, 200, '不传 chatKey 时仍走全局口径（行为不变）');
+    assert.equal(g.data.chatKey, null, '未指定会话时不回显 chatKey');
+  });
+
   // ── 社区/市场代理接口：远端用假 fetch 顶替（绝不在测试里真连官网）──
   // 假响应必须同时提供 json() 与 text()：community.js 走 text()，market.js 走 json()。
   const realFetch = globalThis.fetch;

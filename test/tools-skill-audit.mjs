@@ -537,6 +537,94 @@ async function main() {
       offenders.map((f) => `${f}：调了 onebot.send*，但没有 sender.sendMedia 兜底 → 会跳过限频与留档`).join('\n'));
   }
 
+  // ══ 十七、会话级配置纪律（"一处解析"不许回退）════════════════════════
+  //
+  // 本次重构的核心承诺：per-chat 配置的合并只发生在 src/chat-profile.js 一处，
+  // 其它模块通过"传入 profile"取值。这条纪律**只能靠静态检查守住** ——
+  // 一个 `getConfig()` 直读在功能上完全正常，review 时也看不出问题，
+  // 但它就是"同一件事两个真相"的种子：分会话配置在它那里失效，
+  // 表现为"设了不生效"，而且只在特定会话下复现。
+  //
+  // 之所以要写成断言而不是靠注释约定：历史上 prompt.js 有 12 处直读，
+  // 其中 qqSceneRules 自己算 api.vision（不查模型探测），而工具闸门用的是
+  // orchestrator 算好的 visionEnabled —— 结果模型不支持图片时，
+  // 工具被移除、系统提示却仍在说"你能直接看懂图片内容"。
+  console.log('\n=== 十七、会话级配置纪律（一处解析，不许回退）===');
+  {
+    const readSrc = (rel) => fs.readFileSync(path.join(APP_ROOT, rel), 'utf8');
+    // 只看代码，忽略注释：注释里为了说明原委必然会提到 getConfig()。
+    const isCode = (line) => {
+      const t = line.trim();
+      return t && !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+    };
+
+    // ── 17.1 prompt.js：配置读取必须收敛在文件顶部的 helper 区 ──
+    // 该区就是"profile 优先、全局兜底"的一组 helper（见文件内注释）。
+    // 判定用**两条**规则，而不是数行号：
+    //   · helper 区之外不得出现裸 getConfig()
+    //   · 任何 getConfig() 都必须带兜底写法（?? / ||）—— 保证"传了 profile 就优先用它"
+    // 行号会随编辑漂移，规则不该跟着漂。
+    {
+      const lines = readSrc('src/prompt.js').split(/\r?\n/);
+      const helperEndIdx = lines.findIndex((l) => l.includes('function _chatBlocklistOf'));
+      const HELPERS_END = helperEndIdx >= 0 ? helperEndIdx + 6 : 90;
+      const offenders = [];
+      lines.forEach((line, i) => {
+        if (!isCode(line) || !line.includes('getConfig()')) return;
+        // _globalCfg 是**故意的**全局访问器：它就是"兜底"这一端的实现，
+        // 自己不需要再兜底。其余所有 getConfig() 都必须在 helper 区内且带兜底。
+        if (line.includes('function _globalCfg')) return;
+        const inHelpers = i + 1 <= HELPERS_END;
+        const hasFallback = line.includes('??') || line.includes('||');
+        if (!inHelpers || !hasFallback) {
+          offenders.push(`第 ${i + 1} 行：${line.trim().slice(0, 90)}`);
+        }
+      });
+      check(offenders.length === 0,
+        'prompt.js 的配置读取只在顶部 helper 区，且一律带 profile 优先兜底',
+        offenders.join('\n') + '\n→ 新增读配置请走 helper（_personaOf/_storeCfgOf/_visionOf/_globalCfg…）；'
+        + '裸 getConfig() 会让分会话配置在提示词组装里静默失效');
+    }
+
+    // ── 17.2 orchestrator：不再直接调用分会话折算函数 ──
+    // 它应该改用 resolveChatProfile(chatKey).store —— 保持"一处解析"，
+    // 也为将来给 chatProfiles.store 加分会话档位留好通路。
+    {
+      const lines = readSrc('src/orchestrator.js').split(/\r?\n/);
+      const offenders = [];
+      lines.forEach((line, i) => {
+        if (!isCode(line)) return;
+        if (!/\b(storeConfigForChat|personaForChat)\s*\(/.test(line)) return;
+        offenders.push(`第 ${i + 1} 行：${line.trim().slice(0, 90)}`);
+      });
+      check(offenders.length === 0,
+        'orchestrator 不再直接调用 storeConfigForChat / personaForChat（改用会话快照）',
+        offenders.join('\n'));
+    }
+
+    // ── 17.3 chat-profile：声明式表与 api 快照白名单都不得含密钥字段 ──
+    // 分会话覆盖走的是白名单，快照又会被塞进 skillContext（扩展、会话记录、
+    // UI 预览都能看到）。任一处漏了密钥名，明文 Key 就跟着配置一起流动。
+    {
+      const src = readSrc('src/chat-profile.js');
+      const m = /CHAT_PROFILE_PATHS\s*=\s*\{([\s\S]*?)\n\};/.exec(src);
+      const tableBody = m ? m[1] : '';
+      check(Boolean(tableBody), '能定位到 CHAT_PROFILE_PATHS 声明式表（它是唯一真相）');
+      const SECRET_KEYS = ['apiKey', 'baseUrl', 'accessToken', 'httpAccessToken', 'token', 'secret'];
+      const hits = SECRET_KEYS.filter((k) => tableBody.includes(k));
+      check(hits.length === 0,
+        '可覆盖路径表里不含密钥类字段',
+        `声明式表里出现了：${hits.join(', ')}`);
+
+      const snap = /API_SNAPSHOT_FIELDS\s*=\s*\[([^\]]*)\]/.exec(src);
+      const snapBody = snap ? snap[1] : '';
+      const snapHits = SECRET_KEYS.filter((k) => snapBody.includes(k));
+      check(snapHits.length === 0,
+        'api 快照白名单不含密钥类字段',
+        `API_SNAPSHOT_FIELDS 里出现了：${snapHits.join(', ')}`);
+    }
+  }
+
   // ══ 输出矩阵 ════════════════════════════════════════════════════════
   console.log('\n=== 工具可用性矩阵 ===');
   const pad = (s, n) => String(s) + ' '.repeat(Math.max(0, n - [...String(s)].reduce((a, c) => a + (c.charCodeAt(0) > 127 ? 2 : 1), 0)));

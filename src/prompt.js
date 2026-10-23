@@ -19,6 +19,70 @@ import { formatFullTime, formatShortTime } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
 import { skillManager } from './skills/manager.js';
 
+// ── 会话级配置的读取口（唯一）────────────────────────────────────────────
+//
+// 为什么要有这一小组 helper：提示词组装途中有多处需要读配置（表情积极度、
+// 能否看图/联网、人设名、群友备注、上下文条数）。过去它们直接 getConfig()，
+// 结果是**同一件事有两个真相** —— 最典型的是"能否看图"：
+//   · qqSceneRules 自己按 api.vision 判断（不看模型探测）
+//   · 工具闸门用 orchestrator 算好的 visionEnabled（含 modelImageVerdict 探测）
+//   → 模型明确不支持图片时，工具被移除、系统提示却仍在说"你能直接看懂图片内容"。
+//
+// 现在改为一律从 **profile**（src/chat-profile.js 解析出的会话快照）读，
+// 没传 profile 时回落到全局配置 —— 保持所有既有调用方行为不变。
+// ⚠️ 新增读配置的地方请一律走这里，不要再裸写 getConfig()。
+function _profileCfg(profile) { return profile || null; }
+
+/**
+ * 取全局配置。
+ * 存在的意义：让"本文件里所有配置读取"都收敛在顶部这一区 —— 静态检查
+ * （test/tools-skill-audit.mjs 第十七节）会断言 helper 区之外不再出现裸 getConfig()。
+ * 多这一层包装看起来啰嗦，但它把"读配置"变成一个**可被搜索、可被拦住**的动作；
+ * 散落直读正是"分会话配置静默失效"的成因。
+ */
+function _globalCfg() { return getConfig(); }
+
+/** 表情包配置（分会话可覆盖 encourage）。 */
+function _stickerCfgOf(profile) { return _profileCfg(profile)?.sticker ?? _globalCfg().sticker; }
+
+/** 会话人设：profile 优先，其次现场按 chatKey 折算，最后全局。 */
+function _personaOf(profile, chatKey) {
+  return _profileCfg(profile)?.persona ?? personaForChat(chatKey);
+}
+
+/** 群友备注（全局共享，不属于会话级配置）。 */
+function _memberNotesOf(profile) {
+  return _profileCfg(profile)?.memberNotes ?? getConfig().memberNotes ?? {};
+}
+
+/** 上下文条数等档位参数。 */
+function _storeCfgOf(profile) {
+  return _profileCfg(profile)?.store ?? getConfig().store;
+}
+
+/** 能否看图：与工具闸门同一口径（只认 profile 的派生量）。 */
+function _visionOf(profile) {
+  return _profileCfg(profile)?.visionEnabled ?? (getConfig().api?.vision !== false);
+}
+
+/** 有无联网：同上。 */
+function _searchOf(profile) {
+  return _profileCfg(profile)?.searchEnabled ?? (getConfig().webSearch?.enabled !== false);
+}
+
+/** 全局屏蔽名单（所有会话共用）。 */
+function _globalBlocklistOf(profile) {
+  return _profileCfg(profile)?.globalBlocklist ?? (getConfig().globalBlocklist || []);
+}
+
+/** 本群屏蔽名单（仅群聊有意义）。 */
+function _chatBlocklistOf(profile, chatKey) {
+  const fromProfile = _profileCfg(profile)?.blocklist;
+  if (Array.isArray(fromProfile)) return fromProfile;
+  const id = String(chatKey || '').split(':')[1];
+  return id ? (getConfig().blocklist?.[id] || []) : [];
+}
+
 // ── 系统提示 ─────────────────────────────────────────────────────────────
 
 function securityRules() {
@@ -131,9 +195,10 @@ function memoryRules() {
   ].join('\n');
 }
 
-function stickerRules() {
+function stickerRules(profile = null) {
   // 活跃度档位直接改写策略段的频率行（引导统一在系统提示，不在"本次输入"重复）
-  const lvl = Math.min(3, Math.max(0, Number(getConfig().sticker?.encourage) || 0));
+  const stickerCfg = _stickerCfgOf(profile);
+  const lvl = Math.min(3, Math.max(0, Number(stickerCfg?.encourage) || 0));
   return [
     buildStickerStrategyHint(lvl),
     '',
@@ -150,10 +215,11 @@ function reportBan() {
   ].join('\n');
 }
 
-function qqSceneRules() {
-  const cfg = getConfig();
-  const vision = cfg.api?.vision !== false;
-  const search = cfg.webSearch?.enabled !== false;
+function qqSceneRules(profile = null) {
+  // ⚠️ 只认 profile 的派生量：判据必须与工具闸门（getToolAvailability 的
+  // requiresVision/requiresSearch）完全同源，否则会出现"工具没了、提示词还说能看图"。
+  const vision = _visionOf(profile);
+  const search = _searchOf(profile);
   const lines = [
     '【QQ 场景规则】',
     '- 回复保持简短，符合群友语感；不要使用 Markdown 格式（**、#、代码块在 QQ 上会显示成乱码）。',
@@ -208,9 +274,21 @@ function renderSkillSections(sections) {
   return out;
 }
 
-/** 组装系统提示。 */
-export function buildSystemPrompt({ persona, skillContext, extraSections = [] } = {}) {
-  const cfg = persona ?? getConfig().persona;
+/**
+ * 组装系统提示。
+ *
+ * @param {object}   [o.persona]      会话人设（已是解析后的结果，见 personaForChat）
+ * @param {object}   [o.profile]      会话级配置快照（src/chat-profile.js）。
+ *   ⚠️ 与 persona 的关系：persona 决定**人格文本**（可能被"主人专属人设"这类
+ *      运行期机制覆盖），profile 决定**配置类判据**（能否看图/联网、表情积极度）。
+ *      两者刻意分开 —— 主人人设能改说话风格，但不该顺手改掉"这个模型能不能看图"。
+ * @param {object}   [o.skillContext] 技能可用性上下文（透传给 getPromptSections）
+ * @param {object[]} [o.extraSections] 运行期算出的额外片段（如主人规则）
+ */
+export function buildSystemPrompt({ persona, profile = null, skillContext, extraSections = [] } = {}) {
+  // persona 是调用方显式注入的人格文本（如主人专属人设，可能来自运行期能力）；
+  // 没注入时依次回落：会话快照的人设 → 全局人设。
+  const cfg = persona ?? _personaOf(profile, '') ?? _globalCfg().persona;
   // extraSections：调用方在**运行时**算出来的片段（如主人身份说明）。
   // 与 Skill 自己声明的 prompt.sections 走同一条渲染路径 —— 都排在核心规则之后，
   // 且不参与 skillManager 的开关判断（调用方已经判断过了）。
@@ -267,9 +345,9 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
     '',
     memoryRules(),
     '',
-    stickerRules(),
+    stickerRules(profile),
     '',
-    qqSceneRules(),
+    qqSceneRules(profile),
     '',
     reportBan()
   ];
@@ -310,17 +388,29 @@ function resolveCapabilityFn(name) {
   }
 }
 
-function formatEntry(m, { withId = true } = {}) {
+/**
+ * 渲染一行消息。
+ *
+ * ⚠️ memberNotes 通过参数传入（而不是每次进来读全局配置）：这个函数在
+ * buildPastState / buildTriggerBlock 里是**逐条消息**调用的，之前每条都读一次
+ * getConfig() —— 纯浪费。调用方（每批一次）取好传进来即可。
+ *
+ * @param {object}  m
+ * @param {object}  [opts.withId]      是否带 "#消息id" 前缀
+ * @param {object}  [opts.memberNotes] 群友备注表（会话无关，全局共享）
+ */
+function formatEntry(m, { withId = true, memberNotes = null } = {}) {
   const senderId = String(m.senderId || '');
   const replyPrefix = m.reply?.text || m.reply?.sender ? `[引用 ${[m.reply?.sender, m.reply?.text].filter(Boolean).join('：')}]` : '';
   const hasMid = m.mid !== null && m.mid !== undefined && String(m.mid) !== '';
   const idPrefix = withId && hasMid ? `#${m.mid} ` : '';
+  const notes = memberNotes || {};
 
   const fmt = resolveCapabilityFn('message.speaker-format');
   let who;
   if (fmt) {
     try {
-      who = fmt({ message: m, notes: getConfig().memberNotes || {}, selfLabel: '我' });
+      who = fmt({ message: m, notes, selfLabel: '我' });
     } catch { who = ''; }
   }
   if (!who) {
@@ -328,7 +418,7 @@ function formatEntry(m, { withId = true } = {}) {
     // 印象记忆、@、拍一拍等一整批能力都靠它对齐到具体的人；不带的话模型只能靠名字猜，
     // 而名字既会改也会撞。文案格式与 speaker-identity Skill 保持一致：备注(QQ:123)。
     const idSuffix = senderId && String(senderId) !== 'self' ? `(QQ:${senderId})` : '';
-    who = m.self ? '我' : `${getConfig().memberNotes?.[senderId] || m.senderName || senderId || '未知'}${idSuffix}`;
+    who = m.self ? '我' : `${notes[senderId] || m.senderName || senderId || '未知'}${idSuffix}`;
   }
   return `[${formatShortTime(m.ts)}] ${idPrefix}${who}：${replyPrefix}${m.text}`;
 }
@@ -444,7 +534,9 @@ export function stripMentions(entry) {
  *          count 统一为 historyCount（响应时带的已读条数）
  */
 export function resolveContextTier({ triggerEntries = [], selfNickname = '', botName = '', selfId = '', cfg = null, roll = null, isPrivate = false } = {}) {
-  const c = cfg || getConfig().store || {};
+  // cfg 语义：**已经折算好的档位配置**（调用方传 storeConfigForChat(chatKey) 的结果）。
+  // 不传时回落到全局 store —— 保持既有调用方行为不变。
+  const c = cfg || _storeCfgOf(null);
   // 各档统一的读取条数：historyCount（新字段）；老配置没有时沿用 allCount 的值
   // （四个分档字段已废弃，allCount 与 historyCount 语义等价，取它做迁移兜底最平滑）。
   const historyCount = () => {
@@ -515,8 +607,8 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
  * 组装"已读信息"文本：消息 JSON 的最近一段（带时间与已读语义）。
  * 读取条数统一为 store.historyCount（各档相同，见 config.js）。
  */
-export function buildPastState(store, chatKey, { excludeIds = [], limit = null } = {}) {
-  const cfg = getConfig().store;
+export function buildPastState(store, chatKey, { excludeIds = [], limit = null, profile = null } = {}) {
+  const cfg = _storeCfgOf(profile);
   const maxLimit = limit === null ? Math.max(1, Number(cfg.historyCount) || Number(cfg.allCount) || 80) : Math.max(0, Number(limit) || 0);
   const exclude = new Set(excludeIds);
   if (maxLimit <= 0) return { text: '', count: 0, messages: [] };
@@ -529,15 +621,14 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
   // 屏蔽名单兜底过滤：屏蔽生效前已存档的历史消息，也不能再进提示词。
   // 入口拦截只管"新消息"，这里管"老库存"。机器人自己的发言（self）不过滤。
   // 全局屏蔽（所有群+私聊）+ 按群屏蔽 都要过滤。
-  const globalBlocked = new Set((getConfig().globalBlocklist || []).map(String));
+  const globalBlocked = new Set(_globalBlocklistOf(profile).map(String));
   if (globalBlocked.size) messages = messages.filter((m) => m.self || !globalBlocked.has(String(m.senderId)));
-  const [pKind, pId] = String(chatKey || '').split(':');
-  if (pKind === 'group' && pId) {
-    const blocked = new Set((getConfig().blocklist?.[pId] || []).map(String));
-    if (blocked.size) messages = messages.filter((m) => m.self || !blocked.has(String(m.senderId)));
-  }
+  const blocked = new Set(_chatBlocklistOf(profile, chatKey).map(String));
+  if (blocked.size) messages = messages.filter((m) => m.self || !blocked.has(String(m.senderId)));
   messages = messages.slice(-maxLimit);
-  const lines = messages.map((m) => formatEntry(m, { withId: (m.media || []).length > 0 }));
+  // 备注表每批取一次（formatEntry 逐条调用，之前每条都读一次全局配置）
+  const notes = _memberNotesOf(profile);
+  const lines = messages.map((m) => formatEntry(m, { withId: (m.media || []).length > 0, memberNotes: notes }));
   // 一并把选中的消息返回：调用方要用它判定"记忆该带哪些群友"，
   // 避免模型看到历史里根本没出现的群友印象（那样显得莫名其妙）。
   return { text: lines.join('\n'), count: lines.length, messages };
@@ -548,8 +639,9 @@ function triggerLabels(entry, ctx) {
   const text = String(entry?.text ?? '');
   const lower = text.toLowerCase();
   const nick = String(ctx.selfNickname || '').toLowerCase();
-  const botName = String(getConfig().persona.botName || '').toLowerCase();
-  const notes = getConfig().memberNotes || {};
+  // botName / memberNotes 由 buildTriggerBlock 每批取一次传来（逐条读全局配置纯浪费）。
+  const botName = String(ctx.botName ?? _personaOf(ctx.profile, ctx.chatKey).botName ?? '').toLowerCase();
+  const notes = ctx.memberNotes || _memberNotesOf(ctx.profile);
   const noteName = notes[String(entry?.senderId || '')];
   const noteLower = String(noteName || '').toLowerCase();
   // 「@我」标签：只做精确的昵称/名片匹配。
@@ -570,10 +662,14 @@ function triggerLabels(entry, ctx) {
 /** 私聊/群聊时私聊始终高触发。 */
 export function buildTriggerBlock(triggerEntries, ctx) {
   const lines = [];
+  // 每批取一次（而不是逐条消息读全局配置）：ctx 里已带则复用，否则现取。
+  const notes = ctx.memberNotes || _memberNotesOf(ctx.profile);
+  const botName = ctx.botName ?? _personaOf(ctx.profile, ctx.chatKey).botName ?? '';
+  const rowCtx = { ...ctx, memberNotes: notes, botName };
   for (const m of triggerEntries) {
-    const labels = triggerLabels(m, ctx);
+    const labels = triggerLabels(m, rowCtx);
     const labelStr = labels.length ? `（${labels.join('/')}）` : '';
-    lines.push(`${formatEntry(m)}${labelStr}`);
+    lines.push(`${formatEntry(m, { memberNotes: notes })}${labelStr}`);
   }
   return lines.join('\n');
 }
@@ -706,11 +802,14 @@ function collectMemberIds(messages) {
  *        promptAnchor: { prev, maxExtraRead } }（prev = 上一轮锚点状态，orchestrator 维护）
  */
 export function buildUserPrompt(ctx) {
-  const cfg = getConfig();
+  // 会话级配置快照（src/chat-profile.js）。传了就以它为准，没传回落到全局 ——
+  // 这是"一处解析"在提示词侧的落点：本文件不再有受分会话影响的 getConfig() 直读。
+  const profile = ctx.profile || null;
+  const cfg = _profileCfg(profile) || _globalCfg();
   // 会话级人设：角色设定段的文本用本会话独立人设（personaByChat[群号/QQ号]），
   // 没配置时 personaForChat 原样返回全局 persona，行为与从前完全一致。
   // 与系统提示词共用同一来源 —— 两处不一致会让"系统里的角色"和"输入里的角色"打架。
-  const chatPersona = personaForChat(ctx.chatKey);
+  const chatPersona = _personaOf(profile, ctx.chatKey);
   const now = Date.now();
   const excludeIds = ctx.triggerEntries.map((m) => m.id);
   // 读取条数由上下文档位决定（ctx.contextLimit 由 orchestrator 在唤醒时算好传来；
@@ -718,12 +817,12 @@ export function buildUserPrompt(ctx) {
   const contextLimit = ctx.contextLimit === null || ctx.contextLimit === undefined
     ? null                                   // 没给 = 按默认（全读档的上限）
     : Math.max(0, Number(ctx.contextLimit) || 0);
-  const past = buildPastState(ctx.store, ctx.chatKey, { excludeIds, limit: contextLimit });
+  const past = buildPastState(ctx.store, ctx.chatKey, { excludeIds, limit: contextLimit, profile });
   // 锚定轮需要"截尾前的全部已读"来补齐锚点条目（2026-09-26 修：锚定轮不受
   // historyCount 截尾 —— 先按滑窗取一遍是为了 reset 轮的窗口口径，锚定成立时
   // 再从全量池里把锚点条目找回来）。全量池 = 排除触发批后的最近 500 条已读
   // （500 是 drain 路径的上界，远大于任何合理的锚点+追加规模）。
-  const pastPool = buildPastState(ctx.store, ctx.chatKey, { excludeIds, limit: 500 });
+  const pastPool = buildPastState(ctx.store, ctx.chatKey, { excludeIds, limit: 500, profile });
 
   // ── 提示词锚点（前缀缓存深化）──
   // 连续触发时把上一轮的【记忆】+【已读信息】前缀原样复用，新内容追加其后。
@@ -825,9 +924,11 @@ export function buildUserPrompt(ctx) {
   if (memText) parts.push(`【记忆】\n${memText}`);
 
   // 已读信息（锚定模式 = 锚点条目；标准模式 = 全部条目）
+  // 备注表取一次（formatEntry 逐条调用，不再每条都读全局配置）
+  const notesForRows = _memberNotesOf(profile);
   const readHeaderText = anchored
-    ? readAnchorMessages.map((m) => formatEntry(m, { withId: (m.media || []).length > 0 })).join('\n')
-    : (readExtraMessages || []).map((m) => formatEntry(m, { withId: (m.media || []).length > 0 })).join('\n');
+    ? readAnchorMessages.map((m) => formatEntry(m, { withId: (m.media || []).length > 0, memberNotes: notesForRows })).join('\n')
+    : (readExtraMessages || []).map((m) => formatEntry(m, { withId: (m.media || []).length > 0, memberNotes: notesForRows })).join('\n');
   if (anchored) {
     if (readHeaderText) {
       parts.push(`【已读信息】以下是这个会话最近的聊天记录（按时间排序，你的发言标为"我"；这些都已经看过；带图的消息前有 #消息id，看图/收藏表情工具要用它）：\n${readHeaderText}`);
@@ -836,7 +937,7 @@ export function buildUserPrompt(ctx) {
     }
     // 新已读信息：锚定窗口之后新沉淀的已读条目（时间在锚点之后、未读之前）
     if (readExtraMessages.length) {
-      const extraText = readExtraMessages.map((m) => formatEntry(m, { withId: (m.media || []).length > 0 })).join('\n');
+      const extraText = readExtraMessages.map((m) => formatEntry(m, { withId: (m.media || []).length > 0, memberNotes: notesForRows })).join('\n');
       parts.push(`【新已读信息】以下是锚定窗口之后、这轮新沉淀的已读消息（你上一轮还没看过它们；带图的消息前有 #消息id）：\n${extraText}`);
     }
   } else if (readHeaderText) {
@@ -851,7 +952,7 @@ export function buildUserPrompt(ctx) {
   // 开场（"好久没人说话了，我来开个话题"）。selfNickname 仍用于 @ 标签判定。
 
   // 未读信息
-  const triggerBlock = buildTriggerBlock(ctx.triggerEntries, ctx);
+  const triggerBlock = buildTriggerBlock(ctx.triggerEntries, { ...ctx, profile, memberNotes: _memberNotesOf(profile) });
   parts.push(`【未读信息】以下是你还没看过的最新消息（每条前的 #数字 是消息 id，引用回复/看图时用它）：\n${triggerBlock}`);
 
   // 新加入成员：锚定模式下，追加窗口里首次出现的群友的印象（放在最易变区，

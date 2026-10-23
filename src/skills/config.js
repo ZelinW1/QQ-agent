@@ -24,9 +24,14 @@ export function getSkillConfig(id, defaults = {}) {
 /**
  * Skill 是否被用户开启。
  * 未配置过时回退到 manifest 的 enabledByDefault（默认 true）。
+ *
+ * @param {object} [skillsCfg] 分会话的 skills 覆盖（来自会话快照）。
+ *   省略/为 null 时读全局 config.skills —— **既有调用方行为完全不变**。
+ *   传了就以它为准（其中没有的 id 视为"未配置"，照旧回退 enabledByDefault）。
  */
-export function isSkillEnabledInConfig(id, enabledByDefault = true) {
-  const raw = getConfig()?.skills?.[String(id)];
+export function isSkillEnabledInConfig(id, enabledByDefault = true, skillsCfg = null) {
+  const container = (skillsCfg && typeof skillsCfg === 'object') ? skillsCfg : getConfig()?.skills;
+  const raw = container?.[String(id)];
   if (!raw || raw.enabled === undefined) return enabledByDefault !== false;
   return raw.enabled !== false;
 }

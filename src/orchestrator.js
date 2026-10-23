@@ -8,13 +8,16 @@
 //
 // 同一会话（群/私聊）同时最多一个运行；运行期间新消息只写 JSON（未读），不叠加触发。
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
-import { getConfig, storeConfigForChat, personaForChat } from './config.js';
+import { getConfig } from './config.js';
+import { resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError } from './llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
-import { modelImageVerdict } from './vision-scan.js';
+// ⚠️ modelImageVerdict 已不再在这里 import：视觉判定的唯一落点是
+// chat-profile.js（快照里算一次，提示词与工具闸门共用）。这里若再算一遍，
+// 就又回到"同一件事两个真相"了。
 import { currentProviders } from './providers.js';
 import { skillManager } from './skills/manager.js';
 import { getToolAvailability } from './tool-registry.js';
@@ -64,6 +67,11 @@ export class Orchestrator {
     // 原样复用该前缀（连续触发时缓存命中）。#runAgent 结束时从
     // session.promptAnchorState 取回新状态。重启丢失 = 回到标准结构，无害。
     this.promptAnchors = new Map();
+    // ── 会话级配置指纹（锚点失效判定）──
+    // chatKey -> 上一轮生效的配置指纹（chatProfileFingerprint）。
+    // 分会话人设/档位/工具集一变，上一轮的提示词前缀就不再是本轮的合法前缀，
+    // 继续沿用会让模型看到"旧基线的【已读信息】+ 新配置的追加段"。指纹不同即清锚点。
+    this.profileFingerprints = new Map();
     this.paused = false;
     this.pauseReason = null;
     this.proactiveTimer = null;
@@ -182,7 +190,7 @@ export class Orchestrator {
         selfNickname: cfg.persona?.selfNickname || this.onebot.selfNickname || '',
         botName: cfg.persona?.botName || '',
         selfId: cfg.onebot?.selfId || this.onebot.selfId || '',
-        cfg: storeConfigForChat(chatKey),
+        cfg: resolveChatProfile(chatKey, cfg).store,
         isPrivate: String(chatKey).startsWith('private:'),
         // 单条判定当场掷骰、当场出结果 —— 没有"预判/实跑"两阶段了，
         // 骰子结果由 resolveContextTier 的 reason 带回（含当时的值）。
@@ -298,6 +306,30 @@ export class Orchestrator {
       return null;
     }
     return st;
+  }
+
+  /**
+   * 提示词配置变了 → 丢掉该会话的前缀锚点。
+   *
+   * 为什么必须做：promptAnchor 的省钱原理是"把上一轮的【记忆】+【已读信息】
+   * 前缀原样复用"。但前缀是**按当时的配置**渲染出来的 —— 换了人设/档位/工具集后，
+   * 上一轮的字节就不再是本轮的合法前缀；继续在其后追加，模型会看到
+   * "旧人设的基线 + 新人设的追加段"，表现为角色串味。
+   *
+   * 只比对影响提示词的指纹（chatProfileFingerprint），不比对模型 id/密钥等，
+   * 否则每次换模型都要重建前缀，白丢缓存收益。
+   */
+  #resetAnchorIfProfileChanged(chatKey, profile) {
+    try {
+      const fp = String(profile?.fingerprint || '');
+      const prev = this.profileFingerprints.get(chatKey);
+      if (prev !== undefined && prev !== fp) {
+        this.promptAnchors.delete(chatKey);
+      }
+      this.profileFingerprints.set(chatKey, fp);
+      // 防无界增长：会话删除/长期不活跃时由 sessions 侧的剪枝负责，
+      // 这里只保证同一个 chatKey 只留一条（Map 语义天然满足）。
+    } catch { /* 锚点失效判定失败不影响主流程：最坏是沿用一次旧前缀 */ }
   }
 
 
@@ -440,13 +472,15 @@ export class Orchestrator {
         hasTrigger = true;   // onIncoming 判定过"触发"，批内必然有触发消息
       } else if (!active) {
         // 补判定：对每条未读单独跑 resolveContextTier（与 onIncoming 同口径）
+        // 循环外解析一次快照即可（同一份配置下同会话结果恒定，缓存也兜着）
+        const judgeStore = resolveChatProfile(chatKey, cfgForJudge).store;
         for (const m of probe) {
           const r = resolveContextTier({
             triggerEntries: [m],
             selfNickname: cfgForJudge.persona?.selfNickname || this.onebot.selfNickname || '',
             botName: cfgForJudge.persona?.botName || '',
             selfId: cfgForJudge.onebot?.selfId || this.onebot.selfId || '',
-            cfg: storeConfigForChat(chatKey),
+            cfg: judgeStore,
             isPrivate: String(chatKey).startsWith('private:'),
             roll: null
           });
@@ -511,14 +545,17 @@ export class Orchestrator {
     // 判定输入相同（就是这批消息），结果一致；随机档不传 roll、重掷一次并
     // 固定在本次运行里，会话记录（session.contextReason）记录的就是这里的值。
     const cfgNow = getConfig();
+    // 会话快照解析一次，下面三处档位判定共用（缓存保证同配置下不重复解析）
+    const storeCfgNow = resolveChatProfile(chatKey, cfgNow).store;
+    const historyCountNow = Math.max(0, Number(storeCfgNow.historyCount) || 80);
     const tierResult = proactive
-      ? { tier: 4, count: Math.max(0, Number(storeConfigForChat(chatKey).historyCount) || 80), reason: '主动机会（带历史）', shouldRespond: true }
+      ? { tier: 4, count: historyCountNow, reason: '主动机会（带历史）', shouldRespond: true }
       : resolveContextTier({
         triggerEntries,
         selfNickname: cfgNow.persona?.selfNickname || this.onebot.selfNickname || '',
         botName: cfgNow.persona?.botName || '',
         selfId: cfgNow.onebot?.selfId || this.onebot.selfId || '',
-        cfg: storeConfigForChat(chatKey),
+        cfg: storeCfgNow,
         isPrivate: String(chatKey).startsWith('private:'),   // 私聊恒响应
         roll: null
       });
@@ -526,7 +563,7 @@ export class Orchestrator {
     // reason 标注活跃来源，会话页可解释"为什么 1 档设置却响应了"。
     const activeState = this.#activeState(chatKey);
     const effectiveTier = activeState
-      ? { tier: 3, count: Math.max(0, Number(storeConfigForChat(chatKey).historyCount) || 80), reason: `活跃期（话题：${activeState.topic}）`, shouldRespond: true }
+      ? { tier: 3, count: historyCountNow, reason: `活跃期（话题：${activeState.topic}）`, shouldRespond: true }
       : tierResult;
 
     this.runningChats.add(chatKey);
@@ -731,6 +768,14 @@ export class Orchestrator {
 
   async #runAgent(session, { kind, chatId, chatKey, triggerEntries, proactive, seq, contextLimit = null, tierInfo = null, activeTopic = null }) {
     const cfg = getConfig();
+    // ── 会话级配置快照（一次运行解析一次）────────────────────────────────
+    // 这是"一处解析 + 边界注入"的注入点：下面所有需要"分会话判据"的地方
+    // （能否看图/联网、工具启停、技能启停、上下文条数）都从它取，
+    // 不再各自去 getConfig() 现场拼条件 —— 那正是"同一件事两个真相"的来源。
+    //
+    // ⚠️ 在运行开始时取一次并保持不变：用户跑到一半改配置，不会让同一次运行的
+    //    "系统提示"（说能看图）和"工具列表"（看图工具已被移除）自相矛盾。
+    const profile = resolveChatProfile(chatKey);
     // 开一轮新运行：清空回复安全网的候选草稿池（草稿只在"这一次运行"内有意义，
     // 跨运行留着会把上一次的句子当成这次可以发的原句）。
     this.#capFirst('reply.grounded-select')?.({ reset: true });
@@ -742,7 +787,11 @@ export class Orchestrator {
     this.sessionAbortControllers.set(session.id, abortController);
     const abortSignal = abortController.signal;
     const chatName = kind === 'group' ? await this.#chatName(chatId) : '';
+    // 账号身份（selfNickname）刻意取自**全局**配置：它是机器人自己的名字，
+    // 参与 @ 判定与存档里"我"的称呼，不允许被分会话改掉（见 personaForChat 注释）。
     const selfNickname = kind === 'group' ? (cfg.persona.selfNickname || this.onebot.selfNickname || cfg.persona.botName) : cfg.persona.botName;
+    // 提示词配置一变，上一轮的前缀锚点就不再是本轮的合法前缀（详见 chatProfileFingerprint）。
+    this.#resetAnchorIfProfileChanged(chatKey, profile);
 
     // （原"上下文统计"三件套 —— 最近消息密度/上次发言时间/最后消息时间 ——
     //  只喂【此刻状态】段，该段 2026-09-25 删除后不再计算。）
@@ -754,11 +803,12 @@ export class Orchestrator {
     }
 
     // ── 统一可用性上下文 ──
-    // 视觉判定 = 全局开关 && 选中模型未被探测为"明确不支持图片"（未探测/unknown 时保持开关行为）
-    const visionEnabled = cfg.api.vision !== false
-      && modelImageVerdict(cfg.api.provider, cfg.api.model) !== 'no-vision';
-    const searchEnabled = cfg.webSearch?.enabled !== false;
-    const toolsCfg = cfg.tools || {};
+    // 判据一律取自会话快照（profile）：它已经把"全局开关 + 模型探测 + 分会话覆盖"
+    // 合成了一份，且与 buildSystemPrompt 里 qqSceneRules 用的是同一个值 ——
+    // 这修掉了"工具被移除、系统提示却还说能看图"的历史隐患。
+    const visionEnabled = profile.visionEnabled;
+    const searchEnabled = profile.searchEnabled;
+    const toolsCfg = profile.tools;
     const skillContext = {
       chatKey, kind, chatId, chatName,
       model: cfg.api.model,
@@ -766,7 +816,10 @@ export class Orchestrator {
       visionEnabled,
       searchEnabled,
       proactive,
-      sessionId: session.id
+      sessionId: session.id,
+      // 会话级配置快照：扩展的 available(ctx)/hook(ctx)/promptSections(ctx) 可以
+      // 按 chatKey 自行分叉。⚠️ 里面**没有密钥**（见 chat-profile.js 的白名单）。
+      profile
     };
 
     // Skill 生命周期：提示词组装之前先跑 before-context。
@@ -795,9 +848,9 @@ export class Orchestrator {
           triggerEntries,
           kind,
           selfId: this.onebot.selfId,
-          // 主人模式的"基准人设"用本会话独立人设：主人覆盖发生在会话人设之上，
-          // 没配置会话人设时 personaForChat 原样返回全局 persona，行为不变。
-          persona: personaForChat(chatKey)
+          // 主人模式的"基准人设"用本会话生效的人设（profile.persona 即
+          // "分会话人设 → 全局人设"的折算结果）：主人覆盖发生在会话人设之上。
+          persona: profile.persona
         });
         if (r) { ownerPersona = r.persona || null; ownerRules = r.rules || ''; }
         break;
@@ -815,7 +868,10 @@ export class Orchestrator {
     // 换了会和 @ 判定对不上（personaForChat 在结构上就不允许覆盖这两个字段）。
     const systemPrompt = buildSystemPrompt({
       skillContext,
-      persona: ownerPersona || personaForChat(chatKey),
+      // 人设文本：主人专属 > 会话级 > 全局（profile.persona 已含后两层）
+      persona: ownerPersona || profile.persona,
+      // 配置类判据（能否看图/联网、表情积极度）走快照，与工具闸门同源
+      profile,
       extraSections: ownerRules
         ? [{ id: 'owner-rules-run', title: '', priority: 72, content: ownerRules }]
         : []
@@ -833,6 +889,8 @@ export class Orchestrator {
       contextLimit,
       tierInfo,
       skillContext,
+      // 会话级配置快照：本函数内所有配置类判据都从这里取（一处解析）
+      profile,
       // 活跃模式：注入当前话题锚点（buildUserPrompt 据此渲染【活跃模式】段）
       activeTopic,
       // 提示词锚点：传入上一轮的前缀状态；新状态经 session.promptAnchorState 带回
@@ -888,7 +946,8 @@ export class Orchestrator {
     const availability = new Map();
     const toolDefs = this.toolDefs.filter((d) => {
       const st = getToolAvailability(d.id, {
-        skills: skillManager,
+        // 分会话的 skills 覆盖（无覆盖时 skillsViewForProfile 原样返回单例）
+        skills: skillsViewForProfile(skillManager, profile),
         toolsCfg,
         visionEnabled,
         searchEnabled,

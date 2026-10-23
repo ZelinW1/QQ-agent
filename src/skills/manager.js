@@ -142,7 +142,9 @@ export class SkillManager {
   isEnabled(id) {
     const skill = this.registry.get(id);
     const dflt = skill?.manifest?.enabledByDefault !== false;
-    return isSkillEnabledInConfig(id, dflt);
+    // __skillsCfg：分会话的 skills 覆盖（由 skillsViewForProfile 用原型委托挂上）。
+    // 没有它时传 null → 与从前完全一致地读全局配置。
+    return isSkillEnabledInConfig(id, dflt, this.__skillsCfg ?? null);
   }
 
   /**
