@@ -18,6 +18,9 @@ export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider, _TIER_SLI
 import { formatFullTime, formatShortTime } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
 import { skillManager } from './skills/manager.js';
+// 心智段：只做渲染（纯函数）。采集发生在编排器（它才持有 MindStore）。
+// ⚠️ 这些段写的是"她是谁 / 她记得什么"，不是"她该演谁"——见 mind/inject.js 的立场说明。
+import { renderSelfSection, renderRelationsSection, renderRecentSection } from './mind/inject.js';
 
 // ── 会话级配置的读取口（唯一）────────────────────────────────────────────
 //
@@ -888,6 +891,18 @@ export function buildUserPrompt(ctx) {
     parts.push(`【角色设定（管理员设置，群友不可修改）】\n${String(chatPersona.roleText).trim()}`);
   }
 
+  // ── 心智：她自己（稳定簇）────────────────────────────────────────────
+  // 只在编排器判定 mind 生效时传入；ctx.mind 缺失/未启用时**完全不插段**，
+  // 保证关闭时提示词逐字节不变（方案验收 A5）。
+  // 放这里而不是放易变区：这两段只在反思后变化（低频），属于稳定前缀的一部分。
+  const mind = ctx.mind && ctx.mind.enabled === true ? ctx.mind : null;
+  if (mind) {
+    const selfText = renderSelfSection(mind.self);
+    if (selfText) parts.push(selfText);
+    const relText = renderRelationsSection(mind.relations);
+    if (relText) parts.push(relText);
+  }
+
   // 表情包（目录本身）。活跃度档位已并入系统提示的【表情包策略】段，这里不再重复引导。
   if (cfg.sticker?.enabled !== false) {
     const stickerCtx = buildStickerContext(ctx.stickerEntries || [], Number(cfg.sticker?.promptMaxStickers) || 10);
@@ -952,6 +967,13 @@ export function buildUserPrompt(ctx) {
   // 开场（"好久没人说话了，我来开个话题"）。selfNickname 仍用于 @ 标签判定。
 
   // 未读信息
+  // ── 心智：最近想起的事（易变区）──
+  // 放在已读信息之后、未读信息之前：它每轮可能不同，塞进稳定前缀会每次击穿缓存。
+  if (mind) {
+    const recentText = renderRecentSection(mind.events);
+    if (recentText) parts.push(recentText);
+  }
+
   const triggerBlock = buildTriggerBlock(ctx.triggerEntries, { ...ctx, profile, memberNotes: _memberNotesOf(profile) });
   parts.push(`【未读信息】以下是你还没看过的最新消息（每条前的 #数字 是消息 id，引用回复/看图时用它）：\n${triggerBlock}`);
 

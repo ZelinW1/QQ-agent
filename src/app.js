@@ -11,6 +11,7 @@ import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNo
 import { isAtMe } from './prompt.js';
 import { ChatStore } from './store.js';
 import { MemoryStore } from './memory.js';
+import { MindStore } from './mind/index.js';
 import { StickerManager } from './sticker-manager.js';
 import { SendQueue } from './sender.js';
 import { SessionRegistry } from './sessions.js';
@@ -629,6 +630,9 @@ export function createApp({ log = console.log } = {}) {
   const visionScan = { running: false };   // 模型图片输入能力扫描的运行状态
   const store = new ChatStore(cfg.store?.maxMessagesPerChat ?? 0);   // 0 = 不限
   const memory = new MemoryStore();
+  // 心智状态（事件/关系/自我）。默认 config.mind.enabled=false，
+  // 关闭时 orchestrator 不会采集、提示词不会插段 —— 行为与没有它时一致。
+  const mind = new MindStore();
   const sessions = new SessionRegistry(cfg.store?.keepSessionFiles ?? 0);   // 0 = 不限
   const onebot = new OneBotClient({
     wsUrl: cfg.snowluma?.wsUrl,
@@ -645,7 +649,7 @@ export function createApp({ log = console.log } = {}) {
   });
   const reminders = new ReminderStore();
   const videoReader = new VideoReader(onebot);
-  const orchestrator = new Orchestrator({ store, memory, stickers, sender, sessions, onebot, emit, reminders, videoReader });
+  const orchestrator = new Orchestrator({ store, memory, stickers, sender, sessions, onebot, emit, reminders, videoReader, mind });
 
   // 远程价格表固定为官网公开地址；不从用户配置读取，避免被页面/配置篡改。
   initPriceFeed(FIXED_PRICE_FEED_URL);

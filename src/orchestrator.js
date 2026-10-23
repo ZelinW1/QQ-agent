@@ -10,6 +10,7 @@
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import { getConfig } from './config.js';
 import { resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
+import { collectMindContext } from './mind/index.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
@@ -24,7 +25,7 @@ import { getToolAvailability } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
 
 export class Orchestrator {
-  constructor({ store, memory, stickers, sender, sessions, onebot, emit = null, reminders = null, videoReader = null }) {
+  constructor({ store, memory, stickers, sender, sessions, onebot, emit = null, reminders = null, videoReader = null, mind = null }) {
     this.store = store;
     this.memory = memory;
     this.stickers = stickers;
@@ -33,6 +34,9 @@ export class Orchestrator {
     this.onebot = onebot;
     this.reminders = reminders;   // ReminderStore（可选；闹钟/计时功能）
     this.videoReader = videoReader; // VideoReader（可选；视频读取功能）
+    // MindStore（可选；心智状态：事件/关系/自我）。未注入时 mind 相关路径全关，
+    // 行为与没有这个子系统时完全一致。
+    this.mind = mind;
     // 事件出口：正常情况下由 app.js 注入（转发到 SSE）。
     // 兜底必须是**明确的 no-op** —— 早先用 createEventBus() 兜底，
     // 但那个总线上永远没人订阅，事件会被静默吞掉，排查时看不到任何线索。
@@ -312,16 +316,18 @@ export class Orchestrator {
    * 提示词配置变了 → 丢掉该会话的前缀锚点。
    *
    * 为什么必须做：promptAnchor 的省钱原理是"把上一轮的【记忆】+【已读信息】
-   * 前缀原样复用"。但前缀是**按当时的配置**渲染出来的 —— 换了人设/档位/工具集后，
-   * 上一轮的字节就不再是本轮的合法前缀；继续在其后追加，模型会看到
-   * "旧人设的基线 + 新人设的追加段"，表现为角色串味。
+   * 前缀原样复用"。但前缀是**按当时的配置**渲染出来的 —— 换了人设/档位/工具集、
+   * 或者她的自我叙事变了，上一轮的字节就不再是本轮的合法前缀；继续在其后追加，
+   * 模型会看到"旧基线的开头 + 新基线的追加段"，表现为人格串味。
    *
-   * 只比对影响提示词的指纹（chatProfileFingerprint），不比对模型 id/密钥等，
-   * 否则每次换模型都要重建前缀，白丢缓存收益。
+   * 两个指纹都要比：
+   *   · profile.fingerprint —— 配置侧（人设/档位/工具）
+   *   · mind 指纹 —— 心智侧（自我版本 + 关系档），由 mindFingerprint 生成
+   * 都不收模型 id/密钥/事件（事件在易变区），否则每次运行都会重建锚点，缓存收益归零。
    */
-  #resetAnchorIfProfileChanged(chatKey, profile) {
+  #resetAnchorIfProfileChanged(chatKey, profile, mindFp = '') {
     try {
-      const fp = String(profile?.fingerprint || '');
+      const fp = `${String(profile?.fingerprint || '')}\u0000${String(mindFp || '')}`;
       const prev = this.profileFingerprints.get(chatKey);
       if (prev !== undefined && prev !== fp) {
         this.promptAnchors.delete(chatKey);
@@ -330,6 +336,45 @@ export class Orchestrator {
       // 防无界增长：会话删除/长期不活跃时由 sessions 侧的剪枝负责，
       // 这里只保证同一个 chatKey 只留一条（Map 语义天然满足）。
     } catch { /* 锚点失效判定失败不影响主流程：最坏是沿用一次旧前缀 */ }
+  }
+
+  /**
+   * 采集本次运行的心智上下文。
+   *
+   * 三道闸（任一不满足就返回 null，提示词里一段都不会多）：
+   *   1. MindStore 已注入
+   *   2. config.mind.enabled === true
+   *   3. 作用域匹配（M1 只做私聊：scope='private' 时群聊一律不注入）
+   *
+   * 任何异常都吞掉并返回 null：心智是"锦上添花"，绝不能因为它挂了整个回复。
+   */
+  #buildMindContext(chatKey, kind, chatId, triggerEntries) {
+    try {
+      if (!this.mind) return null;
+      const cfg = getConfig();
+      const opts = cfg.mind || {};
+      if (opts.enabled !== true) return null;
+      if (opts.scope !== 'all' && kind !== 'private') return null;
+
+      // 参与本批的人：私聊就是对方；群聊将来接的时候用本批发言者。
+      const participants = [];
+      if (kind === 'private') participants.push(String(chatId || ''));
+      for (const m of triggerEntries || []) {
+        if (m?.senderId && !m.self) participants.push(String(m.senderId));
+      }
+
+      return collectMindContext({
+        store: this.mind,
+        chatKey,
+        options: opts,
+        now: Date.now(),
+        participantIds: participants,
+        query: (triggerEntries || []).map((m) => m?.text || '').join(' ').slice(0, 200)
+      });
+    } catch (error) {
+      console.warn('[mind] 采集上下文失败（本次跳过心智段）:', error?.message ?? error);
+      return null;
+    }
   }
 
 
@@ -776,6 +821,9 @@ export class Orchestrator {
     // ⚠️ 在运行开始时取一次并保持不变：用户跑到一半改配置，不会让同一次运行的
     //    "系统提示"（说能看图）和"工具列表"（看图工具已被移除）自相矛盾。
     const profile = resolveChatProfile(chatKey);
+    // 心智上下文（她自己 + 她记得的事）。未启用/未注入时返回 null，
+    // 提示词里一段都不会多 —— 这是"关闭时逐字节不变"的落点。
+    const mindCtx = this.#buildMindContext(chatKey, kind, chatId, triggerEntries);
     // 开一轮新运行：清空回复安全网的候选草稿池（草稿只在"这一次运行"内有意义，
     // 跨运行留着会把上一次的句子当成这次可以发的原句）。
     this.#capFirst('reply.grounded-select')?.({ reset: true });
@@ -790,8 +838,8 @@ export class Orchestrator {
     // 账号身份（selfNickname）刻意取自**全局**配置：它是机器人自己的名字，
     // 参与 @ 判定与存档里"我"的称呼，不允许被分会话改掉（见 personaForChat 注释）。
     const selfNickname = kind === 'group' ? (cfg.persona.selfNickname || this.onebot.selfNickname || cfg.persona.botName) : cfg.persona.botName;
-    // 提示词配置一变，上一轮的前缀锚点就不再是本轮的合法前缀（详见 chatProfileFingerprint）。
-    this.#resetAnchorIfProfileChanged(chatKey, profile);
+    // 提示词配置一变（含她的自我叙事变化），上一轮的前缀锚点就不再是本轮的合法前缀。
+    this.#resetAnchorIfProfileChanged(chatKey, profile, mindCtx?.fingerprint || '');
 
     // （原"上下文统计"三件套 —— 最近消息密度/上次发言时间/最后消息时间 ——
     //  只喂【此刻状态】段，该段 2026-09-25 删除后不再计算。）
@@ -891,6 +939,9 @@ export class Orchestrator {
       skillContext,
       // 会话级配置快照：本函数内所有配置类判据都从这里取（一处解析）
       profile,
+      // 心智上下文（她是谁 / 与在场者的关系 / 最近想起的事）。
+      // null = 不插段；buildUserPrompt 只在 enabled===true 时渲染。
+      mind: mindCtx,
       // 活跃模式：注入当前话题锚点（buildUserPrompt 据此渲染【活跃模式】段）
       activeTopic,
       // 提示词锚点：传入上一轮的前缀状态；新状态经 session.promptAnchorState 带回
