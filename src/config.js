@@ -343,6 +343,55 @@ export const DEFAULT_CONFIG = {
     provider: '',                         // 专用模型所属提供商 id（useChatModel=false 时生效）
     model: ''                             // 专用模型 id（useChatModel=false 时生效）
   },
+  // ── 心智（M1）：事件 / 关系 / 自我 + 自主节律 ─────────────────────────
+  // 与 memory.* 的分工（重要，别混）：
+  //   memory  = 旧的"对群友的印象"（每人 ≤5 条静态标签，机械去重，禁止推断）
+  //   mind    = 新的"她自己的心智状态"（事件流 / 关系 / 自我叙事 / 节律）
+  // 两者在 M1 并存，互不覆盖：mind.enabled=false 时行为与之前完全一致。
+  //
+  // 作用域：M1 只对私聊生效（scope='private'）。群聊人多、噪声大、缓存命中差，
+  // 留到后续版本；届时复用同一份 relations（relationsScope='global'）。
+  mind: {
+    enabled: false,                 // 总开关。默认关 = 逐字节回归
+    scope: 'private',               // 'private' | 'all'
+    relationsScope: 'global',       // 关系按 QQ 全局一份（跨会话），群聊接入时复用
+    // —— 反思 ——
+    reflectAfterEvents: 8,          // 攒够多少条未反思事件就该整理
+    reflectCooldownMs: 7200000,     // 两次反思最小间隔（2 小时）
+    // —— 节律（心跳）——
+    // 心跳不是"每 5 分钟调一次模型"：结算与廉价预判都不花钱，
+    // 只有命中候选才调决策模型。详见 doc/m1-mind-plan.md §6.2。
+    tick: {
+      enabled: true,
+      intervalMs: 300000,           // 5 分钟
+      jitter: 0.1,                  // ±10% 抖动，避免所有会话同时醒
+      idleLookbackMin: 2,           // 会话刚活跃过（2 分钟内）跳过心跳，别插嘴
+      proactiveIdleMs: 21600000,    // 6 小时没说话才考虑"想她"
+      maxDecisionsPerDay: 24,       // 熔断：每日调用决策模型次数
+      maxProactivePerDay: 6,        // 熔断：每日主动发消息次数
+      minProactiveGapMs: 3600000,   // 两次主动消息最小间隔（60 分钟）
+      maxReflectPerDay: 8,          // 熔断：每日反思次数
+      suppressAfterProactiveMs: 600000  // 主动发言后 10 分钟内不再行动
+    },
+    // —— 能量（她的"体力"；既是限流阀也是拟人状态）——
+    energy: {
+      max: 100,
+      recoverPerHour: 10,
+      floor: 10,                    // 低于此只能 idle
+      cost: { send_proactive: 25, organize: 15, recall: 5, idle: 0 }
+    },
+    // —— 提示词预算 ——
+    recallLimit: 4,                 // 每轮自动注入几条"想起的事"
+    autoEventsInPrompt: 3,          // 其中喂给提示词的硬上限
+    maxEventsPerQuery: 20,          // recall 工具单次返回上限
+    // —— 人格护栏 ——
+    // 既定底线：她不能删掉、也不能公开否定（M1 只做确定性检查，语义级留 M3）
+    seedInvariants: [],
+    allowSelfRevise: true,          // 是否把 self_revise 工具给她
+    // —— 事件保留 ——
+    eventRetentionDays: 180,        // 超期事件压缩（不硬删）
+    minEventSalience: 0.2           // 低于此显著度的事件不进自动注入
+  },
   // 工具与技能（skill 化开关）
   //
   // ⚠️ 边界（避免"两个开关打架"）：
