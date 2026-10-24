@@ -1002,6 +1002,9 @@ export class Orchestrator {
         toolsCfg,
         visionEnabled,
         searchEnabled,
+        // 心智是否对本次运行生效（已启用 + 作用域匹配）。
+        // false 时 requiresMind 的工具整体从工具表消失。
+        mindEnabled: mindCtx != null,
         runtimeContext: skillContext
       });
       availability.set(d.id, st);
@@ -1027,6 +1030,9 @@ export class Orchestrator {
       session,
       reminders: this.reminders,
       videoReader: this.videoReader,
+      // 心智存储：remember_event / update_relation / self_revise / recall 用它。
+      // 未启用时工具已被门控隐藏，这里仍传（工具内部还有一道 mindOf 兜底）。
+      mind: this.mind,
       emit: (type, payload) => this.emit(type, payload)
     };
 

@@ -46,6 +46,10 @@ export function registerTool(def) {
     defaultEnabled: true,
     requiresVision: false,
     requiresSearch: false,
+    // requiresMind：需要"心智"子系统开启（config.mind.enabled）。
+    // 用途：mind 关闭时，remember_event/update_relation/self_revise/recall
+    // 从模型可见的工具表里**整体消失**，而不是"看得见但一调就报错"。
+    requiresMind: false,
     // skillId：该工具属于哪个 Skill（内置工具为 null）。
     // 用途：Skill 被禁用时，它注册的工具自动不可用；卸载时按 skillId 批量清理。
     skillId: null,
@@ -140,6 +144,10 @@ export function getToolAvailability(toolId, context = {}) {
     toolsCfg = {},
     visionEnabled = true,
     searchEnabled = true,
+    // 心智开关。**缺省 true** 是为了兼容既有调用方（设置页/预览等）：
+    // 它们不带这个字段时，心智工具按"可用"显示，与之前的行为一致。
+    // 真正决定是否生效的是编排器传入的 mindEnabled（enabled && 作用域匹配）。
+    mindEnabled = true,
     runtimeContext = {}
   } = context;
 
@@ -193,6 +201,12 @@ export function getToolAvailability(toolId, context = {}) {
   }
   if (def.requiresSearch && !searchEnabled) {
     return deny('no-search', '联网搜索已关闭');
+  }
+  // requiresMind：心智关闭时这些工具**不出现在工具表**，模型连试的机会都没有。
+  // 放在运行期依赖这一段（而不是更靠前）：它和视觉/联网一样，属于"当前这次
+  // 运行有没有这个条件"，不是配置层的开关。
+  if (def.requiresMind && mindEnabled !== true) {
+    return deny('mind-disabled', '心智功能未启用（设置 → 心智）');
   }
 
   // 7) Skill 附加否决（tool.guard）

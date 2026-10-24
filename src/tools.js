@@ -18,6 +18,7 @@ import { holidayOn, upcomingHoliday } from './holidays.js';
 import { compressImage } from './image-compress.js';
 import { localStickerPath } from './sticker-manager.js';
 import { isGifBuffer, gifToVideoDataUrl, resolveGifRoute } from './gif-to-video.js';
+import { registerMindTools } from './mind/tools.js';
 
 /** 当前配置的 GIF 选路（vision/video 开关组合，规则矩阵见 resolveGifRoute 注释）。 */
 function currentGifRoute() {
@@ -1184,6 +1185,11 @@ function registerAllTools() {
       }
     }
   });
+
+  // 心智工具（remember_event / update_relation / self_revise / recall）。
+  // 注册是全局的（幂等），是否对模型可见由 requiresMind + mindEnabled 决定——
+  // 关闭心智时它们从工具表里整体消失，而不是"看得见但一调就报错"。
+  registerMindTools();
 }
 
 /** 解析 "HH:MM" 或 "YYYY-MM-DD HH:MM" 为时间戳；解析不了返回 null。 */

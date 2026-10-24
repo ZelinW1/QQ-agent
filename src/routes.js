@@ -86,6 +86,9 @@ export function createRoutes(deps) {
         ? profile.visionEnabled
         : (cfg.api?.vision !== false && modelImageVerdict(cfg.api?.provider, cfg.api?.model) !== 'no-vision'),
       searchEnabled: profile ? profile.searchEnabled : (cfg.webSearch?.enabled !== false),
+      // 心智是否启用（设置页/预览的可见性判断）。
+      // 注意这是**全局开关**：某次运行是否真正注入还要看 scope（M1 只做私聊）。
+      mindEnabled: cfg.mind?.enabled === true,
       runtimeContext: {
         model: cfg.api?.model || '',
         provider: cfg.api?.provider || '',
@@ -776,6 +779,8 @@ export function createRoutes(deps) {
             : (effective.api?.vision !== false
               && modelImageVerdict(effective.api?.provider, effective.api?.model) !== 'no-vision'),
           searchEnabled: profile ? profile.searchEnabled : (effective.webSearch?.enabled !== false),
+          // 预览要与运行时同口径：心智关闭时，预览里的工具清单也不该出现那四个。
+          mindEnabled: effective.mind?.enabled === true,
           runtimeContext: {
             model: effective.api?.model || '',
             provider: effective.api?.provider || '',

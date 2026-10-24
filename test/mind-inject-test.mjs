@@ -203,5 +203,35 @@ console.log('\n=== 6. 关闭时提示词逐字节不变 ===');
   check(iRead < iRecent && iRecent < iUnread, '最近想起的事在已读之后、未读之前（易变区）');
 }
 
+// ── 7. 回忆不重复已读窗口 ───────────────────────────────────────────────
+console.log('\n=== 7. 只回忆已读窗口之外的事（避免同一件事说两遍）===');
+{
+  const msgs = [
+    { id: 11, mid: 901, ts: new Date(2026, 9, 23, 20, 0).getTime(), senderId: '456', senderName: '小王', text: '窗口内的一条', self: false, read: true, media: [] },
+    { id: 12, mid: 902, ts: new Date(2026, 9, 23, 21, 0).getTime(), senderId: '456', senderName: '小王', text: '窗口内的另一条', self: false, read: true, media: [] }
+  ];
+  const store = { recent: () => msgs };
+  const memory = { formatForPrompt: () => '' };
+  const oldTs = new Date(2026, 9, 18, 10, 0).getTime();   // 窗口之外
+  const insideTs = new Date(2026, 9, 23, 20, 30).getTime(); // 落在窗口内
+  const text = buildUserPrompt({
+    chatKey: 'private:456',
+    triggerEntries: [{ id: 21, ts: new Date(2026, 9, 24, 10, 30).getTime(), senderId: '456', senderName: '小王', text: '在吗', self: false, media: [] }],
+    store, memory, stickerEntries: [], selfNickname: '小鲸鱼',
+    contextLimit: 10, promptAnchor: { prev: null }, session: {},
+    mind: {
+      enabled: true,
+      self: null,
+      relations: [],
+      events: [
+        { id: 'e_old', ts: oldTs, text: '很久以前那件事' },
+        { id: 'e_inside', ts: insideTs, text: '已经在已读里出现过的事' }
+      ]
+    }
+  });
+  check(text.includes('很久以前那件事'), '窗口外的事件仍会被回忆');
+  check(!text.includes('已经在已读里出现过的事'), '窗口内的事件被过滤，不再重复');
+}
+
 console.log(`\n心智注入：通过 ${pass}，失败 ${fail}`);
 if (fail > 0) process.exit(1);

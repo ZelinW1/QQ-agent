@@ -969,8 +969,17 @@ export function buildUserPrompt(ctx) {
   // 未读信息
   // ── 心智：最近想起的事（易变区）──
   // 放在已读信息之后、未读信息之前：它每轮可能不同，塞进稳定前缀会每次击穿缓存。
+  //
+  // ⚠️ 只回忆**已读窗口之外**的事件：事件是在消息发生时记的，内容往往就是那些
+  // 消息的复述；【已读信息】里已经有原文，再列一遍等于同一件事说两次 ——
+  // 既浪费 token，又会让她误以为"这事反复被提起，所以很重要"。
   if (mind) {
-    const recentText = renderRecentSection(mind.events);
+    const visible = past.messages || [];
+    const oldestVisible = visible.length
+      ? Math.min(...visible.map((m) => Number(m.ts) || Infinity))
+      : Infinity;
+    const olderThanWindow = (mind.events || []).filter((e) => Number(e.ts) < oldestVisible);
+    const recentText = renderRecentSection(olderThanWindow);
     if (recentText) parts.push(recentText);
   }
 
