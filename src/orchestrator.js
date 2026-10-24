@@ -10,9 +10,9 @@
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import { getConfig } from './config.js';
 import { resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
-import { collectMindContext } from './mind/index.js';
+import { collectMindContext, buildReflectPrompt, parseReflectOutput, applyReflection } from './mind/index.js';
 import { vendorOfConfig } from './model-prices.js';
-import { randInt } from './util.js';
+import { randInt, todayKey, extractJson } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError } from './llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
@@ -53,6 +53,7 @@ export class Orchestrator {
     this.pendingSessions = new Map();  // chatKey -> waiting sessionId（防抖期可见的“等待中”会话）
     this.verifiedWakes = new Set();    // 本轮 wake 由 onIncoming 触发判定排定的 chatKey（区别于 drain 等机械重排）
     this.consolidating = new Set();    // 正在整理记忆的 chatKey
+    this.reflecting = new Set();       // 正在反思的 chatKey（心智，防重入）
     this.runningChats = new Set();     // 正在运行的 chatKey
     this.activeRuns = new Map();       // chatKey -> sessionId
     this.sessionAbortMarks = new Set(); // 用户请求中止的 sessionId（abortSession 打标记，#runAgent 每轮检查）
@@ -727,6 +728,8 @@ export class Orchestrator {
 
     // 记忆自动整理（后台静默，绝不阻塞/影响聊天主流程）
     this.#maybeConsolidateMemory(chatKey);
+    // 心智反思：把这段时间的事变成她自己的记忆与看法。同样在后台。
+    this.#maybeReflect(chatKey);
   }
 
   /**
@@ -1600,6 +1603,135 @@ export class Orchestrator {
     } catch { /* 整理是锦上添花，绝不影响聊天主流程 */ }
   }
 
+  // ── 心智反思 ───────────────────────────────────────────────────────────
+  //
+  // 与"记忆整理"的分工：
+  //   #maybeConsolidateMemory —— 旧的成员印象（机械合并，禁止推断）
+  //   #maybeReflect           —— 她自己的回顾（允许推断，但每条判断要事件支撑）
+  // 两者独立运行，互不阻塞。
+
+  /**
+   * 触发条件（全部满足才跑）：
+   *   心智已接入 / 已启用 / 作用域匹配 / 未暂停 / 有可用模型 / 未在反思中
+   *   未反思事件 ≥ reflectAfterEvents
+   *   距上次**尝试** ≥ 冷却（用尝试时间而不是成功时间，避免解析失败后每轮重试）
+   *   当日反思次数 < maxReflectPerDay
+   */
+  #maybeReflect(chatKey) {
+    try {
+      if (!this.mind) return;
+      const cfg = getConfig();
+      const m = cfg.mind || {};
+      if (m.enabled !== true) return;
+      if (m.scope !== 'all' && !String(chatKey).startsWith('private:')) return;
+      if (this.paused || this.aborted) return;
+      if (!cfg.api?.model || !cfg.api?.baseUrl) return;
+      if (this.reflecting.has(chatKey)) return;
+
+      const tick = this.mind.getTick();
+      const since = Number(tick.lastReflectAt) || 0;
+      const pending = this.mind.countUnreflected(chatKey, since);
+      const need = Math.max(1, Number(m.reflectAfterEvents) || 8);
+      if (pending < need) return;
+
+      const cooldown = Math.max(60000, Number(m.reflectCooldownMs) || 7200000);
+      const lastAttempt = Number(tick.lastReflectAttemptAt) || 0;
+      if (Date.now() - lastAttempt < cooldown) return;
+
+      const today = todayKey();
+      const used = tick.today === today ? (Number(tick.todayReflections) || 0) : 0;
+      const cap = Math.max(1, Number(m.tick?.maxReflectPerDay) || 8);
+      if (used >= cap) return;
+
+      this.reflecting.add(chatKey);
+      this.reflectForChat(chatKey)
+        .catch((error) => console.error(`[mind] 反思 ${chatKey} 失败:`, error?.message ?? error))
+        .finally(() => this.reflecting.delete(chatKey));
+    } catch { /* 反思是锦上添花，绝不影响聊天主流程 */ }
+  }
+
+  /**
+   * 真正跑一次反思（也供手动触发/测试调用）。
+   *
+   * 成功与"想不出什么"都会把 lastReflectAt 前移到**本次输入事件的最新时间**——
+   * 不是 now：反思期间新进来的消息不应该被跳过。
+   * 失败只前移 lastReflectAttemptAt，让冷却挡住重试，但事件不丢。
+   *
+   * @param {object} [opts] 测试注入用：`chat(messages)` 可替换模型调用
+   * @returns {Promise<{ok:boolean, reason?:string, empty?:boolean, applied?:object, rejected?:object[]}>}
+   */
+  async reflectForChat(chatKey, { chat = null } = {}) {
+    const store = this.mind;
+    if (!store) return { ok: false, reason: '心智未接入' };
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+
+    const tick = store.getTick();
+    const since = Number(tick.lastReflectAt) || 0;
+    const maxEvents = Math.max(5, Number(m.reflectMaxEvents) || 60);
+
+    // 摘要事件本身不再参与反思：它是压缩产物，重复消化只会让记忆越滚越薄。
+    const events = store.queryEvents({ chatKey, fromTs: since + 1, limit: maxEvents })
+      .filter((e) => !(Array.isArray(e.summaryOf) && e.summaryOf.length));
+    if (!events.length) return { ok: false, reason: '没有需要整理的事' };
+
+    const actorIds = [...new Set(events
+      .map((e) => String(e.actorId ?? ''))
+      .filter((id) => id && id !== 'self'))]
+      .slice(0, Math.max(1, Number(m.reflectMaxRelations) || 8));
+    const relations = actorIds
+      .map((id) => store.getRelation(id))
+      .filter((r) => r.updatedAt || r.names.length || r.knownFor.length || r.openLoops.length);
+
+    const messages = buildReflectPrompt({
+      botName: cfg.persona?.botName,
+      self: store.getSelf(),
+      relations,
+      events
+    });
+
+    const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
+    const raw = String(res?.message?.content ?? '');
+    const parsed = parseReflectOutput(raw);
+    const now = Date.now();
+    const newestTs = Math.max(...events.map((e) => Number(e.ts) || 0));
+
+    if (!parsed.ok) {
+      store.updateTick({ lastReflectAttemptAt: now });
+      store.appendReflection({
+        chatKey, at: now, ok: false, reason: parsed.reason,
+        eventCount: events.length,
+        rawSummary: raw.slice(0, 300)
+      });
+      return { ok: false, reason: parsed.reason };
+    }
+
+    const { applied, rejected } = parsed.empty
+      ? { applied: { self: false, relations: [], compacted: 0, summaryId: null }, rejected: [] }
+      : applyReflection({ store, chatKey, output: parsed.data, inputEvents: events, now });
+
+    const today = todayKey();
+    const sameDay = tick.today === today;
+    store.updateTick({
+      today,
+      todayReflections: (sameDay ? (Number(tick.todayReflections) || 0) : 0) + 1,
+      lastReflectAt: newestTs,
+      lastReflectAttemptAt: now
+    });
+    store.appendReflection({
+      chatKey, at: now, ok: true, empty: parsed.empty === true,
+      window: { from: since, to: newestTs },
+      eventCount: events.length,
+      produced: applied,
+      rejected: rejected.length,
+      rejectedDetail: rejected.slice(0, 10),
+      usage: res?.usage || null,
+      rawSummary: raw.slice(0, 300)
+    });
+
+    return { ok: true, empty: parsed.empty === true, applied, rejected };
+  }
+
   /**
    * 整理群友印象 —— 唯一入口。
    * 手动按钮、自动整理、针对特定群友，三种用法都走这里，避免逻辑分叉走样。
@@ -2122,40 +2254,19 @@ const PLACEHOLDER_NAMES = new Set([
  * 原实现只会剥掉"整段被 ``` 包裹"这一种，其余全部解析失败 → 整理静默放弃。
  */
 function extractJsonObject(raw) {
-  const text = String(raw ?? '').trim();
-  if (!text) return null;
+  // 通用路径统一走 util.extractJson（与反思层共用同一个实现，
+  // 免得两处解析规则各自漂移）。这里只额外保留一个**记忆专用**的兜底：
+  // 模型偶尔只吐出一段 impressions 数组片断。
+  const direct = extractJson(raw);
+  if (direct) return direct;
 
-  // 1) 先尝试直接解析
-  try { return JSON.parse(text); } catch { /* 继续尝试 */ }
-
-  // 2) 剥掉 ``` 代码块（可能在中间任意位置）
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidates = [];
-  if (fence) candidates.push(fence[1].trim());
-
-  // 3) 取第一个 { 到最后一个 } 之间的内容
-  const first = text.indexOf('{');
-  const last = text.lastIndexOf('}');
-  if (first >= 0 && last > first) candidates.push(text.slice(first, last + 1));
-
-  for (const cand of candidates) {
-    try { return JSON.parse(cand); } catch { /* 继续 */ }
-    // 修正常见瑕疵后重试：尾随逗号、单引号
+  const text = String(raw ?? '');
+  const arrMatch = text.match(/"impressions"\s*:\s*\[([\s\S]*?)\]\s*[,}]?/);
+  if (arrMatch) {
     try {
-      const fixed = cand
-        .replace(/,\s*([}\]])/g, '$1')          // 尾随逗号
-        .replace(/'/g, '"');                     // 单引号 → 双引号
-      const parsed = JSON.parse(fixed);
-      if (parsed && typeof parsed === 'object') return parsed;
-    } catch { /* 继续 */ }
-    // 兜底：只抽 impressions 数组
-    const arrMatch = cand.match(/"impressions"\s*:\s*\[([\s\S]*?)\]\s*[,}]?/);
-    if (arrMatch) {
-      try {
-        const items = JSON.parse('[' + arrMatch[1].replace(/,\s*$/, '') + ']');
-        return { impressions: items };
-      } catch { /* 继续 */ }
-    }
+      const items = JSON.parse('[' + arrMatch[1].replace(/,\s*$/, '') + ']');
+      return { impressions: items };
+    } catch { /* 放弃 */ }
   }
   return null;
 }

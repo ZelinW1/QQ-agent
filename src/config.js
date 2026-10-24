@@ -358,6 +358,8 @@ export const DEFAULT_CONFIG = {
     // —— 反思 ——
     reflectAfterEvents: 8,          // 攒够多少条未反思事件就该整理
     reflectCooldownMs: 7200000,     // 两次反思最小间隔（2 小时）
+    reflectMaxEvents: 60,           // 单次反思最多喂多少条事件（控制上下文长度）
+    reflectMaxRelations: 8,         // 单次反思最多带几份关系档案
     // —— 节律（心跳）——
     // 心跳不是"每 5 分钟调一次模型"：结算与廉价预判都不花钱，
     // 只有命中候选才调决策模型。详见 doc/m1-mind-plan.md §6.2。

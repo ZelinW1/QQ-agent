@@ -240,8 +240,12 @@ function defaultTick() {
     today: '',
     todayProactive: 0,
     todayDecisions: 0,
+    todayReflections: 0,
     lastInteractionAt: 0,
     lastReflectAt: 0,
+    // 上次**尝试**反思的时间（无论成败）。冷却用它而不是 lastReflectAt：
+    // 解析失败时 lastReflectAt 不前移，若不再记尝试时间，失败会变成每轮重试。
+    lastReflectAttemptAt: 0,
     notes: []
   };
 }

@@ -1,8 +1,7 @@
 // 心智子系统对外入口。
 //
-// 已实现：存储 + 检索（PR1）、注入与采集（PR2）。
-// 反思（reflect.js）与节律（tick.js）在后续 PR 加入，届时从这里一并导出，
-// 调用方（orchestrator / tools）只认这个入口。
+// 已实现：存储 + 检索（PR1）、注入与采集（PR2）、工具（PR3）、反思（PR4）。
+// 节律（tick.js）在后续 PR 加入，届时从这里一并导出。
 //
 // ⚠️ 本目录不得 import orchestrator.js（防循环依赖）。
 export {
@@ -29,3 +28,9 @@ export {
   mindFingerprint,
   collectMindContext
 } from './inject.js';
+
+export {
+  buildReflectPrompt,
+  parseReflectOutput,
+  applyReflection
+} from './reflect.js';

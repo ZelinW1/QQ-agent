@@ -229,3 +229,43 @@ export function stripEmoji(text) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/**
+ * 从模型输出里尽力抠出一个 JSON 对象。
+ *
+ * 依次尝试：直接解析 → ``` 代码块 → 第一个 `{` 到最后一个 `}` → 修掉尾随逗号/单引号。
+ * 返回 null 表示"认定它不是 JSON"——调用方据此**整轮放弃**，
+ * 绝不接受半份数据（记忆/关系写一半比不写更糟）。
+ *
+ * @param {string} raw
+ * @returns {object|null}
+ */
+export function extractJson(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+
+  try {
+    const direct = JSON.parse(text);
+    if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct;
+  } catch { /* 继续尝试 */ }
+
+  const candidates = [];
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) candidates.push(fence[1].trim());
+  const first = text.indexOf('{');
+  const last = text.lastIndexOf('}');
+  if (first >= 0 && last > first) candidates.push(text.slice(first, last + 1));
+
+  for (const cand of candidates) {
+    try {
+      const parsed = JSON.parse(cand);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch { /* 继续 */ }
+    try {
+      const fixed = cand.replace(/,\s*([}\]])/g, '$1').replace(/'/g, '"');
+      const parsed = JSON.parse(fixed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch { /* 继续 */ }
+  }
+  return null;
+}
