@@ -27,7 +27,7 @@ const {
   renderSelfSection, renderRelationsSection, renderRecentSection, mindFingerprint, collectMindContext
 } = await import(src('src/mind/inject.js'));
 const { MindStore } = await import(src('src/mind/store.js'));
-const { buildUserPrompt } = await import(src('src/prompt.js'));
+const { buildUserPrompt, buildSystemPrompt } = await import(src('src/prompt.js'));
 
 // 方向守卫：这些词一出现，她就在"演"，不在"是"
 const FORBIDDEN = ['扮演', '角色扮演', '人设', '按照设定', '演技', '假装是'];
@@ -177,29 +177,34 @@ console.log('\n=== 6. 关闭时提示词逐字节不变 ===');
   check(a === c, 'mind=null 与不传 mind 完全一致');
   check(!a.includes('【关于我自己】'), '关闭时没有心智段');
 
-  const on = strip(buildUserPrompt({
-    ...base,
-    mind: {
-      enabled: true,
-      self: { version: 1, narrative: '我是小鲸鱼。', mood: { label: '有点烦' }, preoccupations: [] },
-      relations: [{ userId: '456', stage: 'familiar', trust: 62, nickname: '王哥', confidence: 0.8 }],
-      events: [{ id: 'e_1', ts: new Date(2026, 9, 20, 9, 0).getTime(), text: '他说被裁员了' }]
-    }
-  }));
-  check(on.includes('【关于我自己】') && on.includes('【与在场者的关系】') && on.includes('【最近想起的事】'),
-    '启用时三段都在');
+  const MIND = {
+    enabled: true,
+    self: { version: 1, narrative: '我是小鲸鱼。', mood: { label: '有点烦' }, preoccupations: [] },
+    relations: [{ userId: '456', stage: 'familiar', trust: 62, nickname: '王哥', confidence: 0.8 }],
+    events: [{ id: 'e_1', ts: new Date(2026, 9, 20, 9, 0).getTime(), text: '他说被裁员了' }]
+  };
+
+  // 自我与关系在 system 的 self 层（身份归身份）
+  const sysOff = buildSystemPrompt({});
+  const sysOn = buildSystemPrompt({ mind: MIND });
+  check(!sysOff.includes('【关于我自己】'), '关闭时 system 里没有自我段');
+  check(sysOn.includes('【关于我自己】') && sysOn.includes('【与在场者的关系】'), '启用时 system 里有两段');
+  check(sysOn.indexOf('【关于我自己】') > sysOn.indexOf('你是「'), '自我段在身份句之后');
+  check(sysOn.indexOf('【关于我自己】') > sysOn.indexOf('【安全规则】') || !sysOn.includes('【安全规则】'),
+    '自我段在安全规则之后');
+
+  // user 只保留情景（最近想起的事）
+  const on = strip(buildUserPrompt({ ...base, mind: MIND }));
+  check(on.includes('【最近想起的事】'), '启用时 user 里有回忆段');
+  check(!on.includes('【关于我自己】'), '自我段不再出现在 user 里');
 
   // 用"段头 + 紧随其后的正文"定位，避免命中【引导说明】里对段名的引用
   const at = (marker) => on.indexOf(marker);
-  const iSelf = at('【关于我自己】');
-  const iRole = at('【角色设定');
   const iMem = at('【记忆】\n');
   const iRead = at('【已读信息】以下');
   const iRecent = at('【最近想起的事】');
   const iUnread = at('【未读信息】以下');
-  check(iRole >= 0 && iSelf > iRole, '【关于我自己】在角色设定之后');
   check(iMem > 0 && iRead > 0, '夹具确实产生了【记忆】与【已读信息】');
-  check(iSelf < iMem && iSelf < iRead, '自我段在记忆与已读之前（稳定簇）');
   check(iRead < iRecent && iRecent < iUnread, '最近想起的事在已读之后、未读之前（易变区）');
 }
 

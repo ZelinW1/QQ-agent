@@ -70,6 +70,7 @@ fs.writeFileSync(
 
 const lastReq = () => llm.state.requests.at(-1);
 const userTextOf = (req) => String(req?.messages?.[1]?.content ?? '');
+const sysTextOf = (req) => String(req?.messages?.[0]?.content ?? '');
 const settle = () => sleep(800);
 
 // ── 1. 私聊：三段都进提示词 ─────────────────────────────────────────────
@@ -82,29 +83,31 @@ await check('私聊消息：提示词里出现【关于我自己】【与在场�
     message: [{ type: 'text', data: { text: '在吗' } }]
   });
   await waitFor(() => llm.state.requests.length > before, 8000, '私聊触发 LLM 请求');
+  const sys = sysTextOf(lastReq());
   const text = userTextOf(lastReq());
-  assert.ok(text.includes('【关于我自己】'), '缺【关于我自己】');
-  assert.ok(text.includes('我是小鲸鱼'), '缺自我叙事正文');
-  assert.ok(text.includes('【与在场者的关系】'), '缺【与在场者的关系】');
-  assert.ok(text.includes('王哥') && text.includes('QQ:777'), '缺关系正文');
-  assert.ok(text.includes('【最近想起的事】'), '缺【最近想起的事】');
-  assert.ok(text.includes('被裁员'), '缺事件正文');
+  assert.ok(sys.includes('【关于我自己】'), 'system 缺【关于我自己】');
+  assert.ok(sys.includes('我是小鲸鱼'), 'system 缺自我叙事正文');
+  assert.ok(sys.includes('【与在场者的关系】'), 'system 缺【与在场者的关系】');
+  assert.ok(sys.includes('王哥') && sys.includes('QQ:777'), 'system 缺关系正文');
+  assert.ok(text.includes('【最近想起的事】'), 'user 缺【最近想起的事】');
+  assert.ok(text.includes('被裁员'), 'user 缺事件正文');
+  assert.ok(!text.includes('【关于我自己】'), '自我段不应再出现在 user（身份归 system）');
 });
 await settle();
 
-// ── 2. 顺序：稳定簇在前，易变段在后 ─────────────────────────────────────
-await check('段序正确：自我/关系在已读之前，最近想起在未读之前', async () => {
+// ── 2. 顺序：身份在 system 前部，情景在 user 后部 ───────────────────────
+await check('段序正确：自我/关系在 system 的身份句之后，最近想起在未读之前', async () => {
+  const sys = sysTextOf(lastReq());
   const text = userTextOf(lastReq());
-  const iSelf = text.indexOf('【关于我自己】');
-  const iRel = text.indexOf('【与在场者的关系】');
-  const iRecent = text.indexOf('【最近想起的事】');
-  // 从自我段之后再找【已读信息】：引导说明里也会提到段名，直接 indexOf 会命中正文。
-  // 首次对话没有历史时，该段的正文是"暂无历史记录"，所以只按段头定位。
-  const iRead = text.indexOf('【已读信息】', iSelf);
-  const iUnread = text.indexOf('【未读信息】以下', iRecent);
+  const iSelf = sys.indexOf('【关于我自己】');
+  const iRel = sys.indexOf('【与在场者的关系】');
   assert.ok(iSelf > 0 && iRel > iSelf, '自我应在关系之前');
-  assert.ok(iRead > iSelf && iRead > iRel, '稳定簇应在已读信息之前');
-  assert.ok(iRecent > iRead, '最近想起应在已读之后');
+  assert.ok(iSelf > sys.indexOf('你是「'), '自我应在身份句之后（不是替代身份）');
+  assert.ok(!/【可用技能】[\s\S]*【关于我自己】/.test(sys), '技能片段不应排在自我段之前');
+
+  const iRecent = text.indexOf('【最近想起的事】');
+  const iUnread = text.indexOf('【未读信息】以下', iRecent);
+  assert.ok(iRecent > 0, 'user 里应有回忆段');
   assert.ok(iUnread > iRecent, '最近想起应在未读之前');
 });
 await settle();
@@ -143,9 +146,9 @@ await check('改写自我后，下一次私聊的提示词跟着变', async () =
     message: [{ type: 'text', data: { text: '在想什么' } }]
   });
   await waitFor(() => llm.state.requests.length > before, 8000, '第二次私聊请求');
-  const text = userTextOf(lastReq());
-  assert.ok(text.includes('不必对每个人都一样热络'), '新的自我叙事应立刻生效（说明没有缓存旧值）');
-  assert.ok(!text.includes('最近在学着分辨谁值得认真对待'), '旧叙事不应残留');
+  const sys = sysTextOf(lastReq());
+  assert.ok(sys.includes('不必对每个人都一样热络'), '新的自我叙事应立刻生效（说明没有缓存旧值）');
+  assert.ok(!sys.includes('最近在学着分辨谁值得认真对待'), '旧叙事不应残留');
 });
 await settle();
 
@@ -162,8 +165,9 @@ await check('运行期关闭 mind.enabled 后，提示词不再有段（无需�
     message: [{ type: 'text', data: { text: '睡了吗' } }]
   });
   await waitFor(() => llm.state.requests.length > before, 8000, '第三次私聊请求');
+  const sys = sysTextOf(lastReq());
   const text = userTextOf(lastReq());
-  assert.ok(!text.includes('【关于我自己】'), '关闭后不应再有自我段');
+  assert.ok(!sys.includes('【关于我自己】'), '关闭后 system 不应再有自我段');
   assert.ok(!text.includes('【最近想起的事】'), '关闭后不应再有回忆段');
 });
 await settle();

@@ -21,6 +21,7 @@ import { skillManager } from './skills/manager.js';
 // 心智段：只做渲染（纯函数）。采集发生在编排器（它才持有 MindStore）。
 // ⚠️ 这些段写的是"她是谁 / 她记得什么"，不是"她该演谁"——见 mind/inject.js 的立场说明。
 import { renderSelfSection, renderRelationsSection, renderRecentSection } from './mind/inject.js';
+import { renderSections } from './prompt-layers.js';
 
 // ── 会话级配置的读取口（唯一）────────────────────────────────────────────
 //
@@ -288,7 +289,7 @@ function renderSkillSections(sections) {
  * @param {object}   [o.skillContext] 技能可用性上下文（透传给 getPromptSections）
  * @param {object[]} [o.extraSections] 运行期算出的额外片段（如主人规则）
  */
-export function buildSystemPrompt({ persona, profile = null, skillContext, extraSections = [] } = {}) {
+export function buildSystemPrompt({ persona, profile = null, skillContext, extraSections = [], mind = null } = {}) {
   // persona 是调用方显式注入的人格文本（如主人专属人设，可能来自运行期能力）；
   // 没注入时依次回落：会话快照的人设 → 全局人设。
   const cfg = persona ?? _personaOf(profile, '') ?? _globalCfg().persona;
@@ -325,45 +326,51 @@ export function buildSystemPrompt({ persona, profile = null, skillContext, extra
     return parts.join('\n');
   }
 
-  const parts = [
-    `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`,
-    '',
-    securityRules(),
-    '',
-    toolProtocol(),
-    '',
-    antiAiFlavor(),
-    '',
-    subjectivity(),
-    '',
-    speakOrNot(cfg.participation),
-    '',
-    notAQueue(),
-    '',
-    humanRhythm(),
-    '',
-    notModerator(),
-    '',
-    quoteAndAt(),
-    '',
-    memoryRules(),
-    '',
-    stickerRules(profile),
-    '',
-    qqSceneRules(profile),
-    '',
-    reportBan()
-  ];
+  // ── 分层组装 ───────────────────────────────────────────────────────
+  // 每段都必须声明"属于哪一层"（src/prompt-layers.js）。层内顺序固定，
+  // 层间不许交叉；顺序由 PROMPT_LAYERS 的 order 决定，不靠这里手写。
+  //
+  // 与改动前的差别（有意的）：
+  //   · 安全规则从"身份句之后"提到最前 —— 规矩先于自我介绍
+  //   · 她的自述与关系从 user 挪到 system —— 身份归身份，情景归情景
+  const sections = [];
+  const push = (layer, id, text) => {
+    if (String(text ?? '').trim()) sections.push({ layer, id, text: String(text) });
+  };
 
-  // 注入 Skill 提示词片段（已按 priority 降序；一律排在核心规则之后）
-  parts.push(...renderSkillSections(skillSections));
+  // ① safety —— 任何配置、任何扩展都不能覆盖
+  push('safety', 'security', securityRules());
+  push('safety', 'tool-protocol', toolProtocol());
+  push('safety', 'report-ban', reportBan());
 
+  // ② charter —— 管理员可改，她自己改不了
+  push('charter', 'identity',
+    `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`);
+  push('charter', 'anti-ai-flavor', antiAiFlavor());
+  push('charter', 'subjectivity', subjectivity());
+  push('charter', 'speak-or-not', speakOrNot(cfg.participation));
+  push('charter', 'not-a-queue', notAQueue());
+  push('charter', 'human-rhythm', humanRhythm());
+  push('charter', 'not-moderator', notModerator());
+  push('charter', 'quote-and-at', quoteAndAt());
+  push('charter', 'memory-rules', memoryRules());
+  push('charter', 'sticker-rules', stickerRules(profile));
+  push('charter', 'qq-scene', qqSceneRules(profile));
   if (cfg.customRules && String(cfg.customRules).trim()) {
-    parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
+    push('charter', 'custom-rules', `【管理员附加规则】\n${String(cfg.customRules).trim()}`);
   }
-  return parts.join('\n');
-}
 
+  // ③ self —— 她自己的话（反思/工具写入）。只有 mind 生效时才出现。
+  if (mind && mind.enabled === true) {
+    push('self', 'mind-self', renderSelfSection(mind.self));
+    push('self', 'mind-relations', renderRelationsSection(mind.relations));
+  }
+
+  // ④ skills —— 扩展片段一律殿后（动态内容动不到前面的字节）
+  push('skills', 'available', renderSkillSections(skillSections).filter(Boolean).join('\n'));
+
+  return renderSections(sections);
+}
 // ── 用户消息 ─────────────────────────────────────────────────────────────
 
 function participationText(level) {
@@ -892,16 +899,10 @@ export function buildUserPrompt(ctx) {
   }
 
   // ── 心智：她自己（稳定簇）────────────────────────────────────────────
-  // 只在编排器判定 mind 生效时传入；ctx.mind 缺失/未启用时**完全不插段**，
-  // 保证关闭时提示词逐字节不变（方案验收 A5）。
-  // 放这里而不是放易变区：这两段只在反思后变化（低频），属于稳定前缀的一部分。
+  // 已在 buildSystemPrompt 的 self 层渲染（身份归身份）。这里刻意不再插入，
+  // 只保留兜底判断：若调用方只构建 user prompt（例如某些预览路径），
+  // mind 段不会出现在这里，也不会报错。
   const mind = ctx.mind && ctx.mind.enabled === true ? ctx.mind : null;
-  if (mind) {
-    const selfText = renderSelfSection(mind.self);
-    if (selfText) parts.push(selfText);
-    const relText = renderRelationsSection(mind.relations);
-    if (relText) parts.push(relText);
-  }
 
   // 表情包（目录本身）。活跃度档位已并入系统提示的【表情包策略】段，这里不再重复引导。
   if (cfg.sticker?.enabled !== false) {
