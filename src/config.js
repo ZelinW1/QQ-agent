@@ -183,7 +183,20 @@ export const DEFAULT_CONFIG = {
     // ⚠️ 高级功能：默认提示词包含安全规则/工具协议/反AI味等关键约束，
     //    覆盖后这些全部失效，需自行在覆盖文本里写明。留空 = 用内置默认提示词。
     // 可用占位符：{botName} {roleText} {participation}
-    systemPromptOverride: ''
+    systemPromptOverride: '',
+    // ── 身份宪法（槽位化）──────────────────────────────────────────────
+    // 与 roleText 的关系：
+    //   · roleText 是一整段自由文本，改一个字也要整段换，且和"行为规范"混在一起；
+    //   · charter 是**分槽**的：她是谁 / 最初的样子 / 场合 / 不能破的规矩。
+    //   配了 charter（selfImage 或 baseline 非空）就以 charter 为准，
+    //   user 提示里不再渲染 roleText —— 避免两套身份并存、互相打架。
+    // 这些槽位**她改不了**（self_revise 只写 mind/self.json），只有管理员能改。
+    charter: {
+      selfImage: '',                    // 我是谁：名字、形象、来历
+      baseline: '',                     // 最初的我：还没经历这些事时是个什么样的人
+      scenario: { private: '', group: '' },  // 场合：一对一 / 群里，分寸不同
+      hardRules: []                     // 不能破的几条（可枚举 → 可测试、可审计）
+    }
   },
   // 用户自定义人设库（保存在配置里，可在设置页添加/选择）
   customPersonas: [],

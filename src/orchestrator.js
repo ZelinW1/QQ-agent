@@ -955,6 +955,8 @@ export class Orchestrator {
       // 她自己（自述 + 关系）进 system 的 self 层：身份归身份，情景归情景。
       // 未启用时为 null，system 提示里一段都不会多。
       mind: mindCtx,
+      // 场合决定身份句与 scenario 槽：私聊里自述成"群友"很出戏
+      chatKind: kind,
       extraSections: ownerRules
         ? [{ id: 'owner-rules-run', title: '', priority: 72, content: ownerRules }]
         : []

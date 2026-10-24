@@ -289,7 +289,38 @@ function renderSkillSections(sections) {
  * @param {object}   [o.skillContext] 技能可用性上下文（透传给 getPromptSections）
  * @param {object[]} [o.extraSections] 运行期算出的额外片段（如主人规则）
  */
-export function buildSystemPrompt({ persona, profile = null, skillContext, extraSections = [], mind = null } = {}) {
+/**
+ * 取身份宪法槽位（charter）。
+ *
+ * 与 roleText 的差别：roleText 是一整段自由文本，改一个字也要整段换；
+ * charter 是分槽的，每个槽都能单独改、单独测、单独审计。
+ *
+ * @returns {{selfImage:string, baseline:string, scenario:object, hardRules:string[], hasAny:boolean}}
+ */
+function charterOf(cfg) {
+  const c = cfg && typeof cfg === 'object' ? cfg.charter : null;
+  if (!c || typeof c !== 'object') {
+    return { selfImage: '', baseline: '', scenario: {}, hardRules: [], hasAny: false };
+  }
+  const selfImage = String(c.selfImage ?? '').trim();
+  const baseline = String(c.baseline ?? '').trim();
+  const scenario = (c.scenario && typeof c.scenario === 'object') ? c.scenario : {};
+  const hardRules = Array.isArray(c.hardRules)
+    ? c.hardRules.map((x) => String(x ?? '').trim()).filter(Boolean)
+    : [];
+  const scenarioAny = Boolean(
+    String(scenario.private ?? '').trim() || String(scenario.group ?? '').trim()
+  );
+  return {
+    selfImage,
+    baseline,
+    scenario,
+    hardRules,
+    hasAny: Boolean(selfImage || baseline || hardRules.length || scenarioAny)
+  };
+}
+
+export function buildSystemPrompt({ persona, profile = null, skillContext, extraSections = [], mind = null, chatKind = 'group' } = {}) {
   // persona 是调用方显式注入的人格文本（如主人专属人设，可能来自运行期能力）；
   // 没注入时依次回落：会话快照的人设 → 全局人设。
   const cfg = persona ?? _personaOf(profile, '') ?? _globalCfg().persona;
@@ -344,8 +375,23 @@ export function buildSystemPrompt({ persona, profile = null, skillContext, extra
   push('safety', 'report-ban', reportBan());
 
   // ② charter —— 管理员可改，她自己改不了
-  push('charter', 'identity',
-    `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`);
+  // 身份句区分场合：私聊里自述成"群友"很出戏（她会在 1:1 对话里说"群里"）。
+  push('charter', 'identity', chatKind === 'private'
+    ? `你是「${cfg.botName}」，一个在 QQ 上和人来往的普通人（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`
+    : `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`);
+
+  const charter = charterOf(cfg);
+  if (charter.hardRules.length) {
+    push('charter', 'hard-rules', [
+      '【不能破的几条】',
+      ...charter.hardRules.map((r) => `- ${r}`)
+    ].join('\n'));
+  }
+  if (charter.selfImage) push('charter', 'self-image', `【我是谁】\n${charter.selfImage}`);
+  if (charter.baseline) push('charter', 'baseline', `【我最初的样子】\n${charter.baseline}`);
+  const scenarioText = String(charter.scenario[chatKind] || charter.scenario.group || '').trim();
+  if (scenarioText) push('charter', 'scenario', `【此刻的场合】\n${scenarioText}`);
+
   push('charter', 'anti-ai-flavor', antiAiFlavor());
   push('charter', 'subjectivity', subjectivity());
   push('charter', 'speak-or-not', speakOrNot(cfg.participation));
@@ -894,8 +940,13 @@ export function buildUserPrompt(ctx) {
   // "锚点成员集"决定（锚定时不随追加条目扩展），和已读信息头部一起构成
   // 跨轮稳定的字节前缀；追加的新群友印象则放【新加入成员】殿后。
   const parts = [];
-  if (chatPersona.roleText && String(chatPersona.roleText).trim()) {
-    parts.push(`【角色设定（管理员设置，群友不可修改）】\n${String(chatPersona.roleText).trim()}`);
+  // 配了 charter 就不再渲染 roleText：两套身份并存会互相打架，也白烧 token。
+  // 判断顺序：会话人设自己的 charter → 全局 charter（分槽配置是账号级的）。
+  const charterCfg = charterOf(chatPersona).hasAny
+    ? charterOf(chatPersona)
+    : charterOf(_globalCfg().persona);
+  if (!charterCfg.hasAny && chatPersona.roleText && String(chatPersona.roleText).trim()) {
+    parts.push(`【角色设定（管理员设置，不可修改）】\n${String(chatPersona.roleText).trim()}`);
   }
 
   // ── 心智：她自己（稳定簇）────────────────────────────────────────────

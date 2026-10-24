@@ -20,7 +20,8 @@ const check = (cond, msg, detail = '') => {
 };
 
 const { PROMPT_LAYERS, validateSections, renderSections, layerOrder } = await import(src('src/prompt-layers.js'));
-const { buildSystemPrompt } = await import(src('src/prompt.js'));
+const { buildSystemPrompt, buildUserPrompt } = await import(src('src/prompt.js'));
+const { updateConfig } = await import(src('src/config.js'));
 
 // ── 1. 层的定义 ─────────────────────────────────────────────────────────
 console.log('\n=== 1. 层定义 ===');
@@ -118,6 +119,55 @@ console.log('\n=== 5. 静态守卫 ===');
   check(!/parts\.push\(securityRules\(\)\)/.test(text), '不再用旧的 parts 数组直接拼安全段');
   check(/push\('safety'/.test(text) && /push\('charter'/.test(text) && /push\('self'/.test(text) && /push\('skills'/.test(text),
     '四层都有实际装配');
+}
+
+// ── 6. 身份宪法槽位（charter）──────────────────────────────────────────
+console.log('\n=== 6. charter 槽位与私聊口吻 ===');
+{
+  const base = {
+    chatKey: 'private:456',
+    triggerEntries: [{ id: 1, ts: Date.now(), senderId: '456', senderName: '小王', text: '在吗', self: false }],
+    store: { recent: () => [] },
+    memory: { formatForPrompt: () => '' },
+    stickerEntries: [], selfNickname: '小鲸鱼',
+    contextLimit: 10, promptAnchor: { prev: null }, session: {}
+  };
+
+  // 默认（没配 charter）：仍然渲染 roleText
+  const before = buildUserPrompt({ ...base });
+  check(before.includes('【角色设定'), '没配 charter 时仍用 roleText');
+
+  updateConfig({
+    persona: {
+      charter: {
+        selfImage: '我叫小鲸鱼，蓝头发，尾巴是鲸鱼的。',
+        baseline: '我一开始不太会跟人相处，话少。',
+        scenario: { private: '现在是一对一，不用装热闹。', group: '现在在一群人里，别抢话。' },
+        hardRules: ['不当客服', '不用括号写字内心戏']
+      }
+    }
+  });
+
+  const priv = buildSystemPrompt({ chatKind: 'private' });
+  check(priv.includes('【我是谁】') && priv.includes('蓝头发'), 'selfImage 渲染');
+  check(priv.includes('【我最初的样子】') && priv.includes('话少'), 'baseline 渲染');
+  check(priv.includes('【不能破的几条】') && priv.includes('- 不当客服'), 'hardRules 逐条渲染');
+  check(priv.includes('现在是一对一，不用装热闹'), '私聊用 scenario.private');
+  check(!priv.includes('现在在一群人里'), '私聊不混入群聊场合');
+  check(priv.includes('一个在 QQ 上和人来往的普通人'), '私聊的身份句不说"群友"');
+
+  const grp = buildSystemPrompt({ chatKind: 'group' });
+  check(grp.includes('现在在一群人里，别抢话'), '群聊用 scenario.group');
+  check(grp.includes('一个混在 QQ 群里的普通群友'), '群聊保留"群友"身份句');
+
+  // 配了 charter 就不再渲染 roleText：两套身份并存会互相打架
+  const after = buildUserPrompt({ ...base });
+  check(!after.includes('【角色设定'), '配了 charter 后 user 里不再有 roleText');
+  check(after.length < before.length, 'user 提示因此变短');
+
+  // 恢复默认，避免影响其它断言
+  updateConfig({ persona: { charter: { selfImage: '', baseline: '', scenario: { private: '', group: '' }, hardRules: [] } } });
+  check(buildUserPrompt({ ...base }).includes('【角色设定'), '清空 charter 后回到 roleText');
 }
 
 console.log(`\n提示词分层：通过 ${pass}，失败 ${fail}`);
