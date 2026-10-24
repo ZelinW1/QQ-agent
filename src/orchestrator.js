@@ -22,7 +22,9 @@ import {
   parseDecision,
   nextTickAt,
   getAction,
-  availableActions
+  availableActions,
+  resolveSleepWindow,
+  classifySleep
 } from './mind/index.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt, todayKey, extractJson } from './util.js';
@@ -71,6 +73,11 @@ export class Orchestrator {
     this.tickBootTimer = null;         // 启动后的一次性心跳
     this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
     this.lastProactiveAt = new Map();  // chatKey -> 上次主动发言时间
+    // 作息：asleep 是内存态的"快门"，每小时钟/心跳刷新一次。
+    // 睡眠期间 onIncoming 直接 return —— 消息只入库，她看不见。
+    this.asleep = false;
+    this.sleepWindow = null;           // 今晚的入睡窗口（用于日志/UI 展示）
+    this.lastActivityAt = 0;           // 最近一次收到消息的时间（用于"安静宽限"）
     this.runningChats = new Set();     // 正在运行的 chatKey
     this.activeRuns = new Map();       // chatKey -> sessionId
     this.sessionAbortMarks = new Set(); // 用户请求中止的 sessionId（abortSession 打标记，#runAgent 每轮检查）
@@ -195,6 +202,11 @@ export class Orchestrator {
    */
   onIncoming(chatKey, entry = null) {
     if (this.paused || this.aborted) return;
+    // 夜里睡着：消息只入库，**不唤醒**。她早上醒了才一起读（见 #refreshSleep）。
+    // 这不是静音——睡着时她连"看到"都没有，所以也不会产生"已读不回"。
+    if (this.asleep) return;
+    // 醒着收到消息 = 有活动。用于睡眠的"安静宽限"：刚还在聊天就不会立刻睡着。
+    this.lastActivityAt = Date.now();
     // 运行中 / 倒计时中：消息保持未读（不判定、不重置），由会话结束的
     // drain 路径补判定（见 wake 末尾的 drain 注释）。
     if (this.runningChats.has(chatKey)) return;
@@ -1754,6 +1766,57 @@ export class Orchestrator {
   // 心跳不是"每 5 分钟调一次模型"：60s 扫一次，只有命中廉价预判的会话
   // 才调决策模型。多数时间她什么都没想（见 doc/m1-mind-plan.md §6.2）。
 
+  /**
+   * 刷新作息状态（醒来/睡着）。
+   *
+   * 睡着的三个后果，缺一不可：
+   *   1. onIncoming 直接 return —— 消息只入库，她看不见
+   *   2. 心跳不做决策 —— 夜里不主动找人
+   *   3. 醒来时把积压当一批处理 —— 早上一起读，而不是每条补一遍
+   *
+   * @returns {{asleep:boolean, window:object, reason:string, changed:boolean, inWindow:boolean}}
+   */
+  #refreshSleep(now = Date.now()) {
+    const cfg = getConfig();
+    const sleepCfg = cfg.mind?.sleep || {};
+    const prev = this.asleep;
+
+    if (!this.mind) {
+      this.asleep = false;
+      return { asleep: false, window: null, reason: '无心智', changed: prev !== false, inWindow: false };
+    }
+
+    const tick = this.mind.getTick();
+    const st = (tick.sleep && typeof tick.sleep === 'object') ? tick.sleep : {};
+    const window = resolveSleepWindow(now, sleepCfg);
+    const quietForMs = this.lastActivityAt > 0 ? now - this.lastActivityAt : Infinity;
+    const d = classifySleep({ now, window, state: st, quietForMs, cfg: sleepCfg });
+
+    let changed = false;
+    if (d.asleep && !prev) {
+      changed = true;
+      this.mind.updateTick({
+        sleep: { state: 'asleep', since: now, nightKey: d.nightKey, stayUps: Number(st.stayUps) || 0 }
+      });
+      this.mind.appendAction({ chatKey: '', at: now, action: 'sleep', reason: d.reason, candidates: [] });
+    } else if (!d.asleep && prev) {
+      changed = true;
+      this.mind.updateTick({ sleep: { state: 'awake', since: now, nightKey: d.nightKey, stayUps: 0 } });
+      this.mind.appendAction({ chatKey: '', at: now, action: 'wake', reason: d.reason, candidates: [] });
+      // 醒来：积压的消息当一批处理。模型没配时 wake 会自然跳过，消息仍保留未读。
+      if (sleepCfg.wakeOnBacklog !== false) {
+        try { this.drainBacklogAfterResume(); } catch { /* 补处理失败不影响醒来本身 */ }
+      }
+    } else if (!d.asleep && String(st.nightKey || '') !== String(d.nightKey)) {
+      // 换夜了：清掉"再撑一会"的计数，别带到下一晚
+      this.mind.updateTick({ sleep: { ...st, nightKey: d.nightKey, stayUps: 0 } });
+    }
+
+    this.asleep = d.asleep;
+    this.sleepWindow = window;
+    return { asleep: d.asleep, window, reason: d.reason, changed, inWindow: d.inWindow };
+  }
+
   /** 启动心跳主循环。心智未启用时什么都不做（与没有这个子系统时一致）。 */
   startTickLoop() {
     this.stopTickLoop();
@@ -1772,6 +1835,9 @@ export class Orchestrator {
       this.tickOnce().catch(() => {});
     }, 20000);
     this.tickBootTimer.unref?.();
+
+    // 启动即刻同步一次作息：否则重启后头 20 秒她会"忘了自己在睡觉"
+    this.#refreshSleep(Date.now());
   }
 
   stopTickLoop() {
@@ -1797,6 +1863,12 @@ export class Orchestrator {
 
     const tickCfg = m.tick || {};
     if (tickCfg.enabled === false) return { results: [], skipped: 'tick-disabled' };
+
+    // ⓪ 作息：睡着就不做决策（也不扫会话）。醒来由这里的状态机负责。
+    const sleep = this.#refreshSleep(now);
+    if (sleep.asleep) {
+      return { results: [{ chatKey: '', action: 'sleep', reason: sleep.reason }], skipped: 'asleep' };
+    }
 
     // ① 结算（纯算术，0 token）
     let tick = settleEnergy(this.mind.getTick(), now, m.energy || {});
@@ -1844,6 +1916,11 @@ export class Orchestrator {
         unreflected,
         cfg: m
       });
+      // 到点了但还没睡：给她一次"睡 or 再待一会儿"的机会。
+      // 没有这个候选，入睡就完全是外部设定 —— 她连表态的机会都没有。
+      if (sleep.inWindow && !sleep.asleep) {
+        candidates = [...candidates, { id: 'bedtime', text: '夜深了，该睡了，还是再待一会儿？' }];
+      }
 
       // 先算"现在能做什么"，再把"做了也白搭"的候选剔掉：
       // 例如刚整理过不久，"攒了 N 件没整理"这条就不该再把她叫起来做决策 ——
@@ -1858,7 +1935,11 @@ export class Orchestrator {
         unreflected,
         organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
         lastReflectAttemptAt: Number(tick.lastReflectAttemptAt) || 0,
-        reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000)
+        reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000),
+        // 作息：让她自己决定"再撑一会儿"，但每晚有次数上限
+        inSleepWindow: sleep.inWindow === true ? 1 : 0,
+        stayUps: Number((tick.sleep && tick.sleep.stayUps) || 0),
+        maxStayUp: Math.max(0, Number(m.sleep?.maxStayUp) || 2)
       };
       let actions = availableActions(state);
       if (!actions.some((a) => a.id === 'organize')) {
@@ -1931,12 +2012,21 @@ export class Orchestrator {
           patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
           this.lastProactiveAt.set(chatKey, now);
         }
-        // 做了事就清掉这个会话的打盹：情况变了，旧候选不再适用。
-        const cleared = {};
+
+        // 做完之后怎么处理这些候选：
+        //   · 会改变现场的动作（主动说话、整理、再撑一会）→ 清掉打盹，
+        //     因为情况已经不一样了；
+        //   · 不改变现场的动作（回想）→ 反而要给候选打盹，否则同一个理由
+        //     会让她每隔十分钟再"回想"一次（真实模拟里抓到的）。
+        const snoozeFor = Math.max(0, Number(action.snoozeMs) || 0);
+        const nextSnoozes = {};
         for (const [k, v] of Object.entries(snoozes)) {
-          if (!k.startsWith(`${chatKey}|`)) cleared[k] = v;
+          if (!k.startsWith(`${chatKey}|`) && Number(v) > now) nextSnoozes[k] = v;
         }
-        patch.snoozes = cleared;
+        if (snoozeFor > 0) {
+          for (const c of candidates) nextSnoozes[`${chatKey}|${c.id}`] = now + snoozeFor;
+        }
+        patch.snoozes = nextSnoozes;
         this.mind.updateTick(patch);
       }
 
@@ -1966,7 +2056,15 @@ export class Orchestrator {
       store: this.mind,
       proactive: () => this.wake(chatKey, { proactive: true }),
       reflect: () => this.reflectForChat(chatKey),
-      recall: () => this.#recallForChat(chatKey, decision.args, now)
+      recall: () => this.#recallForChat(chatKey, decision.args, now),
+      // "再撑一会儿"：只延长入睡时间，不产生消息。次数由 maxStayUp 封顶。
+      stayUp: () => {
+        const t = this.mind.getTick();
+        const st = (t.sleep && typeof t.sleep === 'object') ? t.sleep : {};
+        const next = (Number(st.stayUps) || 0) + 1;
+        this.mind.updateTick({ sleep: { ...st, stayUps: next } });
+        return { stayUps: next };
+      }
     };
     return action.run(ctx, decision.args || {});
   }

@@ -61,8 +61,25 @@ export const ACTIONS = [
     label: '回想一些事',
     description: '翻翻更早的记忆，看看有没有值得想起的',
     energy: 5,
+    // 回想不会改变现场（旧事还在那儿），所以做完要给候选打个盹，
+    // 否则同一个"有件事没问"会让她每隔十分钟回想一次。
+    snoozeMs: 3 * 3600 * 1000,
     async run(ctx) {
       return ctx.recall();
+    }
+  },
+  {
+    id: 'stay_up',
+    label: '再撑一会儿',
+    description: '还不想睡，再待一会儿再睡',
+    energy: 0,
+    when: (s) => {
+      if (Number(s.inSleepWindow) !== 1) return { ok: false, reason: '还不到睡觉的点' };
+      if (Number(s.stayUps) >= Number(s.maxStayUp)) return { ok: false, reason: '不能再撑了，该睡了' };
+      return true;
+    },
+    async run(ctx) {
+      return ctx.stayUp();
     }
   },
   {

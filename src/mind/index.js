@@ -46,3 +46,5 @@ export {
 } from './tick.js';
 
 export { ACTIONS, getAction, availableActions } from './actions.js';
+
+export { resolveSleepWindow, classifySleep, describeWindow } from './sleep.js';

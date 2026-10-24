@@ -257,6 +257,9 @@ console.log('\n=== 7. 一轮心跳 ===');
     check(Math.round(tick.energy) === Math.round(before) - 5, `消耗 5 体力（剩 ${Math.round(tick.energy)}）`);
     const events = mind.queryEvents({ chatKey: 'private:456' });
     check(events.some((e) => String(e.text).startsWith('我忽然想起')), '回想写成了一条新事件');
+    // 回想不改变现场（旧事还在），所以做完要给候选打盹，否则会十分钟一次
+    const sn = mind.getTick().snoozes || {};
+    check(Object.values(sn).some((v) => Number(v) > now0), '回想后给候选打了盹');
   }
 
   // 7g. 决策 send_proactive → 走正常 proactive 管线
@@ -297,7 +300,7 @@ console.log('\n=== 7. 一轮心跳 ===');
 console.log('\n=== 8. 行动注册表 ===');
 {
   const ids = ACTIONS.map((a) => a.id);
-  check(ids.join(',') === 'send_proactive,organize,recall,idle', `内置动作齐全且顺序固定（${ids.join(',')}）`);
+  check(ids.join(',') === 'send_proactive,organize,recall,stay_up,idle', `内置动作齐全且顺序固定（${ids.join(',')}）`);
   check(ACTIONS.every((a) => a.label && !/扮演|角色扮演|人设/.test(a.label + (a.description || ''))), '动作文案不含扮演类词汇');
   check(ACTIONS.every((a) => typeof a.run === 'function'), '每个动作都有 run');
 }

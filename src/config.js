@@ -360,6 +360,19 @@ export const DEFAULT_CONFIG = {
     reflectCooldownMs: 7200000,     // 两次反思最小间隔（2 小时）
     reflectMaxEvents: 60,           // 单次反思最多喂多少条事件（控制上下文长度）
     reflectMaxRelations: 8,         // 单次反思最多带几份关系档案
+    // —— 作息 ——
+    // 夜里睡着：不决策、不进消息、早上醒来再读积压。
+    // 入睡/醒来时间每晚随机抖动，避免"固定 23:30 像设置项不像人"。
+    sleep: {
+      enabled: false,               // 默认关（与整体一致：关闭时行为不变）
+      startHour: 23, startMinute: 30,   // 打算睡的时段
+      endHour: 8, endMinute: 0,         // 打算醒的时段（可跨午夜）
+      jitterMin: 40,                // 每晚入睡/醒来各随机 ±N 分钟
+      graceMs: 900000,              // 刚聊过天就先不睡（15 分钟内有过活动）
+      stayUpMs: 1800000,            // 每"再撑一会"延长多久（30 分钟）
+      maxStayUp: 2,                 // 一晚最多再撑几次
+      wakeOnBacklog: true           // 醒来时把积压消息当成一批处理
+    },
     // —— 节律（心跳）——
     // 心跳不是"每 5 分钟调一次模型"：结算与廉价预判都不花钱，
     // 只有命中候选才调决策模型。详见 doc/m1-mind-plan.md §6.2。

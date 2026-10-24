@@ -249,6 +249,13 @@ function defaultTick() {
     // 候选打盹：`<chatKey>|<candidateId>` -> 到期时间。
     // 她"想了一下但决定不做"之后，同一个理由不该每 5 分钟重新叫她一次。
     snoozes: {},
+    // 作息：夜里睡着是**状态**，不是静音开关（睡着时不看消息、不做决策）。
+    sleep: {
+      state: 'awake',   // 'awake' | 'asleep'
+      since: 0,
+      nightKey: '',
+      stayUps: 0
+    },
     notes: []
   };
 }
