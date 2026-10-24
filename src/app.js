@@ -1599,7 +1599,12 @@ export function createApp({ log = console.log } = {}) {
         }
       }).catch(() => { /* 仍失败：连接层已尽力，UI 状态如实反映 */ });
     }, 45_000).unref?.();
-    if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
+    // 主动开口的两条路径互斥：心智节律开启时用它（她会自己决定何时开口），
+    // 否则回落到旧的概率式 proactive。同时开会造成双路径重复搭话。
+    const mindCfg = getConfig().mind || {};
+    const mindTickOn = mindCfg.enabled === true && mindCfg.tick?.enabled !== false;
+    if (mindTickOn) orchestrator.startTickLoop();
+    else if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
     orchestrator.startReminderLoop();   // 提醒（闹钟）调度：到点往群里发提醒
     log(`控制台已就绪：http://127.0.0.1:${port}`);
     log(`OneBot（SnowLuma）: ws=${getConfig().snowluma?.wsUrl} http=${getConfig().snowluma?.httpUrl}`);
@@ -1643,6 +1648,7 @@ export function createApp({ log = console.log } = {}) {
     pluginWatcher = null;
     await orchestrator.abortAll();
     orchestrator.stopReminderLoop();
+    orchestrator.stopTickLoop();
     if (communitySyncTimer) clearInterval(communitySyncTimer);
     if (obPortPollTimer) clearInterval(obPortPollTimer);
     // 索引缓存立刻落盘：正常运行中靠防抖（5s），退出前必须写一次，

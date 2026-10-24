@@ -34,3 +34,15 @@ export {
   parseReflectOutput,
   applyReflection
 } from './reflect.js';
+
+export {
+  settleEnergy,
+  resetDaily,
+  collectCandidates,
+  buildDecisionPrompt,
+  parseDecision,
+  nextTickAt,
+  actionBlocked
+} from './tick.js';
+
+export { ACTIONS, getAction, availableActions } from './actions.js';

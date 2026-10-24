@@ -10,7 +10,20 @@
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import { getConfig } from './config.js';
 import { resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
-import { collectMindContext, buildReflectPrompt, parseReflectOutput, applyReflection } from './mind/index.js';
+import {
+  collectMindContext,
+  buildReflectPrompt,
+  parseReflectOutput,
+  applyReflection,
+  settleEnergy,
+  resetDaily,
+  collectCandidates,
+  buildDecisionPrompt,
+  parseDecision,
+  nextTickAt,
+  getAction,
+  availableActions
+} from './mind/index.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt, todayKey, extractJson } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
@@ -54,6 +67,10 @@ export class Orchestrator {
     this.verifiedWakes = new Set();    // 本轮 wake 由 onIncoming 触发判定排定的 chatKey（区别于 drain 等机械重排）
     this.consolidating = new Set();    // 正在整理记忆的 chatKey
     this.reflecting = new Set();       // 正在反思的 chatKey（心智，防重入）
+    this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
+    this.tickBootTimer = null;         // 启动后的一次性心跳
+    this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
+    this.lastProactiveAt = new Map();  // chatKey -> 上次主动发言时间
     this.runningChats = new Set();     // 正在运行的 chatKey
     this.activeRuns = new Map();       // chatKey -> sessionId
     this.sessionAbortMarks = new Set(); // 用户请求中止的 sessionId（abortSession 打标记，#runAgent 每轮检查）
@@ -1730,6 +1747,233 @@ export class Orchestrator {
     });
 
     return { ok: true, empty: parsed.empty === true, applied, rejected };
+  }
+
+  // ── 心跳（节律）────────────────────────────────────────────────────────
+  //
+  // 心跳不是"每 5 分钟调一次模型"：60s 扫一次，只有命中廉价预判的会话
+  // 才调决策模型。多数时间她什么都没想（见 doc/m1-mind-plan.md §6.2）。
+
+  /** 启动心跳主循环。心智未启用时什么都不做（与没有这个子系统时一致）。 */
+  startTickLoop() {
+    this.stopTickLoop();
+    if (!this.mind) return;
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+    if (m.enabled !== true || m.tick?.enabled !== true) return;
+
+    this.tickTimer = setInterval(() => {
+      this.tickOnce().catch((error) => console.error('[mind] 心跳失败:', error?.message ?? error));
+    }, 60000);
+    this.tickTimer.unref?.();
+
+    // 启动 20 秒后先跑一次：否则重启后的头一分钟她"没有节律"。
+    this.tickBootTimer = setTimeout(() => {
+      this.tickOnce().catch(() => {});
+    }, 20000);
+    this.tickBootTimer.unref?.();
+  }
+
+  stopTickLoop() {
+    if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null; }
+    if (this.tickBootTimer) { clearTimeout(this.tickBootTimer); this.tickBootTimer = null; }
+  }
+
+  /**
+   * 跑一轮心跳。
+   *
+   * @param {object} [opts]
+   * @param {number} [opts.now]
+   * @param {Function} [opts.chat] 测试注入：替代决策模型的调用
+   * @returns {Promise<{results:object[], tick?:object, skipped?:string}>}
+   */
+  async tickOnce({ now = Date.now(), chat = null } = {}) {
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+    if (!this.mind) return { results: [], skipped: 'no-mind' };
+    if (m.enabled !== true) return { results: [], skipped: 'disabled' };
+    if (this.paused || this.aborted) return { results: [], skipped: 'paused' };
+    if (!cfg.api?.model || !cfg.api?.baseUrl) return { results: [], skipped: 'no-model' };
+
+    const tickCfg = m.tick || {};
+    if (tickCfg.enabled === false) return { results: [], skipped: 'tick-disabled' };
+
+    // ① 结算（纯算术，0 token）
+    let tick = settleEnergy(this.mind.getTick(), now, m.energy || {});
+    tick = resetDaily(tick, todayKey(now));
+    this.mind.updateTick(tick);
+
+    const chats = (this.store?.listChats?.() || [])
+      .filter((k) => String(k).startsWith('private:'));
+    const results = [];
+
+    for (const chatKey of chats) {
+      const due = this.tickSchedule.get(chatKey) || 0;
+      if (due > now) continue;
+      // 先排下一次，避免某次异常让她永远停在同一个会话上
+      this.tickSchedule.set(chatKey, nextTickAt(now, tickCfg.intervalMs, tickCfg.jitter));
+
+      // ② 仲裁：应答优先，心跳只捡安静的空档
+      if (this.runningChats?.has?.(chatKey)) { results.push({ chatKey, action: 'skip', reason: 'running' }); continue; }
+      if ((this.store?.unreadCount?.(chatKey) || 0) > 0) { results.push({ chatKey, action: 'skip', reason: 'unread' }); continue; }
+
+      const meta = this.store?.getChatMeta?.(chatKey) || {};
+      const idleLookbackMs = Math.max(0, Number(tickCfg.idleLookbackMin) || 2) * 60000;
+      if (meta.lastTs && now - Number(meta.lastTs) < idleLookbackMs) {
+        results.push({ chatKey, action: 'skip', reason: 'recent-activity' });
+        continue;
+      }
+
+      const lastProactiveAt = Number(this.lastProactiveAt.get(chatKey)) || 0;
+      const suppressMs = Math.max(0, Number(tickCfg.suppressAfterProactiveMs) || 600000);
+      if (lastProactiveAt > 0 && now - lastProactiveAt < suppressMs) {
+        results.push({ chatKey, action: 'skip', reason: 'just-proactive' });
+        continue;
+      }
+
+      // ③ 廉价预判
+      const chatId = String(chatKey).split(':')[1] || '';
+      const relation = this.mind.getRelation(chatId);
+      tick = this.mind.getTick();
+      const unreflected = this.mind.countUnreflected(chatKey, Number(tick.lastReflectAt) || 0);
+      const candidates = collectCandidates({
+        now,
+        energy: Number(tick.energy) || 0,
+        lastInteractionAt: Number(meta.lastTs) || 0,
+        openLoops: relation.openLoops,
+        unreflected,
+        cfg: m
+      });
+      if (!candidates.length) { results.push({ chatKey, action: 'idle', reason: 'no-candidate' }); continue; }
+
+      // 熔断：当日决策次数
+      const maxDecisions = Math.max(1, Number(tickCfg.maxDecisionsPerDay) || 24);
+      if ((Number(tick.todayDecisions) || 0) >= maxDecisions) {
+        results.push({ chatKey, action: 'idle', reason: 'decision-cap' });
+        continue;
+      }
+
+      // ④ 决策（唯一的模型调用，极小上下文）
+      const state = {
+        now,
+        energy: Number(tick.energy) || 0,
+        todayProactive: Number(tick.todayProactive) || 0,
+        maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
+        minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
+        lastProactiveAt,
+        unreflected,
+        organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8))
+      };
+      const actions = availableActions(state);
+      const messages = buildDecisionPrompt({
+        botName: cfg.persona?.botName,
+        state,
+        candidates,
+        actions,
+        now
+      });
+      const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
+      const decision = parseDecision(String(res?.message?.content ?? ''), actions.map((a) => a.id));
+
+      // 决策次数记账（无论选了什么，这次模型调用都算）
+      tick = this.mind.getTick();
+      this.mind.updateTick({ todayDecisions: (Number(tick.todayDecisions) || 0) + 1 });
+
+      if (!decision || decision.action === 'idle') {
+        this.mind.appendAction({
+          chatKey, at: now, action: 'idle',
+          reason: decision ? (decision.reason || '想不出要做什么') : '输出无法解析，按不行动处理',
+          candidates: candidates.map((c) => c.id),
+          usage: res?.usage || null
+        });
+        results.push({ chatKey, action: 'idle', reason: decision ? 'chose-idle' : 'unparsable' });
+        continue;
+      }
+
+      // ⑤ 执行
+      const action = getAction(decision.action);
+      let exec = null;
+      let execError = '';
+      try {
+        exec = await this.#runMindAction(action, chatKey, decision, { now });
+      } catch (error) {
+        execError = String(error?.message ?? error);
+        console.error(`[mind] 行动 ${decision.action} 失败:`, execError);
+      }
+
+      // 体力与计数：只要真的执行了（哪怕抛错）就记消耗 —— 她确实试过了
+      if (!execError) {
+        tick = this.mind.getTick();
+        const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(action.energy) || 0)) };
+        if (decision.action === 'send_proactive') {
+          patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
+          this.lastProactiveAt.set(chatKey, now);
+        }
+        this.mind.updateTick(patch);
+      }
+
+      this.mind.appendAction({
+        chatKey, at: now, action: decision.action, reason: decision.reason,
+        candidates: candidates.map((c) => c.id),
+        energySpent: execError ? 0 : (Number(action.energy) || 0),
+        result: exec,
+        error: execError || undefined,
+        usage: res?.usage || null
+      });
+      results.push({ chatKey, action: decision.action, reason: decision.reason, error: execError || undefined });
+
+      // 一次心跳最多服务一个会话：避免多个会话同时醒造成的成本尖峰。
+      break;
+    }
+
+    return { results, tick: this.mind.getTick() };
+  }
+
+  /** 执行一个动作。ctx 里只给能力，不给她直接碰编排器内部。 */
+  async #runMindAction(action, chatKey, decision, { now }) {
+    if (!action) return { done: false, reason: '未知动作' };
+    const ctx = {
+      chatKey,
+      now,
+      store: this.mind,
+      proactive: () => this.wake(chatKey, { proactive: true }),
+      reflect: () => this.reflectForChat(chatKey),
+      recall: () => this.#recallForChat(chatKey, decision.args, now)
+    };
+    return action.run(ctx, decision.args || {});
+  }
+
+  /**
+   * "回想"动作：从更早的记忆里翻一条出来。
+   *
+   * 刻意不调模型 —— 决策已经花过一次钱了，回想只是"把旧事重新摆到眼前"。
+   * 写回一条事件，这样它会进入下一轮反思与检索。
+   */
+  #recallForChat(chatKey, args = {}, now = Date.now()) {
+    const olderThan = now - 7 * 86400000;
+    const pool = this.mind.queryEvents({ chatKey, limit: 300 })
+      .filter((e) => Number(e.ts) < olderThan && !(Array.isArray(e.summaryOf) && e.summaryOf.length));
+    if (!pool.length) return { recalled: 0 };
+
+    const query = String(args?.query ?? '').trim();
+    const picked = query
+      ? pool.filter((e) => String(e.text || '').includes(query))
+      : pool;
+    const source = (picked.length ? picked : pool)
+      .slice()
+      .sort((a, b) => (Number(b.salience) || 0) - (Number(a.salience) || 0)
+        || (Number(b.ts) || 0) - (Number(a.ts) || 0))[0];
+
+    const appended = this.mind.appendEvent({
+      chatKey,
+      actorId: source.actorId,
+      actorName: source.actorName,
+      kind: 'observation',
+      text: `我忽然想起：${String(source.text || '').slice(0, 120)}`,
+      salience: 0.3,
+      tags: ['回想']
+    });
+    return { recalled: 1, sourceId: source.id, eventId: appended.ok ? appended.event.id : null };
   }
 
   /**
