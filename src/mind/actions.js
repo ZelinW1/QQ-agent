@@ -42,6 +42,14 @@ export const ACTIONS = [
       if (Number(s.unreflected) < Number(s.organizeMinEvents || 3)) {
         return { ok: false, reason: '还没攒下多少事' };
       }
+      // 与后台自动反思共用同一条冷却：否则她可以每隔几分钟"整理一次"，
+      // 反复烧体力和决策额度（真实模拟里抓到的就是这个）。
+      const now = Number(s.now) || Date.now();
+      const lastAttempt = Number(s.lastReflectAttemptAt) || 0;
+      const cooldown = Number(s.reflectCooldownMs) || 0;
+      if (lastAttempt > 0 && cooldown > 0 && now - lastAttempt < cooldown) {
+        return { ok: false, reason: '刚整理过不久' };
+      }
       return true;
     },
     async run(ctx) {

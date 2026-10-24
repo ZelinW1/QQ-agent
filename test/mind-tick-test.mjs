@@ -144,6 +144,18 @@ console.log('\n=== 6. 抖动与动作可用性 ===');
   const gap = availableActions({ energy: 100, todayProactive: 0, maxProactive: 6, minProactiveGapMs: 3600000, lastProactiveAt: now0 - 60000, unreflected: 5, now: now0 });
   check(!gap.some((a) => a.id === 'send_proactive'), '刚主动过 → 菜单里不出现');
 
+  // 整理必须走反思冷却，否则她会每隔几分钟"整理一次"、反复烧体力和决策额度
+  const orgCooldown = availableActions({
+    energy: 100, unreflected: 9, now: now0,
+    lastReflectAttemptAt: now0 - 60000, reflectCooldownMs: 7200000
+  });
+  check(!orgCooldown.some((a) => a.id === 'organize'), '刚整理过 → 整理不在菜单里');
+  const orgReady = availableActions({
+    energy: 100, unreflected: 9, now: now0,
+    lastReflectAttemptAt: now0 - 3 * H, reflectCooldownMs: 7200000
+  });
+  check(orgReady.some((a) => a.id === 'organize'), '冷却过后整理重新可用');
+
   check(actionBlocked(getAction('idle'), { energy: 0 }) === null, 'idle 永远可用');
 }
 
@@ -215,6 +227,23 @@ console.log('\n=== 7. 一轮心跳 ===');
     check(Math.round(tick.energy) === Math.round(before), 'idle 不耗体力');
     check((tick.todayDecisions || 0) === 1, '决策次数已记账');
     check(mind.listActions({ limit: 5 }).length === 1, '写了一条行动日志');
+  }
+
+  // 7e-2. 决定不做之后，同一个候选要打盹（否则每 5 分钟重新叫她一次）
+  {
+    const { orch, mind } = mkOrch({ lastTs: now0 - 7 * H });
+    let calls = 0;
+    const chat = async () => { calls++; return { message: { content: '{"action":"idle","reason":"算了"}' } }; };
+    await orch.tickOnce({ now: now0, chat });
+    check(calls === 1, '第一次：调了决策模型');
+    const snoozes = mind.getTick().snoozes || {};
+    check(Object.keys(snoozes).some((k) => k === 'private:456|miss_you'), '给候选记了打盹');
+
+    // 用 10 分钟后再来：nextTickAt 有 ±10% 抖动（最长 5.5 分钟），
+    // 5 分钟时可能还没到"下一次心跳"，测不到打盹逻辑。
+    const r2 = await orch.tickOnce({ now: now0 + 10 * 60000, chat });
+    check(calls === 1, '五分钟后再来：候选还在打盹，不再调模型');
+    check(r2.results.some((x) => x.action === 'idle' && x.reason === 'no-candidate'), '记为 no-candidate');
   }
 
   // 7f. 决策 recall → 执行、耗体力

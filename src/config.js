@@ -372,6 +372,9 @@ export const DEFAULT_CONFIG = {
       maxDecisionsPerDay: 24,       // 熔断：每日调用决策模型次数
       maxProactivePerDay: 6,        // 熔断：每日主动发消息次数
       minProactiveGapMs: 3600000,   // 两次主动消息最小间隔（60 分钟）
+      // 她"想过但决定不做"之后，同一个候选在这么久内不再叫她。
+      // 没有它的话，一个长期未完结的候选会让她每 5 分钟重新纠结一次。
+      idleSnoozeMs: 3600000,
       maxReflectPerDay: 8,          // 熔断：每日反思次数
       suppressAfterProactiveMs: 600000  // 主动发言后 10 分钟内不再行动
     },

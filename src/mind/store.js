@@ -246,6 +246,9 @@ function defaultTick() {
     // 上次**尝试**反思的时间（无论成败）。冷却用它而不是 lastReflectAt：
     // 解析失败时 lastReflectAt 不前移，若不再记尝试时间，失败会变成每轮重试。
     lastReflectAttemptAt: 0,
+    // 候选打盹：`<chatKey>|<candidateId>` -> 到期时间。
+    // 她"想了一下但决定不做"之后，同一个理由不该每 5 分钟重新叫她一次。
+    snoozes: {},
     notes: []
   };
 }

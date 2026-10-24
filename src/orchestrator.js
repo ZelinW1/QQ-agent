@@ -1836,7 +1836,7 @@ export class Orchestrator {
       const relation = this.mind.getRelation(chatId);
       tick = this.mind.getTick();
       const unreflected = this.mind.countUnreflected(chatKey, Number(tick.lastReflectAt) || 0);
-      const candidates = collectCandidates({
+      let candidates = collectCandidates({
         now,
         energy: Number(tick.energy) || 0,
         lastInteractionAt: Number(meta.lastTs) || 0,
@@ -1844,6 +1844,30 @@ export class Orchestrator {
         unreflected,
         cfg: m
       });
+
+      // 先算"现在能做什么"，再把"做了也白搭"的候选剔掉：
+      // 例如刚整理过不久，"攒了 N 件没整理"这条就不该再把她叫起来做决策 ——
+      // 否则只是花一次模型调用换一个"那算了"。 
+      const state = {
+        now,
+        energy: Number(tick.energy) || 0,
+        todayProactive: Number(tick.todayProactive) || 0,
+        maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
+        minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
+        lastProactiveAt,
+        unreflected,
+        organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
+        lastReflectAttemptAt: Number(tick.lastReflectAttemptAt) || 0,
+        reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000)
+      };
+      let actions = availableActions(state);
+      if (!actions.some((a) => a.id === 'organize')) {
+        candidates = candidates.filter((c) => c.id !== 'reflect_pending');
+      }
+      // 打盹：上次"想了一下但决定不做"的候选，在 snooze 到期前不再叫她。
+      // 真实的人不会每 5 分钟重新纠结同一件事。
+      const snoozes = (tick.snoozes && typeof tick.snoozes === 'object') ? { ...tick.snoozes } : {};
+      candidates = candidates.filter((c) => !(Number(snoozes[`${chatKey}|${c.id}`]) > now));
       if (!candidates.length) { results.push({ chatKey, action: 'idle', reason: 'no-candidate' }); continue; }
 
       // 熔断：当日决策次数
@@ -1854,17 +1878,6 @@ export class Orchestrator {
       }
 
       // ④ 决策（唯一的模型调用，极小上下文）
-      const state = {
-        now,
-        energy: Number(tick.energy) || 0,
-        todayProactive: Number(tick.todayProactive) || 0,
-        maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
-        minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
-        lastProactiveAt,
-        unreflected,
-        organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8))
-      };
-      const actions = availableActions(state);
       const messages = buildDecisionPrompt({
         botName: cfg.persona?.botName,
         state,
@@ -1880,6 +1893,15 @@ export class Orchestrator {
       this.mind.updateTick({ todayDecisions: (Number(tick.todayDecisions) || 0) + 1 });
 
       if (!decision || decision.action === 'idle') {
+        // 她想过但决定不做：给这些候选打个盹，免得每 5 分钟重新叫她一次。
+        const snoozeMs = Math.max(60000, Number(tickCfg.idleSnoozeMs) || 3600000);
+        const nextSnoozes = { ...snoozes };
+        for (const c of candidates) nextSnoozes[`${chatKey}|${c.id}`] = now + snoozeMs;
+        for (const [k, v] of Object.entries(nextSnoozes)) {
+          if (!(Number(v) > now)) delete nextSnoozes[k];
+        }
+        this.mind.updateTick({ snoozes: nextSnoozes });
+
         this.mind.appendAction({
           chatKey, at: now, action: 'idle',
           reason: decision ? (decision.reason || '想不出要做什么') : '输出无法解析，按不行动处理',
@@ -1909,6 +1931,12 @@ export class Orchestrator {
           patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
           this.lastProactiveAt.set(chatKey, now);
         }
+        // 做了事就清掉这个会话的打盹：情况变了，旧候选不再适用。
+        const cleared = {};
+        for (const [k, v] of Object.entries(snoozes)) {
+          if (!k.startsWith(`${chatKey}|`)) cleared[k] = v;
+        }
+        patch.snoozes = cleared;
         this.mind.updateTick(patch);
       }
 
