@@ -3,6 +3,10 @@
 # 分享给别人前用 `node scripts/sanitize-release.mjs` 生成干净副本。
 data/
 
+# 私用资料（自用安装说明、临时备忘、本机截图）——永不入库
+private/
+private-*/
+
 # SnowLuma 日志：可能含密钥片段与聊天内容
 snowluma/logs/
 *.log

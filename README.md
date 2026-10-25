@@ -192,6 +192,17 @@ npm start
 想让她会睡觉，回节律页打开「夜里会睡着」——注意「安静多久才睡」：
 刚聊过天她不会立刻睡（默认 5 分钟）。
 
+### 自己打包
+
+```bash
+npm run dist:dir   # 生成未压缩程序目录（离线可用，复用本地 electron）
+npm run dist:zip   # 打成便携 ZIP → dist/QQ-Agent-Hui-V<版本>-win64-portable.zip
+npm run dist       # 打 NSIS 安装包（首次需联网下载 NSIS 工具链）
+```
+
+发布内容由 `package.json → build.files` 白名单控制：`data/`、`snowluma/`、`runtime/`、
+`test/`、`doc/`、`scripts/` 都不会进包。
+
 ---
 
 ## 测试

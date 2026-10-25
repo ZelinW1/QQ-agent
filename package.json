@@ -18,19 +18,26 @@
     "files": [
       "**/*",
       "!data/**",
+      "!backups/**",
       "!community.key",
       "!community.key.example",
       "!server/**",
-      "!snowluma/config/**",
-      "!snowluma/data/**",
-      "!snowluma/logs/**",
+      "!snowluma/**",
+      "!runtime/**",
+      "!private/**",
       "!test/**",
       "!doc/**",
       "!scripts/**",
       "!dist/**",
+      "!release/**",
+      "!.goal-baseline/**",
+      "!.git/**",
+      "!.github/**",
       "!**/*.map",
       "!package-lock.json.bak",
-      "!*.log"
+      "!*.log",
+      "!*.bat",
+      "!.zcodeignore"
     ],
     "win": {
       "target": [
@@ -84,7 +91,10 @@
     "test:safefile": "node test/safe-fetch-file-test.mjs",
     "test:sender": "node test/sender-file-uri-test.mjs && node test/sender-send-path-test.mjs",
     "check:load": "node scripts/preload-check.mjs",
-    "test:wakesem": "node test/wake-semantics-test.mjs"
+    "test:wakesem": "node test/wake-semantics-test.mjs",
+    "dist:dir": "electron-builder --dir --win -c.electronDist=node_modules/electron/dist",
+    "dist": "electron-builder --win -c.electronDist=node_modules/electron/dist",
+    "dist:zip": "node scripts/pack-release.mjs"
   },
   "dependencies": {
     "js-yaml": "^5.4.1",
