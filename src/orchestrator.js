@@ -74,6 +74,9 @@ export class Orchestrator {
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
     this.tickBootTimer = null;         // 启动后的一次性心跳
     this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
+    // 最近心跳（含"跳过"的那些）：只在内存里留 40 条，不写盘。
+    // 写盘只记真正发生了的事（actions.jsonl），否则每 60 秒一条跳过日志会越积越多。
+    this.recentTicks = [];
     this.lastProactiveAt = new Map();  // chatKey -> 上次主动发言时间
     // 作息：asleep 是内存态的"快门"，每小时钟/心跳刷新一次。
     // 睡眠期间 onIncoming 直接 return —— 消息只入库，她看不见。
@@ -1959,7 +1962,34 @@ export class Orchestrator {
    * @param {Function} [opts.chat] 测试注入：替代决策模型的调用
    * @returns {Promise<{results:object[], tick?:object, skipped?:string}>}
    */
-  async tickOnce({ now = Date.now(), chat = null } = {}) {
+  async tickOnce(opts = {}) {
+    const now = Number(opts?.now) || Date.now();
+    let result;
+    try {
+      result = await this.#runTick({ ...opts, now });
+    } catch (error) {
+      result = { results: [], skipped: 'error', error: String(error?.message ?? error) };
+    }
+    this.#recordTick(now, result);
+    return result;
+  }
+
+  /** 记录一轮心跳的结果（只在内存，不含"跳过"的重复日志）。 */
+  #recordTick(now, r = {}) {
+    try {
+      const results = (Array.isArray(r.results) ? r.results : []).slice(0, 5).map((x) => ({
+        chatKey: String(x?.chatKey || ''),
+        action: String(x?.action || ''),
+        reason: String(x?.reason || ''),
+        error: x?.error ? String(x.error) : ''
+      }));
+      this.recentTicks.push({ at: Number(now) || Date.now(), skipped: String(r.skipped || ''), error: String(r.error || ''), results });
+      const max = 40;
+      if (this.recentTicks.length > max) this.recentTicks.splice(0, this.recentTicks.length - max);
+    } catch { /* 记录失败不影响心跳本身 */ }
+  }
+
+  async #runTick({ now = Date.now(), chat = null } = {}) {
     const cfg = getConfig();
     const m = cfg.mind || {};
     if (!this.mind) return { results: [], skipped: 'no-mind' };

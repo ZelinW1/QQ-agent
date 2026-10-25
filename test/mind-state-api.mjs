@@ -191,6 +191,35 @@ await check('会话配置：缺 chatKey → 400', async () => {
   assert.equal(r.status, 400);
 });
 
+await check('节律参数与默认值都回传（UI 才能"恢复默认"）', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.ok(d.energy && typeof d.energy.max === 'number', '回传体力参数');
+  assert.ok(d.tickConfig && typeof d.tickConfig.intervalMs === 'number', '回传心跳参数');
+  assert.ok(d.reflectConfig && typeof d.reflectConfig.reflectAfterEvents === 'number', '回传反思参数');
+  assert.ok(d.defaults?.energy && d.defaults?.tick && d.defaults?.sleep && d.defaults?.reflect, '回传默认值');
+});
+
+await check('心跳日志：内存最近心跳 + 落盘行动 + 文件体积', async () => {
+  const d = (await env.request('GET', '/api/mind/tick-log?limit=20')).data;
+  assert.equal(d.ok, true);
+  assert.ok(Array.isArray(d.recentTicks), 'recentTicks 是数组');
+  assert.ok(Array.isArray(d.actions), 'actions 是数组');
+  assert.ok(d.sizes && typeof d.sizes.total === 'number', '有文件体积');
+});
+
+await check('清空日志：只清日志文件，不动记忆', async () => {
+  const before = (await env.request('GET', '/api/mind/state')).data;
+  const r = await env.request('POST', '/api/mind/logs/clear', { body: { scope: 'all' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.ok, true);
+  const after = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(after.self.version, before.self.version, '自我没被清');
+  assert.equal(after.relations.length, before.relations.length, '关系没被清');
+  assert.ok(after.counts.events >= 1, '事件没被清');
+  const log = (await env.request('GET', '/api/mind/tick-log')).data;
+  assert.equal(log.actions.length, 0, '行动日志已清空');
+});
+
 // ── 5. 安全性 ───────────────────────────────────────────────────────────
 await check('响应里不含任何密钥字段', async () => {
   const r = await env.request('GET', '/api/mind/state');

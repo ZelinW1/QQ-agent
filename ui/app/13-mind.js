@@ -41,6 +41,8 @@ let mindProfileKeys = [];
 let mindChats = [];
 // 记忆流筛选（按人 / 按会话）。空串 = 全部。
 let mindStreamFilter = { actor: '', chatKey: '' };
+// 节律页：心跳日志（内存最近心跳 + 已落盘的行动/反思 + 文件体积）
+let mindTickLog = { recentTicks: [], actions: [], reflections: [], sizes: null };
 
 const mindClamp = (v) => Math.max(0, Math.min(100, Number(v) || 0));
 const mindMode = () => (typeof state !== 'undefined' && state.mindMode) || 'state';
@@ -77,11 +79,17 @@ async function loadMindPage() {
       jobs.push(api('/api/chat-profiles').catch(() => ({ profiles: {}, chatKeys: [] })));
       jobs.push(api('/api/chats').catch(() => ({ chats: [] })));
     }
+    if (mode === 'rhythm') {
+      jobs.push(api('/api/mind/tick-log?limit=50').catch(() => ({ recentTicks: [], actions: [], reflections: [], sizes: null })));
+    }
     const [st, a, b] = await Promise.all(jobs);
     mindState = st;
     if (mode === 'stream') {
       mindEvents = a?.events || [];
       mindChats = b?.chats || [];
+    }
+    if (mode === 'rhythm') {
+      mindTickLog = a || { recentTicks: [], actions: [], reflections: [], sizes: null };
     }
     if (mode === 'profiles') {
       mindProfiles = a?.profiles || {};
@@ -109,6 +117,7 @@ function renderMindPage() {
   const mode = mindMode();
   const parts = [mindHeader(d)];
   if (mode === 'identity') parts.push(mindIdentitySection(d));
+  else if (mode === 'rhythm') parts.push(mindRhythmSection(d));
   else if (mode === 'stream') parts.push(mindStreamSection());
   else if (mode === 'profiles') parts.push(mindProfilesSection());
   else parts.push(mindStateSection(d));
@@ -240,44 +249,6 @@ function mindStateSection(d) {
 // ── 身份 ───────────────────────────────────────────────────────────────
 function mindIdentitySection(d) {
   const raw = d.charter || {};
-  const sleep = d.sleep || {};
-
-  // 开关与作息
-  const sc = sleep.config || {};
-  const two = (n) => String(n).padStart(2, '0');
-  const hhmm = (h, m) => `${two(h)}:${two(m)}`;
-  const sw = (id, checked, label) => (typeof switchHtml === 'function'
-    ? switchHtml(id, checked, label)
-    : `<label class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} /><span>${esc(label)}</span></label>`);
-
-  const switchBody = `
-    <div class="mind-form">
-      <div class="mind-actions">
-        ${sw('mind-sw-on', d.enabled, '心智功能')}
-        ${sw('mind-sw-sleep', sleep.enabled, '夜里会睡着')}
-      </div>
-      <div class="mind-grid" style="gap:10px">
-        <label>入睡时间<input type="time" id="mind-sleep-start" value="${hhmm(sc.startHour ?? 23, sc.startMinute ?? 30)}" /></label>
-        <label>醒来时间<input type="time" id="mind-sleep-end" value="${hhmm(sc.endHour ?? 8, sc.endMinute ?? 0)}" /></label>
-        <label>每晚抖动（± 分钟）<input type="number" id="mind-sleep-jitter" min="0" max="180" value="${Number(sc.jitterMin ?? 40)}" /></label>
-        <label>一晚最多再撑几次<input type="number" id="mind-sleep-stay" min="0" max="5" value="${Number(sc.maxStayUp ?? 2)}" /></label>
-        <label>安静多久才睡（分钟）
-          <input type="number" id="mind-sleep-grace" min="0" max="120" value="${Math.round(Number(sc.graceMs ?? 300000) / 60000)}" />
-        </label>
-      </div>
-      <div class="hint">
-        睡着时她不看消息、不做决策；醒来后把积压当成一批读。时段每晚有随机抖动。<br>
-        「安静多久才睡」是关键：刚聊过天就不会立刻睡。${sleep.asleep
-          ? `现在：<strong>已睡着</strong>，醒来的时间是窗口结束。`
-          : (sleep.nextEligibleAt
-            ? `现在：<strong>醒着</strong>（刚还在聊天，安静到 ${mindClock(sleep.nextEligibleAt)} 后才会睡）。`
-            : `现在：<strong>醒着</strong>${sleep.reason ? `（${esc(sleep.reason)}）` : ''}。`)}
-      </div>
-      <div class="mind-actions">
-        <button class="btn btn-primary btn-small" id="mind-save-switches">保存开关</button>
-        <span class="muted" id="mind-sw-msg"></span>
-      </div>
-    </div>`;
 
   // 出生仪式草案
   const draftsHtml = mindBirthDrafts.length
@@ -362,8 +333,142 @@ function mindIdentitySection(d) {
 
   return `
     ${mindBirthOpen ? mindCard('出生仪式', birthPanel) : ''}
-    ${mindCard('开关与作息', switchBody)}
     ${mindCard('身份', editBody)}`;
+}
+
+// ── 节律（她自己的生理与行为参数）──────────────────────────────────────
+// 这里放的是"她怎么活着"：体力、心跳、反思、作息、日志。
+// 而「设置 → 发送与节奏」放的是"引擎怎么把消息送出去"（温度/轮数/防抖/并发）。
+// 两者的分界线是：**改这个参数会不会改变她的行为**，会 → 这里；不会 → 设置。
+function mindNum(id, label, value, { min = 0, max = 9999, step = 1, unit = '', desc = '' } = {}) {
+  return `<label>${esc(label)}${unit ? `<span class="muted" style="font-weight:400">（${esc(unit)}）</span>` : ''}
+    <input type="number" id="${id}" min="${min}" max="${max}" step="${step}" value="${Number(value)}" />
+    ${desc ? `<span class="hint" style="font-weight:400">${esc(desc)}</span>` : ''}
+  </label>`;
+}
+
+function mindRhythmSection(d) {
+  const sleep = d.sleep || {};
+  const sc = sleep.config || {};
+  const tick = d.tick || {};
+  const energy = d.energy || {};
+  const tickCfg = d.tickConfig || {};
+  const reflectCfg = d.reflectConfig || {};
+  const two = (n) => String(n).padStart(2, '0');
+  const hhmm = (h, m) => `${two(h)}:${two(m)}`;
+  const sw = (id, checked, label) => (typeof switchHtml === 'function'
+    ? switchHtml(id, checked, label)
+    : `<label class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} /><span>${esc(label)}</span></label>`);
+
+  const switchBody = `
+    <div class="mind-form">
+      <div class="mind-actions">${sw('mind-sw-on', d.enabled, '心智功能')}</div>
+      <div class="hint">
+        关掉后：她不再记录、不再反思、不再按节律行动，也不会睡觉 ——
+        <strong>但正常聊天完全不受影响</strong>。想让她"现在别回话"，用右上角的「暂停」。<br>
+        这里只放<strong>会改变她行为</strong>的参数；温度 / 轮数 / 防抖 / 并发这类传输参数在「设置 → 聊天设置」里。
+      </div>
+      <div class="mind-actions">
+        <button class="btn btn-primary btn-small" id="mind-save-rhythm">保存节律</button>
+        <button class="btn btn-small" id="mind-reset-rhythm">恢复默认</button>
+        <span class="muted" id="mind-rhythm-msg"></span>
+      </div>
+    </div>`;
+
+  const energyBody = `
+    <div class="mind-form">
+      <div class="mind-grid" style="gap:10px">
+        ${mindNum('rh-energy-max', '体力上限', energy.max ?? 100, { min: 10, max: 1000, desc: '她累不累的上限' })}
+        ${mindNum('rh-energy-recover', '每小时恢复', energy.recoverPerHour ?? 10, { min: 0, max: 100, desc: '按时间差补，不靠定时器' })}
+        ${mindNum('rh-energy-floor', '低于此值不动', energy.floor ?? 10, { min: 0, max: 100, desc: '累了就歇着，连决策都不做' })}
+      </div>
+    </div>`;
+
+  const tickBody = `
+    <div class="mind-form">
+      <div class="mind-grid" style="gap:10px">
+        ${mindNum('rh-tick-interval', '心跳间隔', Math.round((tickCfg.intervalMs ?? 300000) / 60000), { min: 1, max: 120, unit: '分钟', desc: '多久看一次"要不要做点什么"' })}
+        ${mindNum('rh-tick-jitter', '间隔抖动', Math.round((tickCfg.jitter ?? 0.1) * 100), { min: 0, max: 50, unit: '%', desc: '避免所有会话同一秒醒来' })}
+        ${mindNum('rh-tick-decisions', '每日决策上限', tickCfg.maxDecisionsPerDay ?? 24, { min: 1, max: 200, desc: '用尽后连模型都不调' })}
+        ${mindNum('rh-tick-proactive', '每日主动次数', tickCfg.maxProactivePerDay ?? 6, { min: 0, max: 50, desc: '她主动找人的上限' })}
+        ${mindNum('rh-tick-gap', '两次主动最小间隔', Math.round((tickCfg.minProactiveGapMs ?? 3600000) / 60000), { min: 0, max: 1440, unit: '分钟' })}
+        ${mindNum('rh-tick-idle', '多久没聊才想她', Math.round((tickCfg.proactiveIdleMs ?? 21600000) / 3600000), { min: 1, max: 168, unit: '小时' })}
+        ${mindNum('rh-tick-snooze', '候选打盹', Math.round((tickCfg.idleSnoozeMs ?? 3600000) / 60000), { min: 1, max: 1440, unit: '分钟', desc: '想过但没做，这么久内不再叫她' })}
+      </div>
+    </div>`;
+
+  const reflectBody = `
+    <div class="mind-form">
+      <div class="mind-grid" style="gap:10px">
+        ${mindNum('rh-reflect-after', '攒够多少条反思', reflectCfg.reflectAfterEvents ?? 8, { min: 1, max: 100, unit: '条' })}
+        ${mindNum('rh-reflect-cooldown', '两次反思间隔', Math.round((reflectCfg.reflectCooldownMs ?? 7200000) / 60000), { min: 1, max: 1440, unit: '分钟' })}
+        ${mindNum('rh-reflect-daily', '每日反思上限', tickCfg.maxReflectPerDay ?? 8, { min: 1, max: 100, unit: '次' })}
+      </div>
+    </div>`;
+
+  const sleepBody = `
+    <div class="mind-form">
+      <div class="mind-actions">${sw('mind-sw-sleep', sleep.enabled, '夜里会睡着')}</div>
+      <div class="mind-grid" style="gap:10px">
+        <label>入睡时间<input type="time" id="mind-sleep-start" value="${hhmm(sc.startHour ?? 23, sc.startMinute ?? 30)}" /></label>
+        <label>醒来时间<input type="time" id="mind-sleep-end" value="${hhmm(sc.endHour ?? 8, sc.endMinute ?? 0)}" /></label>
+        ${mindNum('mind-sleep-jitter', '每晚抖动', sc.jitterMin ?? 40, { min: 0, max: 180, unit: '±分钟', desc: '固定时间像设置项，抖动像人' })}
+        ${mindNum('mind-sleep-stay', '一晚最多再撑', sc.maxStayUp ?? 2, { min: 0, max: 5, unit: '次' })}
+        ${mindNum('mind-sleep-grace', '安静多久才睡', Math.round((sc.graceMs ?? 300000) / 60000), { min: 0, max: 120, unit: '分钟', desc: '刚聊过天就不会立刻睡' })}
+      </div>
+      <div class="hint">
+        睡着时不看消息、不做决策；醒来把积压当一批读。${sleep.asleep
+          ? '现在：<strong>已睡着</strong>。'
+          : (sleep.nextEligibleAt
+            ? `现在：<strong>醒着</strong>（刚还在聊天，安静到 ${mindClock(sleep.nextEligibleAt)} 后才会睡）。`
+            : `现在：<strong>醒着</strong>${sleep.reason ? `（${esc(sleep.reason)}）` : ''}。`)}
+      </div>
+    </div>`;
+
+  // ── 日志 ──
+  const sizes = mindTickLog.sizes;
+  const kb = (n) => (Number(n) >= 1024 ? `${(Number(n) / 1024).toFixed(1)} KB` : `${Number(n) || 0} B`);
+  const ticks = mindTickLog.recentTicks || [];
+  const tickRows = ticks.length
+    ? ticks.slice().reverse().map((t) => {
+        const what = t.skipped
+          ? `跳过（${esc(t.skipped)}）`
+          : (t.results || []).map((r) => `${esc(r.action)}${r.reason ? `·${esc(r.reason)}` : ''}`).join(' / ') || '无事';
+        return `<div class="mind-rel-line"><span class="mind-rel-meta">${fmtTime(t.at)}</span>　${what}</div>`;
+      }).join('')
+    : '<div class="mind-empty">还没有心跳记录（内存里只保留最近 40 次，重启即清空）。</div>';
+
+  const actRows = (mindTickLog.actions || []).length
+    ? mindTickLog.actions.slice().reverse().map((a) => (
+      `<div class="mind-rel-line"><span class="mind-rel-meta">${fmtTime(a.at)}</span>　${esc(a.action)}${a.reason ? ` · ${esc(String(a.reason).slice(0, 40))}` : ''}${a.energySpent ? `（-${a.energySpent} 体力）` : ''}</div>`
+    )).join('')
+    : '<div class="mind-empty">没有落盘的行动记录。只有真正发生的事才会写进来（跳过的心跳不写盘）。</div>';
+
+  const logBody = `
+    <div class="mind-slot">
+      <div class="k">最近心跳（内存，含跳过）</div>
+      ${tickRows}
+    </div>
+    <div class="mind-slot">
+      <div class="k">已落盘的行动（actions.jsonl）</div>
+      ${actRows}
+    </div>
+    <div class="mind-actions" style="margin-top:10px">
+      <button class="btn btn-small" id="mind-clear-logs">清空日志文件</button>
+      <span class="muted">${sizes ? `当前占用 ${kb(sizes.total)}（行动 ${kb(sizes.actions)} · 反思 ${kb(sizes.reflections)}）` : ''}</span>
+      <span class="muted" id="mind-log-msg"></span>
+    </div>
+    <div class="hint">只清 actions/reflections 两个日志文件；事件、关系、自我一个字都不动。</div>`;
+
+  return `
+    ${mindCard('总开关', switchBody)}
+    ${mindCard('作息', sleepBody)}
+    <div class="mind-grid">
+      ${mindCard('体力', energyBody)}
+      ${mindCard('心跳', tickBody)}
+    </div>
+    ${mindCard('反思', reflectBody)}
+    ${mindCard('日志', logBody)}`;
 }
 
 // ── 记忆流 ─────────────────────────────────────────────────────────────
@@ -468,7 +573,9 @@ function mindBindEvents(box) {
   $('#birth-gen')?.addEventListener('click', generateBirthDrafts);
   $('#mind-save')?.addEventListener('click', saveMindCharter);
   $('#mind-reflect-now')?.addEventListener('click', runReflectNow);
-  $('#mind-save-switches')?.addEventListener('click', saveMindSwitches);
+  $('#mind-save-rhythm')?.addEventListener('click', saveMindRhythm);
+  $('#mind-reset-rhythm')?.addEventListener('click', resetMindRhythm);
+  $('#mind-clear-logs')?.addEventListener('click', clearMindLogs);
   $('#mind-prof-save')?.addEventListener('click', () => saveProfile(false));
   $('#mind-prof-clear')?.addEventListener('click', () => saveProfile(true));
   $('#mind-prof-key')?.addEventListener('change', fillProfileForm);
@@ -525,42 +632,104 @@ async function runReflectNow() {
   }
 }
 
-// ── 保存：开关与作息 ───────────────────────────────────────────────────
-async function saveMindSwitches() {
-  const on = Boolean($('#mind-sw-on')?.checked);
-  const sleepOn = Boolean($('#mind-sw-sleep')?.checked);
+// ── 保存：节律（体力 / 心跳 / 反思 / 作息）────────────────────────────
+async function saveMindRhythm() {
+  const num = (id, min, max, fallback) => {
+    const v = Number($(`#${id}`)?.value);
+    if (!Number.isFinite(v)) return fallback;
+    return Math.max(min, Math.min(max, v));
+  };
   const parseTime = (v, dh, dm) => {
     const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? ''));
     return m ? [Math.min(23, Number(m[1])), Math.min(59, Number(m[2]))] : [dh, dm];
   };
   const [sh, sm] = parseTime($('#mind-sleep-start')?.value, 23, 30);
   const [eh, em] = parseTime($('#mind-sleep-end')?.value, 8, 0);
-  const jitter = Math.max(0, Math.min(180, Number($('#mind-sleep-jitter')?.value) || 0));
-  const maxStayUp = Math.max(0, Math.min(5, Number($('#mind-sleep-stay')?.value) || 0));
-  const graceMin = Math.max(0, Math.min(120, Number($('#mind-sleep-grace')?.value) || 0));
 
-  const msg = $('#mind-sw-msg');
+  const msg = $('#mind-rhythm-msg');
   if (msg) msg.textContent = '保存中…';
   try {
     await api('/api/config', {
       method: 'POST',
       body: JSON.stringify({
         mind: {
-          enabled: on,
+          enabled: Boolean($('#mind-sw-on')?.checked),
+          energy: {
+            max: num('rh-energy-max', 10, 1000, 100),
+            recoverPerHour: num('rh-energy-recover', 0, 100, 10),
+            floor: num('rh-energy-floor', 0, 100, 10)
+          },
+          tick: {
+            intervalMs: num('rh-tick-interval', 1, 120, 5) * 60000,
+            jitter: num('rh-tick-jitter', 0, 50, 10) / 100,
+            maxDecisionsPerDay: num('rh-tick-decisions', 1, 200, 24),
+            maxProactivePerDay: num('rh-tick-proactive', 0, 50, 6),
+            minProactiveGapMs: num('rh-tick-gap', 0, 1440, 60) * 60000,
+            proactiveIdleMs: num('rh-tick-idle', 1, 168, 6) * 3600000,
+            idleSnoozeMs: num('rh-tick-snooze', 1, 1440, 60) * 60000,
+            maxReflectPerDay: num('rh-reflect-daily', 1, 100, 8)
+          },
+          reflectAfterEvents: num('rh-reflect-after', 1, 100, 8),
+          reflectCooldownMs: num('rh-reflect-cooldown', 1, 1440, 120) * 60000,
           sleep: {
-            enabled: sleepOn,
+            enabled: Boolean($('#mind-sw-sleep')?.checked),
             startHour: sh, startMinute: sm,
             endHour: eh, endMinute: em,
-            jitterMin: jitter, maxStayUp,
-            graceMs: graceMin * 60000
+            jitterMin: num('mind-sleep-jitter', 0, 180, 40),
+            maxStayUp: num('mind-sleep-stay', 0, 5, 2),
+            graceMs: num('mind-sleep-grace', 0, 120, 5) * 60000
           }
         }
       })
     });
     await loadMindPage();
   } catch (e) {
-    const m = $('#mind-sw-msg');
+    const m = $('#mind-rhythm-msg');
     if (m) m.textContent = `保存失败：${e.message}`;
+  }
+}
+
+/** 恢复默认：把节律参数重置为出厂值（保留"心智开不开/作息开不开"）。 */
+async function resetMindRhythm() {
+  const d = mindState?.defaults;
+  if (!d) return;
+  const msg = $('#mind-rhythm-msg');
+  if (msg) msg.textContent = '恢复中…';
+  try {
+    await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({
+        mind: {
+          energy: d.energy,
+          tick: { ...d.tick, maxReflectPerDay: d.tick?.maxReflectPerDay },
+          reflectAfterEvents: d.reflect.reflectAfterEvents,
+          reflectCooldownMs: d.reflect.reflectCooldownMs,
+          reflectMaxEvents: d.reflect.reflectMaxEvents,
+          reflectMaxRelations: d.reflect.reflectMaxRelations,
+          // 作息恢复默认，但保留"是否启用"这一个开关
+          sleep: { ...d.sleep, enabled: mindState?.sleep?.enabled === true }
+        }
+      })
+    });
+    await loadMindPage();
+  } catch (e) {
+    const m = $('#mind-rhythm-msg');
+    if (m) m.textContent = `恢复失败：${e.message}`;
+  }
+}
+
+/** 清空日志文件（用户手动管理磁盘）。 */
+async function clearMindLogs() {
+  const msg = $('#mind-log-msg');
+  if (msg) msg.textContent = '清理中…';
+  try {
+    const r = await api('/api/mind/logs/clear', { method: 'POST', body: JSON.stringify({ scope: 'all' }) });
+    await loadMindPage();
+    const m = $('#mind-log-msg');
+    if (m) m.textContent = r?.ok ? `已清空（释放 ${Math.round((r.freed || 0) / 1024)} KB）` : `失败：${r?.error || '未知'}`;
+  } catch (e) {
+    const m = $('#mind-log-msg');
+    if (m) m.textContent = `失败：${e.message}`;
   }
 }
 

@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR } from './config.js';
+import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR, DEFAULT_CONFIG } from './config.js';
 import { buildChatProfileFrom, resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
 import { customSearch } from './web-search.js';
 import { listModels, chatCompletion, resolveApiKey, estimateCost, cacheHitRate } from './llm.js';
@@ -1027,6 +1027,26 @@ export function createRoutes(deps) {
           roleTextChars: String(persona.roleText || '').length,
           // 她的名字（botName）：编辑身份时可以直接改，不必走出生仪式
           botName: String(persona.botName || ''),
+          // 节律参数（「她 → 节律」页用）：当前值 + 默认值（供"恢复默认"）
+          energy: m.energy || {},
+          tickConfig: m.tick || {},
+          reflectConfig: {
+            reflectAfterEvents: m.reflectAfterEvents,
+            reflectCooldownMs: m.reflectCooldownMs,
+            reflectMaxEvents: m.reflectMaxEvents,
+            reflectMaxRelations: m.reflectMaxRelations
+          },
+          defaults: {
+            energy: DEFAULT_CONFIG.mind.energy,
+            tick: DEFAULT_CONFIG.mind.tick,
+            sleep: DEFAULT_CONFIG.mind.sleep,
+            reflect: {
+              reflectAfterEvents: DEFAULT_CONFIG.mind.reflectAfterEvents,
+              reflectCooldownMs: DEFAULT_CONFIG.mind.reflectCooldownMs,
+              reflectMaxEvents: DEFAULT_CONFIG.mind.reflectMaxEvents,
+              reflectMaxRelations: DEFAULT_CONFIG.mind.reflectMaxRelations
+            }
+          },
           self: {
             version: Number(self.version) || 0,
             narrative: String(self.narrative || ''),
@@ -1179,6 +1199,42 @@ export function createRoutes(deps) {
         // __replace__：映射型字段要"删掉旧键"，普通深合并做不到（见 config.deepMerge）
         updateConfig({ chatProfiles: { __replace__: current } });
         return json(res, 200, { ok: true, profiles: getConfig().chatProfiles || {} });
+      }
+    },
+    {
+      // 心跳日志：最近心跳（内存，含跳过）+ 已落盘的行动/反思 + 文件体积。
+      // 分开给两份数据是刻意的：跳过的心跳每 60 秒一次，写盘会无限膨胀；
+      // 但用户排查时又需要看到"她刚才为什么没动"，所以放内存里滚动保留。
+      method: 'GET', pattern: '/api/mind/tick-log',
+      handler: async ({ res, json, url }) => {
+        const mind = orchestrator?.mind || null;
+        if (!mind) return json(res, 200, { ok: true, recentTicks: [], actions: [], reflections: [], sizes: { actions: 0, reflections: 0, total: 0 } });
+        const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+        return json(res, 200, {
+          ok: true,
+          recentTicks: Array.isArray(orchestrator.recentTicks) ? orchestrator.recentTicks : [],
+          actions: mind.listActions({ limit }),
+          reflections: mind.listReflections({ limit: Math.min(50, limit) }),
+          sizes: mind.logSizes()
+        });
+      }
+    },
+    {
+      // 清空日志（磁盘自己管）。只清 actions/reflections 两个日志文件，
+      // 事件、关系、自我一个字都不碰 —— 那些是她的记忆，不是日志。
+      method: 'POST', pattern: '/api/mind/logs/clear',
+      handler: async ({ req, res, json }) => {
+        let body = {};
+        try { body = await readBody(req); } catch { body = {}; }
+        const mind = orchestrator?.mind || null;
+        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        const scope = String(body.scope || 'all');
+        const r = mind.clearLogs({
+          actions: scope === 'all' || scope === 'actions',
+          reflections: scope === 'all' || scope === 'reflections'
+        });
+        if (Array.isArray(orchestrator.recentTicks)) orchestrator.recentTicks = [];
+        return json(res, 200, { ok: true, ...r, sizes: mind.logSizes() });
       }
     },
     {

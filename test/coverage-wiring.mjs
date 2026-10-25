@@ -109,11 +109,14 @@ function batchRead(el) {
   const isFormCtl = tag === 'textarea'
     || (tag === 'input' && ['checkbox', 'radio', 'text', 'number', 'time', 'date', 'range'].includes(type));
   if (!isFormCtl) return false;
-  // 心智页的表单：开关/时间/数字都在「保存」按钮里被整体读走（saveMindSwitches /
-  // saveMindCharter），和弹窗里那批白名单复选框是同一种模式。
+  const wiredIn = (root) => Boolean(root) && [...root.querySelectorAll('button')].some((b) => wired(b));
+  // 心智页的表单：开关/时间/数字都在「保存」按钮里被整体读走。
   const box = el.closest('.model-modal, .modal, .mind-form');
-  if (!box) return false;
-  return [...box.querySelectorAll('button')].some((b) => wired(b));
+  if (box && wiredIn(box)) return true;
+  // 心智页的卡片是分开的（体力/心跳/作息各一张卡），保存按钮只在最上面那张 ——
+  // 所以退一步看"整页里有没有已接线的提交按钮"。这仍然能抓住"整页没人管"的情况。
+  const page = el.closest('#mind-page');
+  return wiredIn(page);
 }
 
 const rows = [];

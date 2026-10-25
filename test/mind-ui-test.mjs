@@ -93,6 +93,15 @@ const STATE = {
     todayReflections: 1, lastReflectAt: Date.now(), lastReflectAttemptAt: Date.now(),
     sleep: { state: 'awake', stayUps: 0, nightKey: '' }
   },
+  energy: { max: 100, recoverPerHour: 10, floor: 10 },
+  tickConfig: { intervalMs: 300000, jitter: 0.1, maxDecisionsPerDay: 24, maxProactivePerDay: 6, minProactiveGapMs: 3600000, proactiveIdleMs: 21600000, idleSnoozeMs: 3600000, maxReflectPerDay: 8 },
+  reflectConfig: { reflectAfterEvents: 8, reflectCooldownMs: 7200000, reflectMaxEvents: 60, reflectMaxRelations: 8 },
+  defaults: {
+    energy: { max: 100, recoverPerHour: 10, floor: 10 },
+    tick: { intervalMs: 300000, jitter: 0.1, maxDecisionsPerDay: 24, maxProactivePerDay: 6, minProactiveGapMs: 3600000, proactiveIdleMs: 21600000, idleSnoozeMs: 3600000, maxReflectPerDay: 8 },
+    sleep: { enabled: false, startHour: 23, startMinute: 30, endHour: 8, endMinute: 0, jitterMin: 40, maxStayUp: 2, graceMs: 300000 },
+    reflect: { reflectAfterEvents: 8, reflectCooldownMs: 7200000, reflectMaxEvents: 60, reflectMaxRelations: 8 }
+  },
   sleep: {
     enabled: false, asleep: false, window: null,
     config: { startHour: 23, startMinute: 30, endHour: 8, endMinute: 0, jitterMin: 40, maxStayUp: 2, graceMs: 900000 }
@@ -127,18 +136,45 @@ await sandbox.loadMindPage();
   check(!html.includes('开关与作息'), '状态页不混入设定（开关在「身份」页）');
 }
 
-// ── 1b. 身份页（设定都在这里）───────────────────────────────────────────
+// ── 1b. 身份页（只放身份，开关移到节律）─────────────────────────────────
 console.log('\n=== 1b. 身份页 ===');
 {
   const { sandbox: s1b, box: b1b } = makeSandbox(STATE);
   s1b.state = { mindMode: 'identity' };
   await s1b.loadMindPage();
   const html = b1b.innerHTML;
-  check(html.includes('开关与作息') && html.includes('mind-sleep-start'), '开关与作息卡');
-  check(html.includes('23:30'), '入睡时间用配置值填充');
   check(html.includes('出生仪式'), '出生仪式入口');
   check(html.includes('mind-f-name') && html.includes('mind-f-voice'), '身份表单（名字 / 说话习惯）');
+  check(!html.includes('开关与作息'), '开关已移到「节律」，身份页不再重复');
   check(!html.includes('最近反思'), '身份页不重复展示状态');
+}
+
+// ── 1b2. 节律页（体力 / 心跳 / 反思 / 作息 / 日志）─────────────────────
+console.log('\n=== 1b2. 节律页 ===');
+{
+  const { sandbox: s1b2, box: b1b2 } = makeSandbox(STATE, (p) => (
+    p.startsWith('/api/mind/tick-log')
+      ? {
+          ok: true,
+          recentTicks: [{ at: Date.now(), skipped: 'no-candidate', results: [] }],
+          actions: [{ at: Date.now(), action: 'idle', reason: '没什么事' }],
+          reflections: [],
+          sizes: { actions: 2048, reflections: 0, total: 2048 }
+        }
+      : null
+  ));
+  s1b2.state = { mindMode: 'rhythm' };
+  await s1b2.loadMindPage();
+  const html = b1b2.innerHTML;
+  check(html.includes('总开关') && html.includes('心智功能'), '总开关');
+  check(html.includes('体力') && html.includes('rh-energy-max'), '体力参数');
+  check(html.includes('心跳') && html.includes('rh-tick-interval'), '心跳参数');
+  check(html.includes('反思') && html.includes('rh-reflect-after'), '反思参数');
+  check(html.includes('作息') && html.includes('mind-sleep-start'), '作息参数');
+  check(html.includes('安静多久才睡'), '安静宽限可设置');
+  check(html.includes('mind-clear-logs') && html.includes('2.0 KB'), '日志卡（含体积与清空按钮）');
+  check(html.includes('mind-reset-rhythm'), '有恢复默认');
+  check(html.includes('正常聊天完全不受影响'), '写明心智开关的作用范围');
 }
 
 // ── 1c. 记忆流与会话配置 ───────────────────────────────────────────────

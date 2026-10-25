@@ -773,6 +773,7 @@ const NAV_GROUPS = {
     label: '她',
     items: [
       { id: 'state', label: '状态', view: 'mind', mode: 'state' },
+      { id: 'rhythm', label: '节律', view: 'mind', mode: 'rhythm' },
       { id: 'identity', label: '身份', view: 'mind', mode: 'identity' },
       { id: 'stream', label: '记忆流', view: 'mind', mode: 'stream' },
       { id: 'profiles', label: '会话配置', view: 'mind', mode: 'profiles' }

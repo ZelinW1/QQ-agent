@@ -1166,6 +1166,22 @@ c.section('15. 接口覆盖率统计');
     assert.ok(r.data && r.data.ok === false);
   });
 
+  await c.check('心跳日志与清理接口', async () => {
+    const log = await hit('GET', '/api/mind/tick-log?limit=10');
+    assert.equal(log.status, 200);
+    assert.ok(Array.isArray(log.data.recentTicks) && Array.isArray(log.data.actions));
+    assert.ok(log.data.sizes && typeof log.data.sizes.total === 'number');
+
+    const clear = await hit('POST', '/api/mind/logs/clear', { body: JSON.stringify({ scope: 'all' }) });
+    assert.equal(clear.status, 200);
+    assert.equal(clear.data.ok, true);
+  });
+
+  await c.check('手动反思接口（无会话时 400）', async () => {
+    const r = await hit('POST', '/api/mind/reflect', { body: JSON.stringify({}) });
+    assert.ok([200, 400].includes(r.status), `应 200 或 400，实际 ${r.status}`);
+  });
+
   await c.check('声明的 API 路由覆盖率 ≥ 90%', async () => {
     const src = fs.readFileSync(path.join(ROOT, 'src', 'routes.js'), 'utf8');
     // 正确解析：正则字面量（支持 \/ 转义与字符类），不能用非贪婪 [^\n]*?

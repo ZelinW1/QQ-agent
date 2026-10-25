@@ -663,6 +663,43 @@ export class MindStore {
     return tailJsonl(this.#actionsFile(), limit);
   }
 
+  /** 日志文件体积（UI 上让用户知道"清掉能省多少"）。 */
+  logSizes() {
+    const sizeOf = (file) => {
+      try { return fs.statSync(file).size; } catch { return 0; }
+    };
+    const actions = sizeOf(this.#actionsFile());
+    const reflections = sizeOf(this.#reflectionsFile());
+    return { actions, reflections, total: actions + reflections };
+  }
+
+  /**
+   * 清空日志（用户手动管理磁盘）。
+   *
+   * 只删日志，**不动事件/关系/自我**：那些是她的记忆本身，
+   * 日志只是"运行过程记录"，两者不能混为一谈。
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.actions=true]
+   * @param {boolean} [opts.reflections=true]
+   * @returns {{ok:boolean, cleared:string[], freed:number}}
+   */
+  clearLogs({ actions = true, reflections = true } = {}) {
+    const before = this.logSizes();
+    const cleared = [];
+    const truncate = (file) => {
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, '', 'utf8');
+        return true;
+      } catch { return false; }
+    };
+    if (actions && truncate(this.#actionsFile())) cleared.push('actions');
+    if (reflections && truncate(this.#reflectionsFile())) cleared.push('reflections');
+    const after = this.logSizes();
+    return { ok: true, cleared, freed: Math.max(0, before.total - after.total) };
+  }
+
   // ── 分片读写 ──
 
   #loadShard(file) {
