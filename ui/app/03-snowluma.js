@@ -113,13 +113,13 @@ async function loadSnowlumaPage({ quiet = false } = {}) {
         <div class="quick-start-section" style="background:var(--bg);border:none;border-radius:14px;padding:16px;margin-bottom:16px;box-shadow:var(--raise-sm)">
           <div style="font-size:15px;font-weight:600;margin-bottom:8px">🚀 快速启动</div>
           <div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.6">
-            ${!qqReady ? '便携 QQ 未安装，请先运行 <code>npm run setup</code>' :
+            ${!qqReady ? '便携 QQ 未就绪：本分支不代为安装。可从上游项目作者的分发页获取后放到 <code>runtime/qq-portable/</code>（或连接外部 OneBot）' :
               !qqRunning ? '点击下面按钮，自动完成：启动 QQ → 启动 SnowLuma → 连接 OneBot' :
               !running ? 'QQ 已运行，点击启动 SnowLuma 并连接' :
               'SnowLuma 已运行，等待 OneBot 连接…'}
           </div>
           <button class="btn btn-primary" id="quick-start-btn" style="font-size:14px;padding:10px 20px" ${!qqReady ? 'disabled' : ''}>
-            ${!qqReady ? '请先运行 npm run setup' :
+            ${!qqReady ? '便携 QQ 未就绪' :
               !qqRunning ? '一键启动（QQ + SnowLuma）' :
               !running ? '启动 SnowLuma' :
               '等待连接…'}
@@ -132,7 +132,7 @@ async function loadSnowlumaPage({ quiet = false } = {}) {
           <div class="snowluma-state-row">
             <span class="dot ${qqRunning ? 'dot-on' : 'dot-off'}"></span>
             <span>QQ 内核：<strong>${qqRunning ? `运行中${qqPid ? `（pid ${qqPid}）` : ''}` : (qqReady ? '未启动' : '未安装')}</strong></span>
-            ${!qqReady ? '<span class="muted" style="color:var(--orange)">请先运行 npm run setup</span>' : ''}
+            ${!qqReady ? '<span class="muted" style="color:var(--orange)">便携 QQ 未就绪（见上方说明；也可连外部 OneBot）</span>' : ''}
           </div>
           ${qqReady ? `
           <div class="snowluma-state-row muted" style="font-size:12px">

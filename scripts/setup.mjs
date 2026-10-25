@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 /**
- * QQ Agent 一键 setup 脚本：下载 SnowLuma + 安装固定版本 QQ 便携实例。
+ * QQ Agent · 洄 一键 setup：安装 SnowLuma 协议端，并检查便携 QQ 是否就绪。
  *
  *   npm run setup              # 首次安装（已就绪则跳过）
- *   node scripts/setup.mjs --force     # 强制重新下载
+ *   node scripts/setup.mjs --force     # 强制重新下载 SnowLuma
  *   node scripts/setup.mjs --check     # 只检查是否就绪
- *   node scripts/setup.mjs --skip-qq   # 只装 SnowLuma，跳过 QQ 下载
+ *   node scripts/setup.mjs --skip-qq   # 完全不看便携 QQ
  *
- * 不入库任何腾讯二进制。QQ 安装包从腾讯 CDN 实时下载（用户自行触发）。
- * SnowLuma 为独立第三方项目，按其许可分发。
+ * **本分支不下载、不安装 QQ**：便携 QQ 请使用上游项目作者的分发服务
+ * （https://kondius.cn/qq-agent），取到后放到 runtime/qq-portable/。
+ * 也可以不装便携 QQ，直接连接你自己的 OneBot 实现。
+ *
+ * 不入库任何腾讯二进制。SnowLuma 为独立第三方项目，按其许可分发。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -60,46 +63,11 @@ const QQ_VERSION = process.env.QQ_PORTABLE_VERSION || '9.9.33.51802';
 const QQ_VERSION_SHORT = QQ_VERSION.split('.').slice(0, 3).join('.');
 const QQ_BUILD = QQ_VERSION.split('.').pop();
 
-// ── 兜底安装包 ────────────────────────────────────────────────────────
-// ⚠️ 这是一个**具体文件**，不是从 QQ_VERSION 推导出来的 —— 两者是不同的产物：
-//   · 目标版本 9.9.33.51802 来自一份已装好的 QQ（没有对应的官方安装包）
-//   · 分发站上现存的安装包文件名里带的是 260813
-// 所以文件名写死。**别再用版本号拼**：拼错了兜底下载会 404，
-// 而错误信息只会说"下载失败"，很难联想到是文件名压根不存在。
-//
-// 这个包只在"免安装包拿不到 + 机器上也没装 QQ"时才用到（且必须手动双击安装，
-// 它是 HummerSetup，不支持静默安装）。
-const QQ_INSTALLER_NAME = process.env.QQ_INSTALLER_NAME || 'QQ_9.9.33_260813_x64_01.exe';
-const QQ_X64_URL = process.env.QQ_INSTALLER_URL ||
-  `https://www.kondius.cn/netdisk/api/download/${QQ_INSTALLER_NAME}`;
-
-// ── QQ 免安装包（首选路径）────────────────────────────────────────────
-//
-// 为什么需要它：QQ 9.9.x 的 HummerSetup 安装器**不支持静默安装**，
-// 而且"让用户装一遍再复制"在真实场景里有两个硬伤：
-//   1) 机器上已有更新版本 QQ 时，装低版本会被拒绝或直接升级掉 —— 降级不成立
-//   2) 不该为了做个便携版去动用户日常用的 QQ
-// 免安装包把"装"这一步整个去掉：解压即用，不碰系统里任何东西。
-//
-// 打包命令：npm run pack:qq   （生成后在 dist/ 下，上传到分发地址）
-// 留空 QQ_PORTABLE_URL 则跳过这条路，退回"从已装的 QQ 复制"。
-const QQ_PORTABLE_URL = (process.env.QQ_PORTABLE_URL
-  || 'https://www.kondius.cn/netdisk/api/download/QQ_portable.zip').trim();
-// 换包时**必须同步更新**，否则会以"SHA256 校验失败"告终。
-// 打包脚本会把这两行直接打印出来，复制粘贴即可。
-const QQ_PORTABLE_SHA256 = (process.env.QQ_PORTABLE_SHA256
-  || '2B669AAE5237B2CE23FB092E4D8A226C3CCD50E87BF917D767C53226F33E8005').trim().toUpperCase();
-// 安装包 SHA256（大写十六进制）。留空 = 不校验，但会在下载后**打印实际值**，
-// 方便你填进来固定住。
-//
-// 为什么默认留空而不是写死一个值：换下载源时如果沿用旧包的哈希，
-// 每次 setup 都会以"SHA256 校验失败"告终，比不校验还糟 —— 用户会以为文件坏了。
-// 想固定就填这里，或用环境变量 QQ_X64_SHA256 传入。
-// 上面那个**安装包**（QQ_9.9.33_260813_x64_01.exe，300.0 MB）的哈希。
-// 2026-09-13 实测下载并校验过。
-// 换版本时**必须同步换掉这里**，否则每次 setup 都会以"SHA256 校验失败"告终。
-const QQ_X64_SHA256 = (process.env.QQ_X64_SHA256
-  || 'B25C0D3CE9DF764074A9118D0DED927E1B2D7EBF60E306112E8DF18A040EC492').trim().toUpperCase();
+// ── 便携 QQ：本分支不下载、不安装 ─────────────────────────────────────
+// 这里刻意不再保留任何"下载 QQ 安装包/免安装包"的常量与逻辑：
+// 依赖上游分发地址会把分支的发版绑在别人的服务上，而退回装官方包又有
+// 版本与协议栈不适配的风险。需要便携 QQ 时，由使用者从上游项目作者那里
+// 取用，放到 runtime/qq-portable/（见 installQqPortable 里的提示）。
 
 // ⚠️ 版本匹配检查用：SnowLuma 的协议栈会声明一个 CLIENT_BUILD（形如 "9.9.26-44343"），
 // 它决定了握手时自称的客户端版本。QQ 版本与它差太远时，登录可能被拒或行为异常。
@@ -110,19 +78,18 @@ const args = process.argv.slice(2);
 const FORCE = args.includes('--force');
 const CHECK_ONLY = args.includes('--check');
 const SKIP_QQ = args.includes('--skip-qq');
-// --from <目录>：直接从指定目录复制 QQ（用户在别处装好了、或装在自定义路径）
-const FROM_DIR = (() => {
-  const i = args.indexOf('--from');
-  return i >= 0 ? String(args[i + 1] || '').trim() : '';
-})();
-// --run-installer：本机没有任何 QQ 可用时，帮忙把安装器跑起来（GUI），
-// 装完再自动继续。这是"全新机器"最省事的路径 —— 用户点几下就行。
-const RUN_INSTALLER = args.includes('--run-installer');
-// --no-portable：不用免安装包，强制走"从已装的 QQ 复制"那条路
-const NO_PORTABLE = args.includes('--no-portable');
+// 已移除的参数（以前用于"帮用户装 QQ"）：--from / --run-installer / --no-portable。
+// 仍然接受但不做任何事，只是为了老脚本不会因为未知参数报错。
+const LEGACY_FLAGS = ['--from', '--run-installer', '--no-portable'];
 
 const log = (...a) => console.log('[setup]', ...a);
 const warn = (...a) => console.warn('[setup] ⚠', ...a);
+{
+  const legacyUsed = LEGACY_FLAGS.filter((f) => args.includes(f));
+  if (legacyUsed.length) {
+    warn(`参数 ${legacyUsed.join(' / ')} 已停用（本分支不再安装 QQ），本次忽略。`);
+  }
+}
 const die = (msg) => { console.error('[setup] ❌', msg); process.exit(1); };
 
 // ── 工具函数 ──
@@ -421,8 +388,8 @@ function checkClientBuildMatch() {
     //   免安装包 → 这是发行版带的版本，所有人一样，要换得重新打包
     //   复制来的 → 是这台机器上那份 QQ 的版本，别人可能不一样
     if (QQ_SOURCE === 'archive') {
-      warn('     这是免安装包里带的版本（发行方打包时用的那份），属于预期内的差异。');
-      warn('     想让所有人用同一个版本，重新打包并更新 QQ_PORTABLE_URL/SHA256 即可）');
+      warn('     这是便携包自带的版本（打包时用的那份），属于预期内的差异。');
+      warn('     要统一版本，需要用同一份便携包重新分发）');
     } else if (QQ_SOURCE === 'copied') {
       warn('     这是从本机已装的 QQ 复制来的版本，属于预期内的差异。');
       warn('     换机器时版本可能又不一样 —— 想统一版本请用免安装包）');
@@ -452,266 +419,41 @@ function isQqPortableReady() {
   return fs.existsSync(qqExe);
 }
 
-async function installQqPortable() {
-  if (isQqPortableReady() && !FORCE) {
-    log('✅ 便携 QQ 已就绪（', QQ_PORTABLE_DIR, '），跳过。需要重装请加 --force');
+/**
+ * 便携 QQ：本分支**不再自动下载/安装**。
+ *
+ * 两个原因：
+ *   1) 自动下载依赖上游作者的分发地址（网盘接口），对方停服或改名，
+ *      分支发版就会卡在"下载几百 MB 失败"上；
+ *   2) 退回去装腾讯官方包又存在版本与协议栈不适配的风险
+ *      （SnowLuma 钉死了 CLIENT_BUILD，装错版本能启动但登录被拒）。
+ *
+ * 所以这里只做两件事：检测是否已经放好；没放好就把**上游项目作者**的
+ * 分发地址告诉用户，由用户自己取用。
+ */
+function installQqPortable() {
+  if (isQqPortableReady()) {
+    log('✅ 便携 QQ 已就绪（', QQ_PORTABLE_DIR, '），跳过。');
+    if (fs.existsSync(path.join(QQ_PORTABLE_DIR, 'portable-info.json'))) QQ_SOURCE = 'archive';
     return;
   }
-
-  // ══ 首选：免安装包 ═══════════════════════════════════════════════════
-  // 解压即用，**完全不需要安装 QQ**，也不碰系统里已装的任何东西。
-  // 这是唯一能绕开"机器上有更新版 QQ 就装不回指定版本"这个死结的路。
-  if (QQ_PORTABLE_URL && !NO_PORTABLE) {
-    const zipPath = path.join(QQ_CACHE_DIR, path.basename(new URL(QQ_PORTABLE_URL).pathname) || 'QQ_portable.zip');
-    try {
-      // 缓存命中就不重复下 650 MB
-      if (fs.existsSync(zipPath) && QQ_PORTABLE_SHA256 && fileSha256(zipPath) === QQ_PORTABLE_SHA256) {
-        log('免安装包：缓存命中（SHA256 校验通过），跳过下载');
-      } else {
-        if (fs.existsSync(zipPath)) log('免安装包：缓存 SHA256 不匹配，重新下载');
-        await download(QQ_PORTABLE_URL, zipPath, {
-          expectedSha256: QQ_PORTABLE_SHA256 || null,
-          label: 'QQ 免安装包 '
-        });
-      }
-
-      log(`解压到 ${QQ_PORTABLE_DIR}（约 1.5 GB，需要一点时间）…`);
-      fs.mkdirSync(QQ_PORTABLE_DIR, { recursive: true });
-      unzip(zipPath, QQ_PORTABLE_DIR);
-
-      // 归档自己带了一份清单，读出来核对版本与来源
-      const infoPath = path.join(QQ_PORTABLE_DIR, 'portable-info.json');
-      if (fs.existsSync(infoPath)) {
-        try {
-          const info = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
-          log(`免安装包版本：${info.qqVersion || '未知'}（打包于 ${info.packedAt || '?'}）`);
-          if (info.qqShort && info.qqShort !== QQ_VERSION_SHORT) {
-            warn(`  归档版本 ${info.qqShort} 与本脚本期望的 ${QQ_VERSION_SHORT} 不同 ——`);
-            warn('  属于预期内的差异（打包的是当时装好的那份），通常可用。');
-          }
-        } catch { /* 清单坏了不影响使用 */ }
-      }
-
-      if (!isQqPortableReady()) {
-        warn('免安装包解压后没找到 QQ.exe，改走"从已装的 QQ 复制"这条路');
-        fs.rmSync(QQ_PORTABLE_DIR, { recursive: true, force: true });
-      } else {
-        QQ_SOURCE = 'archive';
-        log('✅ 便携 QQ 就绪（免安装，未触碰系统里已装的 QQ）');
-        fs.mkdirSync(QQ_PORTABLE_DATA_DIR, { recursive: true });
-        return;
-      }
-    } catch (error) {
-      warn(`免安装包这条路失败：${error.message}`);
-      warn('  退回"从机器上已装的 QQ 复制"。');
-      warn('  （若反复失败，可手动下载该归档解压到：' + QQ_PORTABLE_DIR + '）');
-    }
-  } else if (NO_PORTABLE) {
-    log('--no-portable：跳过免安装包，走"从已装的 QQ 复制"');
-  }
-
-  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
-  fs.mkdirSync(QQ_CACHE_DIR, { recursive: true });
-
-  const installerPath = path.join(QQ_CACHE_DIR, QQ_INSTALLER_NAME);
-
-  // 如果缓存里有之前下载的安装器，先校验
-  if (fs.existsSync(installerPath)) {
-    const hash = fileSha256(installerPath);
-    if (!QQ_X64_SHA256) {
-      // 没配哈希时不能判"不匹配" —— 那会导致每次 setup 都重下一遍几百 MB
-      log(`缓存安装器已存在（SHA256 ${hash.slice(0, 16)}…），跳过下载`);
-    } else if (hash === QQ_X64_SHA256) {
-      log('缓存安装器 SHA256 校验通过，跳过下载');
-    } else {
-      log('缓存安装器 SHA256 不匹配，重新下载');
-      fs.rmSync(installerPath, { force: true });
-    }
-  }
-
-  // 下载 QQ 安装包
-  if (!fs.existsSync(installerPath)) {
-    try {
-      const dl = await download(QQ_X64_URL, installerPath, {
-        expectedSha256: QQ_X64_SHA256 || null,
-        label: 'QQ 安装包 '
-      });
-      if (!QQ_X64_SHA256) {
-        warn('安装包未做完整性校验（未配置 QQ_X64_SHA256）。');
-        warn(`  本次下载到的 SHA256 = ${dl.sha256}`);
-        warn('  确认来源可信后，可把它填进 scripts/setup.mjs 的 QQ_X64_SHA256，');
-        warn('  或用环境变量 QQ_X64_SHA256 传入，之后每次都会校验。');
-      }
-    } catch (error) {
-      warn(`自动下载 QQ 安装包失败：${error.message}`);
-      warn(``);
-      warn(`=== 手动放置指引 ===`);
-      warn(`1. 手动下载 ${QQ_INSTALLER_NAME}（x64）`);
-      warn(`   下载地址：${QQ_X64_URL}`);
-      warn('   （官方安装包：https://im.qq.com/index/#/windows ，版本不限，装完脚本会复制过来）');
-      warn(`2. 将下载的 ${QQ_INSTALLER_NAME} 放入：${QQ_CACHE_DIR}`);
-      warn(`3. 重新运行：npm run setup`);
-      warn(`==================`);
-      die('QQ 安装包不可用');
-    }
-  }
-
-  // ── 识别安装包类型：不同打包器的静默开关完全不同 ──
-  // 原来写死 NSIS 的 `/s /D=`。用错开关的典型后果是安装器**弹出 GUI 等人点**，
-  // 脚本一直等到超时被杀 —— 表现就是"退出码取不到"。
-  let kind = null;
-  try { kind = detectInstallerTypeFromFile(installerPath); } catch { /* ignore */ }
-  if (kind) log(`安装包类型：${kind.label}（命中特征 ${kind.matched}）→ 使用 ${kind.note}`);
-  else warn('安装包类型未识别（不是常见的 NSIS / Inno / InstallShield 之一）');
-
-  // ── 决定"从哪里拿 QQ" ──
-  // 便携运行靠的是 --user-data-dir，**并不需要一份干净的程序文件**，
-  // 所以最优路径是：直接用机器上已经装好的那份。
-  // 只有机器上压根没有 QQ 时，才需要用户先装一次。
-  if (!foundQqExe()) {
-    let source = null;
-    let sourceReason = '';
-
-    if (FROM_DIR) {
-      // 用户显式指定（装在自定义路径、或从别处拷来的）
-      if (!fs.existsSync(path.join(FROM_DIR, 'QQ.exe'))) {
-        die(`--from 指定的目录里没有 QQ.exe：${FROM_DIR}`);
-      }
-      source = FROM_DIR;
-      sourceReason = '（--from 指定）';
-    } else {
-      const cand = findInstalledQq();
-      if (cand) { source = cand.dir; sourceReason = `（${cand.reason || '已安装'}）`; }
-    }
-
-    if (source) {
-      if (sourceReason.includes('--from')) log(`使用指定目录：${source}`);
-      // ⚠️ QQ 运行时它的 exe/dll 被占用，复制会失败或拿到半截文件 ——
-      // 产出的是"看起来装好了、启动才发现缺文件"的便携 QQ，极难排查。
-      // 宁可让用户花 10 秒关掉 QQ，也不要产半成品。
-      const running = runningQqCount();
-      if (running > 0 && !FORCE) {
-        warn('');
-        warn(`检测到 ${running} 个 QQ 进程正在运行，先不复制。`);
-        warn('  正在运行的 QQ 其程序文件被占用，复制出来的便携版会缺文件。');
-        warn('  请**完全退出 QQ**（托盘图标也要退出），然后重跑：npm run setup');
-        warn('  （确实想带着运行中的状态复制，可加 --force，但可能得到不完整的副本）');
-        warn('');
-        die('QQ 正在运行，无法安全复制');
-      }
-      if (running > 0) warn(`--force：仍然有 ${running} 个 QQ 进程在运行，复制结果可能不完整`);
-      copyInstalledQq(source);
-      QQ_SOURCE = 'copied';
-    } else {
-      // ── 全新机器：机器上没有 QQ，安装器又不支持静默安装 ──
-      warn('');
-      warn('='.repeat(66));
-      warn('这台机器上没有找到已安装的 QQ，需要先装一次。');
-      warn('');
-      warn('  安装包已经下载好了（上面的路径），它是腾讯自研的 HummerSetup，');
-      warn('  **不支持静默安装**（会弹 GUI），所以这一步必须你点几下：');
-      warn('');
-      warn('  1) 双击运行：');
-      warn(`     ${installerPath}`);
-      warn('  2) 按默认路径装完（装到哪都行，脚本会自己找）');
-      warn('  3) **完全退出 QQ**（托盘图标也要右键退出）');
-      warn('  4) 重新运行：npm run setup     ← 一样要重新运行一次');
-      warn('');
-      warn('  然后脚本会把装好的 QQ 复制成便携版（这一步才开始不需要你动手）。');
-      warn('');
-      warn('  可选：加 --run-installer 让脚本帮你把安装器跑起来（省掉第 1 步）：');
-      warn('        npm run setup -- --run-installer');
-      warn('='.repeat(66));
-      warn('');
-
-      if (RUN_INSTALLER) {
-        log('--run-installer：启动安装器，请在弹出的窗口里完成安装…');
-        try {
-          execFileSync(installerPath, [], { stdio: 'inherit', windowsHide: false, timeout: 600_000 });
-        } catch (e) {
-          warn(`安装器退出（${e.signal ? `信号 ${e.signal}` : `退出码 ${e.status ?? '未知'}`}）`);
-        }
-        // 装完再找一次 —— 这一步通常就能找到了
-        warn('安装器已退出，重新查找…');
-        const again = findInstalledQq();
-        if (again) {
-          if (runningQqCount() > 0) {
-            die('QQ 安装完成，但 QQ 正在运行。请完全退出 QQ 后重跑：npm run setup');
-          }
-          copyInstalledQq(again.dir);
-        } else {
-          die('安装器已退出，但仍未找到已安装的 QQ。若你改了安装路径，用 --from <目录> 指定。');
-        }
-      } else {
-        die('需要先手动安装 QQ（见上方四步），然后重跑 npm run setup');
-      }
-    }
-  }
-
-  const strategies = [];
-  // HummerSetup 这类"不支持静默开关"的安装器：**不去盲试**。
-  // 盲试的代价是弹 GUI 等人点、脚本卡到超时 —— 还不如直接说清楚。
-  if (kind?.silentArgs) {
-    strategies.push({ name: `${kind.label} 静默安装`, args: kind.silentArgs(QQ_PORTABLE_DIR) });
-  } else if (kind) {
-    warn(`${kind.label}：${kind.note}`);
-  }
-  // 识别不出来或静默开关无效时，才把常见打包器的开关试一遍
-  if (!kind || !kind.silentArgs) {
-    for (const t of INSTALLER_FALLBACKS) strategies.push({ name: t.name, args: t.args(QQ_PORTABLE_DIR) });
-  }
-
-  for (const st of strategies) {
-    if (foundQqExe()) break;
-    log(`尝试：${st.name}`);
-    try {
-      execFileSync(installerPath, st.args, {
-        timeout: 120_000,
-        stdio: 'inherit',
-        windowsHide: false
-      });
-    } catch (error) {
-      // 退出码非零不代表失败（有些安装器装完返回非零），所以这里只记不抛
-      const why = error.signal ? `被信号 ${error.signal} 终止（多半是弹了 GUI 在等人操作）`
-        : `退出码 ${error.status ?? '未知'}`;
-      warn(`  ${st.name}：${why}`);
-    }
-    if (foundQqExe()) break;
-    // 装到别处去了？查一下注册表想指向哪
-    const elsewhere = findInstalledQq();
-    if (elsewhere) {
-      log(`检测到 QQ 已安装到 ${elsewhere}`);
-      if (copyInstalledQq(elsewhere)) break;
-    }
-  }
-
-  // ── 校验：递归找 QQ.exe（不再只认根目录）──
-  if (!foundQqExe()) {
-    warn('');
-    warn('=== 自动便携化未成功 ===');
-    warn('请手动完成（很简单，两步）：');
-    warn('1. 双击运行这个安装包，按默认路径装一遍（或装到任意目录）：');
-    warn(`   ${installerPath}`);
-    warn('2. 把安装目录里的**所有文件**复制到：');
-    warn(`   ${QQ_PORTABLE_DIR}`);
-    warn('3. 重跑：npm run setup   （脚本会检测到并跳过安装）');
-    warn('');
-    warn(`常见默认位置：${commonQqDirs().join('  |  ')}`);
-    warn('====================');
-    die('QQ 便携化失败：找不到 QQ.exe');
-  }
-
-  // 清理安装器（可选：保留以供 --force 重装）
-  // fs.rmSync(installerPath, { force: true });
-
-  // 确保 data 目录存在
-  fs.mkdirSync(QQ_PORTABLE_DATA_DIR, { recursive: true });
-
-  if (!isQqPortableReady()) die('便携 QQ 安装校验失败：QQ.exe 缺失');
-  log('✅ 便携 QQ 安装完成：', QQ_PORTABLE_DIR);
-  log(`   数据目录：${QQ_PORTABLE_DATA_DIR}`);
-  log(`   启动参数：QQ.exe --user-data-dir="${QQ_PORTABLE_DATA_DIR}"`);
+  warn('');
+  warn('='.repeat(66));
+  warn('本分支不提供便携 QQ 的下载与安装。');
+  warn('');
+  warn('需要便携 QQ 时，请使用**上游项目作者**提供的分发服务：');
+  warn('  https://kondius.cn/qq-agent');
+  warn('  （该页面与其中的分发包由上游项目作者维护，本分支不代为分发、不代为安装）');
+  warn('');
+  warn('拿到之后，把 QQ 程序文件放到：');
+  warn(`  ${QQ_PORTABLE_DIR}`);
+  warn('（该目录下要能直接看到 QQ.exe），然后重跑 npm run setup。');
+  warn('');
+  warn('已经把 QQ 装在系统里？也可以直接把安装目录里的文件复制到上面那个路径。');
+  warn('='.repeat(66));
+  warn('');
 }
+
 
 // ── 便携化辅助 ────────────────────────────────────────────────────────
 
@@ -912,11 +654,11 @@ async function main() {
   // 1.5 让协议栈声明的版本与实际运行的 QQ 一致（见 alignClientBuild 注释）
   alignClientBuild();
 
-  // 2. 便携 QQ（可选跳过）
+  // 2. 便携 QQ：只检测 + 给上游地址，不下载不安装
   if (!SKIP_QQ) {
-    await installQqPortable();
+    installQqPortable();
   } else {
-    log('跳过 QQ 安装（--skip-qq）');
+    log('跳过便携 QQ 检查（--skip-qq）');
   }
 
   // 3. 最终校验
@@ -927,8 +669,9 @@ async function main() {
     ['SnowLuma node.exe', fs.existsSync(path.join(SNOWLUMA_DIR, 'node.exe'))],
     ['QQ Agent src/app.js', fs.existsSync(path.join(ROOT, 'src', 'app.js'))],
   ];
-  if (!SKIP_QQ) {
-    checks.push(['便携 QQ QQ.exe', fs.existsSync(path.join(QQ_PORTABLE_DIR, 'QQ.exe'))]);
+  // 便携 QQ 缺失不算失败：它只影响"应用内一键启动"，连外部 OneBot 照样能用。
+  if (!SKIP_QQ && !fs.existsSync(path.join(QQ_PORTABLE_DIR, 'QQ.exe'))) {
+    log('  ℹ️  便携 QQ 未就绪（不影响应用启动；需要时按上方提示放置）');
   }
 
   let allOk = true;

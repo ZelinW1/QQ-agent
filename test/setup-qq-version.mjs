@@ -3,13 +3,13 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// QQ 安装包下载源与版本锁定的回归测试。
+// QQ 版本锁定与"本分支不装 QQ"的回归测试。
 //
-// 为什么需要它：换下载源时最容易犯的三个错，全是"静默"的 ——
-//   1) 只改了 URL，忘了同步版本号/文件名 → 下载到的文件与命名不符，手动放置指引失效
-//   2) 沿用了旧安装包的 SHA256 → 每次 setup 都以"校验失败"告终（比不校验更糟）
-//   3) 没意识到协议栈钉死了 CLIENT_BUILD → 装完能打开但登录被拒，排查方向全错
-// 这三条都不会在语法检查里暴露，所以固化成测试。
+// 为什么需要它：
+//   1) 协议栈钉死了 CLIENT_BUILD（形如 9.9.33-51802），QQ 版本写错就会"能开但登录被拒"
+//   2) 本分支刻意移除了 QQ 的自动下载/安装 —— 有人"顺手加回来"就等于
+//      又把发版绑回上游分发地址，必须有人拦一下
+//   3) 便携 QQ 缺失时，setup 不能因此判失败（它只影响应用内一键启动）
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -20,91 +20,39 @@ const ok = (m) => { pass++; console.log('  ✓ ' + m); };
 const bad = (m, d) => { fail++; console.log('  ✗ ' + m); if (d) console.log('      ' + d); };
 const check = (c, m, d) => (c ? ok(m) : bad(m, d));
 
-// ── 1) 下载源 ──
-check(!SRC.includes('dldir1v6.qq.com'), '不再使用腾讯 CDN 的 dldir1v6 地址');
-check(SRC.includes('https://www.kondius.cn/netdisk/api/download/'),
-  '下载源指向 kondius.cn 分发地址');
+// ── 1) QQ 版本锁定 ──
 check(!/QQ_PORTABLE_VERSION\s*\|\|\s*'9\.9\.26/.test(SRC),
-  '默认 QQ 版本不再是 9.9.26（用户已要求换到 9.9.33）');
+  '默认 QQ 版本不是旧的 9.9.26');
 
 const verM = SRC.match(/QQ_PORTABLE_VERSION\s*\|\|\s*'([^']+)'/);
 const ver = verM ? verM[1] : '';
-// 目标版本 = 实际运行的 QQ 版本（免安装包里就是这一版）
 check(ver === '9.9.33.51802', `默认版本是 9.9.33.51802（实际 ${ver}）`);
 const [shortV, buildV] = [ver.split('.').slice(0, 3).join('.'), ver.split('.').pop()];
 check(shortV === '9.9.33' && buildV === '51802', `版本拆解正确（${shortV} / ${buildV}）`);
 
-// ── 2) URL 模板能拼出用户要求的那条完整地址 ──
-// 安装包名现在是一个**写死的常量**，不再由版本号推导：
-// 目标版本(51802) 和分发站上的安装包(260813) 是两个不同的产物。
-const nameM2 = SRC.match(/QQ_INSTALLER_NAME = process\.env\.QQ_INSTALLER_NAME \|\| '([^']+)'/);
-const instName = nameM2 ? nameM2[1] : '';
-check(instName === 'QQ_9.9.33_260813_x64_01.exe',
-  `安装包名写死为 netdisk 上真实存在的那个（实际 ${instName}）`);
-check(!/QQ_INSTALLER_NAME = `/.test(SRC),
-  '安装包名不再由版本号拼接 —— 拼错的话兜底下载会 404，而报错只会说"下载失败"');
-const urlTpl = SRC.match(/QQ_X64_URL = process\.env\.QQ_INSTALLER_URL \|\|\s*\n?\s*`([^`]+)`/);
-check(!!urlTpl, '找得到 URL 模板');
-if (urlTpl) {
-  const built = urlTpl[1].replace(/\$\{QQ_INSTALLER_NAME\}/g, instName);
-  const want = `https://www.kondius.cn/netdisk/api/download/${instName}`;
-  check(built === want, '拼出的安装包地址正确', `实际: ${built}\n期望: ${want}`);
-}
+// ── 2) 不再自带 QQ 下载/安装能力 ──
+// 这条是"设计约束"而不是实现细节：分支不应依赖上游分发地址。
+check(!SRC.includes('netdisk/api/download'),
+  '不再内置任何 QQ 下载地址（避免把发版绑在上游分发服务上）');
+check(!/const QQ_INSTALLER_NAME/.test(SRC), '不再有安装包文件名常量');
+check(!/const QQ_X64_SHA256/.test(SRC), '不再有安装包哈希常量');
+check(!/const QQ_PORTABLE_SHA256/.test(SRC), '不再有免安装包哈希常量');
+check(!/QQ_PORTABLE_URL/.test(SRC), '不再有免安装包下载地址');
 
-// ── 3) 目标版本与安装包是"两个产物"，不能混为一谈 ──
-check(ver !== '9.9.33.260813',
-  '目标版本已不再是安装包文件名里的那个日期（两者是不同产物）');
-check(/两个是不同的产物|不同的产物/.test(SRC),
-  '注释里说明了"目标版本 vs 兜底安装包"是两个产物，避免以后又被拼到一起');
+// ── 3) 缺失时给出上游地址，并且说明来源是"上游项目作者" ──
+check(SRC.includes('https://kondius.cn/qq-agent'),
+  '提示里给出上游项目作者的分发页地址');
+check(/上游项目作者/.test(SRC), '明确标注该分发服务属于上游项目作者');
+check(/runtime\/qq-portable|QQ_PORTABLE_DIR/.test(SRC), '说明便携 QQ 应放到哪个目录');
+check(/不影响应用启动/.test(SRC) || /不影响/.test(SRC), '说明缺失不影响应用启动');
 
-// ── 4) SHA256 不能沿用旧包的哈希 ──
-// SHA256 的写法可能是多行的，用"抓常量定义块、再从中取字符串字面量"的方式，
-// 不要假设它一定写在一行里（之前就因为改成多行导致断言静默失效）。
-const shaBlockM = SRC.match(/const QQ_X64_SHA256 = \(([\s\S]*?)\)\.trim\(\)\.toUpperCase\(\);/);
-check(!!shaBlockM, '找得到 QQ_X64_SHA256 定义');
-const shaBlock = shaBlockM ? shaBlockM[1] : '';
-check(shaBlock.includes('process.env.QQ_X64_SHA256'), 'SHA256 支持用环境变量覆盖');
-const pinned = (shaBlock.match(/'([0-9A-Fa-f]{64})'/) || [])[1] || '';
-check(pinned.toUpperCase() === 'B25C0D3CE9DF764074A9118D0DED927E1B2D7EBF60E306112E8DF18A040EC492',
-  `SHA256 已固定为实测值（实际 ${pinned || '（没写死）'}）`);
-check(Boolean(pinned),
-  '写死了哈希 —— 换源时留空即可（留空只是不校验，不会误报失败）');
-// 没配哈希时不能判"不匹配"，否则每次 setup 都重下几百 MB
-check(/if \(!QQ_X64_SHA256\) \{[\s\S]{0,200}?跳过下载/.test(SRC),
-  '缓存校验在"未配置哈希"时跳过而不是判为不匹配（避免每次重下几百 MB）');
-check(SRC.includes('本次下载到的 SHA256'), '未配置哈希时会打印实际值，便于固定');
-
-// ── 5) 版本匹配检查存在，且能识别当前的不匹配 ──
+// ── 4) CLIENT_BUILD 推导与检查仍存在 ──
 check(SRC.includes('function readClientBuild'), '能从 snowluma/index.mjs 读出 CLIENT_BUILD');
 check(SRC.includes('function checkClientBuildMatch'), '有版本匹配检查函数');
 check(SRC.includes('扫码登录可能被拒'), '提示里点明真实症状（登录被拒），而不是只说"版本不一致"');
 check(SRC.includes('QQ_PORTABLE_VERSION=') && SRC.includes('SNOWLUMA_VERSION='),
   '提示里给出两个处理方向（换 QQ 版本 / 换 SnowLuma）');
 check(SRC.includes('EXPECTED_CLIENT_BUILD'), '期望的 CLIENT_BUILD 由版本号推导，不写死');
-
-// ── 5b) 如果本机缓存里还留着安装包，就直接验一遍哈希是否与固定值一致 ──
-// 这是"固定值真的对得上"的硬证据 —— 比只检查源码里有个 64 位字符串可靠得多。
-{
-  const cacheDir = path.join(ROOT, 'runtime', '.cache');
-  let installer = null;
-  try {
-    installer = fs.readdirSync(cacheDir).find((n) => /^QQ_.*\.exe$/i.test(n));
-  } catch { /* 没缓存就算了 */ }
-  if (installer) {
-    const full = path.join(cacheDir, installer);
-    const { createHash } = await import('node:crypto');
-    const h = createHash('sha256');
-    await new Promise((res, rej) => {
-      fs.createReadStream(full).on('data', (d) => h.update(d)).on('end', res).on('error', rej);
-    });
-    const actual = h.digest('hex').toUpperCase();
-    check(actual === pinned.toUpperCase(),
-      `缓存安装包的 SHA256 与固定值一致（${installer}）`,
-      `实际 ${actual}\n固定 ${pinned}`);
-  } else {
-    ok('本机没有缓存的安装包，跳过哈希实测（源码里的固定值已单独校验）');
-  }
-}
 
 // ── 6) 实跑 --check：应当报告协议栈真实版本 ──
 // （这一步是"真跑"，能发现函数名写错、模板串拼错这类只在运行时暴露的问题）
@@ -248,15 +196,13 @@ try {
     ok('多个 QQ 共存时按版本择优（不会拿老版本冒充）');
   }
 
-  // ── 全新机器路径：文档与参数都要在 ──
+  // ── 便携 QQ 缺失时的引导（本分支不代装）──
   {
     check(/--from/.test(SRC), '支持 --from <目录>（装在自定义路径时用）');
-    check(/--run-installer/.test(SRC), '支持 --run-installer（帮用户把 GUI 安装器跑起来）');
-    check(SRC.includes('这台机器上没有找到已安装的 QQ'), '没有找到 QQ 时给出明确引导');
-    check(/双击运行/.test(SRC), '引导里说明要双击运行安装包');
-    check(/完全退出 QQ/.test(SRC) && /托盘/.test(SRC), '引导里提醒"完全退出 QQ（含托盘）"');
-    check(/重新运行：npm run setup|重跑/.test(SRC), '引导里说明装完要重跑 setup');
-    check(/不支持静默安装/.test(SRC), '说明了为什么不能自动装（HummerSetup 会弹 GUI）');
+    check(SRC.includes('本分支不提供便携 QQ 的下载与安装'), '明确说明本分支不代装');
+    check(SRC.includes('https://kondius.cn/qq-agent'), '给出上游项目作者的分发页');
+    check(SRC.includes('QQ_PORTABLE_DIR'), '说明便携 QQ 应放到哪个目录');
+    check(/npm run setup/.test(SRC), '说明放好后重跑 setup');
 
     // 版本比对必须基于**实际装好的版本**，不是配置里的期望值
     // （从已装的 QQ 复制过来时两者会不同，报配置值等于自欺欺人）

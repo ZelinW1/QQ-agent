@@ -124,24 +124,17 @@ console.log('\n=== 隐私保护 ===');
 }
 
 // ── setup.mjs 的接入 ──
+// 本分支已经**移除**了便携 QQ 的自动下载/安装（见 setup.mjs 里的说明），
+// 所以这里断言的是"没有偷偷加回来"，而不是"常量还在"。
 console.log('\n=== setup.mjs 接入 ===');
 const setup = fs.readFileSync(path.join(ROOT, 'scripts', 'setup.mjs'), 'utf8');
-check(/QQ_PORTABLE_URL/.test(setup) && /QQ_PORTABLE_SHA256/.test(setup), '有免安装包的地址与哈希常量');
-check(/免安装包：缓存命中/.test(setup), '缓存命中时不重复下载 650 MB');
-check(/NO_PORTABLE|\-\-no-portable/.test(setup), '支持 --no-portable 强制走"从已装的 QQ 复制"');
-check(/解压即用/.test(setup), '注释说明了免安装包为什么存在（绕开"装不回指定版本"）');
-// 关键：解压失败要能退回老路，而不是直接失败
-check(/退回"从机器上已装的 QQ 复制"/.test(setup), '免安装包失败时会退回"从已装的 QQ 复制"');
-check(/portable-info\.json/.test(setup), '解压后读清单核对版本');
-// 两个地址的环境变量必须分开 —— 之前手滑写成同一个，
-// 用户设 QQ_PORTABLE_URL 时会把安装包地址也一起改掉
-{
-  const m1 = setup.match(/const QQ_X64_URL = process\.env\.(\w+)/);
-  const m2 = setup.match(/const QQ_PORTABLE_URL = \(process\.env\.(\w+)/);
-  check(m1 && m2 && m1[1] !== m2[1],
-    `安装包与免安装包用不同的环境变量（${m1?.[1]} / ${m2?.[1]}）`);
-  check(m2 && m2[1] === 'QQ_PORTABLE_URL', '免安装包用 QQ_PORTABLE_URL');
-}
+check(!/QQ_PORTABLE_URL|QQ_PORTABLE_SHA256/.test(setup),
+  'setup 不再内置便携 QQ 的下载地址与哈希');
+check(!/netdisk\/api\/download/.test(setup), 'setup 不再指向任何上游分发包地址');
+check(setup.includes('不提供便携 QQ 的下载与安装'), '明确说明本分支不代装');
+check(setup.includes('https://kondius.cn/qq-agent'), '改为指向上游项目作者的分发页');
+check(/portable-info\.json/.test(setup), '仍会读便携包自带的清单核对版本');
+check(/runtime\/qq-portable|QQ_PORTABLE_DIR/.test(setup), '说明便携 QQ 应放置的目录');
 
 // ── 归档与固定哈希一致（如果本地已经打过包）──
 console.log('\n=== 本地归档（如果存在）===');
@@ -149,19 +142,12 @@ console.log('\n=== 本地归档（如果存在）===');
 const arc = [path.join(ROOT, 'dist', 'QQ_portable.zip'), path.join(ROOT, 'dist', 'QQ_portable.tar.zst')]
   .find((p) => fs.existsSync(p));
 if (fs.existsSync(arc)) {
-  const { createHash } = await import('node:crypto');
-  const h = createHash('sha256');
-  await new Promise((res, rej) => {
-    fs.createReadStream(arc).on('data', (d) => h.update(d)).on('end', res).on('error', rej);
-  });
-  const actual = h.digest('hex').toUpperCase();
-  const m = setup.match(/QQ_PORTABLE_SHA256 = \(process\.env\.QQ_PORTABLE_SHA256\s*\|\|\s*'([0-9A-Fa-f]{64})'\)/);
-  const pinned = (m ? m[1] : '').toUpperCase();
-  check(pinned === actual,
-    `归档 SHA256 与 setup 里的固定值一致（${(fs.statSync(arc).size / 1048576).toFixed(0)} MB）`,
-    `实际 ${actual}\n固定 ${pinned || '（没写死）'}`);
+  // 打包脚本仍会把归档的 SHA256 打印出来供分发方核对；
+  // setup 不再消费这个常量（本分支不代装 QQ），所以这里只校验"归档本身可读且非空"。
+  const size = fs.statSync(arc).size;
+  check(size > 1024, `本地归档可读（${(size / 1048576).toFixed(0)} MB）`);
 } else {
-  ok('本地没有归档，跳过哈希比对（先跑 npm run pack:qq 生成）');
+  ok('本地没有归档，跳过归档检查（先跑 npm run pack:qq 生成）');
 }
 
 console.log(`\n${fail === 0 ? '全部通过' : '存在失败'} —— 通过 ${pass} / 失败 ${fail}`);

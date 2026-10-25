@@ -46,7 +46,12 @@ yd.setHours(12, 0, 0, 0);
 const yesterday = yd.getTime();
 mkSession('s-old1', yesterday - 3600_000, 1000);
 mkSession('s-old2', yesterday - 7200_000, 2000);
-mkSession('s-today', now - 600_000, 500);
+// "今天"这条也要钉在当天之内：用 now-10min 的话，00:00~00:10 跑测试时
+// 它会落到昨天（跨日），断言"今天 500"变成 0 —— 同样是时间态假故障。
+const todayStart = new Date(now);
+todayStart.setHours(0, 0, 0, 0);
+const todayTs = Math.max(now - 600_000, todayStart.getTime() + 60_000);
+mkSession('s-today', todayTs, 500);
 
 const { __testUsageDaily } = await import('../src/app.js');
 const T = __testUsageDaily();
