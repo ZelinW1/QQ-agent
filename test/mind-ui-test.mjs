@@ -24,24 +24,40 @@ const code = fs.readFileSync(path.join(ROOT, 'ui/app/13-mind.js'), 'utf8');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/** 假 DOM：只要一个 #mind-page 盒子，按钮查询返回 null（可选链会跳过绑定）。 */
-function makeSandbox(stateData) {
-  const box = { _html: '', set innerHTML(v) { this._html = String(v); }, get innerHTML() { return this._html; }, addEventListener() {} };
+/** 假 DOM：按 id 造元素，记住 value/innerHTML 与 click 处理器。 */
+function makeSandbox(stateData, extraApi = null) {
+  const els = new Map();
+  const handlers = new Map();
+  const ensure = (sel) => {
+    if (!els.has(sel)) {
+      const el = {
+        id: sel.replace(/^#/, ''),
+        value: '', innerHTML: '', textContent: '', disabled: false, dataset: {},
+        addEventListener(ev, fn) { handlers.set(`${sel}:${ev}`, fn); },
+        click() { handlers.get(`${sel}:click`)?.(); },
+        querySelectorAll() { return []; }
+      };
+      els.set(sel, el);
+    }
+    return els.get(sel);
+  };
+  const box = ensure('#mind-page');
   const calls = [];
   const sandbox = {
     console,
-    $: (sel) => (sel === '#mind-page' ? box : null),
+    $: (sel) => (String(sel).startsWith('#') ? ensure(sel) : null),
     esc,
     fmtTime: () => '10-25 13:00',
     api: async (p, opts) => {
       calls.push({ path: p, opts });
       if (p === '/api/mind/state') return stateData;
+      if (extraApi) { const r = extraApi(p, opts); if (r) return r; }
       return { ok: true };
     }
   };
   vm.createContext(sandbox);
   new vm.Script(code, { filename: '13-mind.js' }).runInContext(sandbox);
-  return { sandbox, box, calls };
+  return { sandbox, box, calls, el: ensure };
 }
 
 const STATE = {
@@ -170,6 +186,39 @@ console.log('\n=== 6. 静态服务 ===');
   const state = await env.request('GET', '/api/mind/state');
   check(state.status === 200 && state.data?.ok === true, '状态接口在真实服务里可用');
   await env.teardown();
+}
+
+// ── 7. 出生仪式 ────────────────────────────────────────────────────────
+console.log('\n=== 7. 出生仪式 ===');
+{
+  const DRAFT = {
+    name: ['蓝汐', '鲸落'],
+    selfImage: '我叫{botName}，蓝色渐变长发，蓝瞳，尾巴是鲸鱼的。',
+    baseline: '我还没想清楚自己会成为什么样的人。这些只是起点，以后会变。',
+    voice: ['句尾很少用句号']
+  };
+  const { sandbox: s7, box: b7, calls: c7, el } = makeSandbox(STATE, (p) => (
+    p === '/api/mind/charter/draft' ? { ok: true, drafts: [DRAFT] } : null
+  ));
+  await s7.loadMindPage();
+  check(b7.innerHTML.includes('出生仪式'), '页面上有出生仪式入口');
+
+  el('#birth-kw').value = '鲸鱼少女，蓝瞳';
+  el('#birth-vision').value = '成为一个会自我成长的伙伴';
+  await s7.generateBirthDrafts();
+
+  check(c7.some((c) => c.path === '/api/mind/charter/draft'), '发起了生成请求');
+  const gen = c7.find((c) => c.path === '/api/mind/charter/draft');
+  const seed = JSON.parse(gen.opts.body).seed;
+  check(seed.vision.includes('自我成长'), '愿景随请求带上');
+  check(b7.innerHTML.includes('草案 1'), '渲染出草案');
+  check(b7.innerHTML.includes('蓝汐'), '渲染候选名字');
+  check(b7.innerHTML.includes('蓝色渐变长发'), '渲染自我形象');
+
+  s7.applyBirthDraft(0);
+  check(b7.innerHTML.includes('mind-f-self'), '采用后进入编辑表单');
+  check(b7.innerHTML.includes('我叫{botName}'), '编辑框填入草案文本且保留占位符');
+  check(b7.innerHTML.includes('保存并改名为'), '保存按钮提示会改名（名字必须经确认才换）');
 }
 
 console.log(`\n心智页：通过 ${pass}，失败 ${fail}`);

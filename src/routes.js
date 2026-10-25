@@ -1081,6 +1081,33 @@ export function createRoutes(deps) {
       }
     },
     {
+      // 出生仪式：只出草案，**不写盘**。
+      // 写盘走 POST /api/config —— 必须由主人点"采用这组"之后才发生。
+      // 理由：身份是一次性的，不该被一次模型调用直接定下来。
+      method: 'POST', pattern: '/api/mind/charter/draft',
+      handler: async ({ req, res, json }) => {
+        let body = {};
+        try { body = await readBody(req); } catch { body = {}; }
+        const seed = (body?.seed && typeof body.seed === 'object') ? body.seed : body;
+        const keywords = Array.isArray(seed.keywords) ? seed.keywords : String(seed.keywords ?? '');
+        const vision = String(seed.vision ?? '');
+        const hasSeed = (Array.isArray(keywords) ? keywords.length > 0 : Boolean(String(keywords).trim()))
+          || Boolean(vision.trim());
+        if (!hasSeed) {
+          return json(res, 400, { ok: false, error: '至少给一点形象关键词或一句愿景' });
+        }
+        try {
+          const r = await orchestrator.draftCharter({ keywords, vision });
+          if (!r.ok) {
+            return json(res, 502, { ok: false, error: r.reason || '生成失败', rejected: r.rejected || [] });
+          }
+          return json(res, 200, { ok: true, drafts: r.drafts, rejected: r.rejected || [] });
+        } catch (error) {
+          return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
+    },
+    {
       // 手动重扫磁盘：UI「刷新」按钮的后端动作。
       // 之前刷新只读内存注册表，watcher 丢事件（目录删除重建 / 网络盘 / 杀软）
       // 时新插件永远进不来。这里走 app.reloadSkills()：重扫 + 激活 + 刷工具 + 重建 watcher。

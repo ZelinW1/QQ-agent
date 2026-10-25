@@ -18,6 +18,15 @@ const MIND_STAGE = {
 
 let mindState = null;
 let mindEditing = false;
+// 出生仪式的临时状态：草案只活在内存里，除非用户点"采用这组"并保存。
+let mindBirthOpen = false;
+let mindBirthDrafts = [];
+let mindBirthBusy = false;
+let mindBirthPick = 0;      // 当前选中的草案下标
+let mindBirthName = '';     // 采用时同时改的名字（空 = 不改）
+let mindBirthKw = '';       // 种子：形象关键词（重渲染时保留输入）
+let mindBirthVision = '';   // 种子：愿景
+let mindForm = null;        // 编辑表单的当前值（草案采用后从草案来，否则从配置来）
 
 const mindClamp = (v) => Math.max(0, Math.min(100, Number(v) || 0));
 
@@ -38,6 +47,11 @@ async function loadMindPage() {
   try {
     mindState = await api('/api/mind/state');
     mindEditing = false;
+    mindForm = null;
+    mindBirthOpen = false;
+    mindBirthDrafts = [];
+    mindBirthPick = 0;
+    mindBirthName = '';
     renderMindPage();
   } catch (e) {
     box.innerHTML = `<div class="mind-empty">读取失败：${esc(e.message)}</div>`;
@@ -68,6 +82,7 @@ function renderMindPage() {
       <span class="mind-pill ${sleep.asleep ? 'on' : ''}">${sleep.asleep ? '睡着' : (sleep.enabled ? '醒着' : '作息未启用')}</span>
       <span style="flex:1"></span>
       <button class="btn btn-small" id="mind-refresh">刷新</button>
+      <button class="btn btn-small" id="mind-birth">${mindBirthOpen ? '收起草案' : '出生仪式'}</button>
       <button class="btn btn-small ${mindEditing ? '' : 'btn-primary'}" id="mind-edit">${mindEditing ? '收起编辑' : '编辑身份'}</button>
     </div>`;
 
@@ -171,27 +186,72 @@ function renderMindPage() {
       }).join('')
     : '<div class="mind-empty">还没反思过。</div>';
 
+  // ── 出生仪式 ──
+  const birthPanel = mindBirthOpen ? (() => {
+    const draftsHtml = mindBirthDrafts.length
+      ? mindBirthDrafts.map((d, i) => `
+        <div class="mind-draft ${i === mindBirthPick ? 'picked' : ''}" data-draft="${i}">
+          <div class="mind-rel-head">
+            <span class="mind-rel-name">草案 ${i + 1}</span>
+            <span class="mind-rel-meta">${mindBirthPick === i ? '已选中' : ''}</span>
+          </div>
+          <div class="mind-slot">
+            <div class="k">候选名字（点一个采用）</div>
+            <div class="mind-chips">${(d.name || []).map((n) => `<span class="mind-chip ${mindBirthName === n ? 'picked' : ''}" data-pick-name="${esc(n)}">${esc(n)}</span>`).join('')}</div>
+          </div>
+          <div class="mind-slot"><div class="k">我是谁</div><div class="v">${esc(d.selfImage)}</div></div>
+          <div class="mind-slot"><div class="k">最初的我</div><div class="v">${esc(d.baseline)}</div></div>
+          ${(d.voice || []).length ? `<div class="mind-slot"><div class="k">说话习惯</div><div class="mind-chips">${d.voice.map((v) => `<span class="mind-chip">${esc(v)}</span>`).join('')}</div></div>` : ''}
+          <div class="mind-actions"><button class="btn btn-primary btn-small" data-apply="${i}">采用这组</button></div>
+        </div>`).join('')
+      : '';
+
+    return `
+      <div class="mind-form">
+        <label>形象关键词（逗号或换行分隔）
+          <textarea id="birth-kw" style="min-height:62px" placeholder="鲸鱼少女，蓝色渐变长发，蓝瞳…">${esc(mindBirthKw || '')}</textarea>
+        </label>
+        <label>愿景
+          <textarea id="birth-vision" style="min-height:56px" placeholder="她希望成为一个什么样的人">${esc(mindBirthVision || '')}</textarea>
+        </label>
+        <div class="mind-actions">
+          <button class="btn btn-primary btn-small" id="birth-gen" ${mindBirthBusy ? 'disabled' : ''}>${mindBirthBusy ? '生成中…' : '生成三组草案'}</button>
+          <button class="btn btn-small" id="birth-close">收起</button>
+          <span class="muted" id="birth-msg"></span>
+        </div>
+        <div class="hint">草案不会自动保存。选定一组、确认文字之后点「采用这组」，再在编辑框里保存。</div>
+        ${draftsHtml}
+      </div>`;
+  })() : '';
+
   // ── 编辑表单 ──
+  const formSrc = mindForm || {
+    selfImage: raw.selfImage || '',
+    baseline: raw.baseline || '',
+    scenarioPrivate: raw.scenario?.private || '',
+    scenarioGroup: raw.scenario?.group || '',
+    hardRules: raw.hardRules || []
+  };
   const editBody = mindEditing ? `
     <div class="mind-form">
       <label>我是谁
-        <textarea id="mind-f-self" placeholder="名字、形象、来历…">${esc(raw.selfImage || '')}</textarea>
+        <textarea id="mind-f-self" placeholder="名字、形象、来历…">${esc(formSrc.selfImage)}</textarea>
       </label>
       <label>我最初的样子
-        <textarea id="mind-f-base" placeholder="还没经历这些事时，是个什么样的人…">${esc(raw.baseline || '')}</textarea>
+        <textarea id="mind-f-base" placeholder="还没经历这些事时，是个什么样的人…">${esc(formSrc.baseline)}</textarea>
       </label>
       <label>一对一的场合
-        <textarea id="mind-f-priv" placeholder="私聊时的分寸：长度、语气、节奏…">${esc(raw.scenario?.private || '')}</textarea>
+        <textarea id="mind-f-priv" placeholder="私聊时的分寸：长度、语气、节奏…">${esc(formSrc.scenarioPrivate)}</textarea>
       </label>
       <label>群里的场合
-        <textarea id="mind-f-group" placeholder="群里时的分寸：多短、接不接话…">${esc(raw.scenario?.group || '')}</textarea>
+        <textarea id="mind-f-group" placeholder="群里时的分寸：多短、接不接话…">${esc(formSrc.scenarioGroup)}</textarea>
       </label>
       <label>不能破的几条（一行一条）
-        <textarea id="mind-f-rules" style="min-height:96px">${esc((raw.hardRules || []).join('\n'))}</textarea>
+        <textarea id="mind-f-rules" style="min-height:96px">${esc((formSrc.hardRules || []).join('\n'))}</textarea>
       </label>
-      <div class="hint">可以用 <code>{botName}</code> 占位她的名字；改名字时不用改这里。</div>
+      <div class="hint">可以用 <code>{botName}</code> 占位她的名字；改名字时不用改这里。${mindBirthName ? `　保存后名字将改为「${esc(mindBirthName)}」。` : ''}</div>
       <div class="mind-actions">
-        <button class="btn btn-primary btn-small" id="mind-save">保存</button>
+        <button class="btn btn-primary btn-small" id="mind-save">${mindBirthName ? `保存并改名为「${esc(mindBirthName)}」` : '保存'}</button>
         <button class="btn btn-small" id="mind-cancel">取消</button>
         <span class="muted" id="mind-save-msg"></span>
       </div>
@@ -200,6 +260,7 @@ function renderMindPage() {
   box.innerHTML = `
     <div class="mind-wrap">
       ${head}
+      ${mindBirthOpen ? mindCard('出生仪式', birthPanel) : ''}
       ${mindEditing ? mindCard('编辑身份', editBody) : ''}
       <div class="mind-grid">
         ${mindCard('身份', identityBody)}
@@ -213,9 +274,80 @@ function renderMindPage() {
     </div>`;
 
   $('#mind-refresh')?.addEventListener('click', () => loadMindPage());
-  $('#mind-edit')?.addEventListener('click', () => { mindEditing = !mindEditing; renderMindPage(); });
-  $('#mind-cancel')?.addEventListener('click', () => { mindEditing = false; renderMindPage(); });
+  $('#mind-edit')?.addEventListener('click', () => { mindEditing = !mindEditing; mindForm = null; renderMindPage(); });
+  $('#mind-cancel')?.addEventListener('click', () => { mindEditing = false; mindForm = null; renderMindPage(); });
   $('#mind-save')?.addEventListener('click', saveMindCharter);
+  $('#mind-birth')?.addEventListener('click', () => {
+    mindBirthOpen = !mindBirthOpen;
+    renderMindPage();
+  });
+  $('#birth-close')?.addEventListener('click', () => {
+    mindBirthOpen = false;
+    mindBirthDrafts = [];
+    renderMindPage();
+  });
+  $('#birth-gen')?.addEventListener('click', generateBirthDrafts);
+  box.querySelectorAll?.('[data-pick-name]')?.forEach((el) => {
+    el.addEventListener('click', () => { mindBirthName = el.dataset.pickName; renderMindPage(); });
+  });
+  box.querySelectorAll?.('[data-apply]')?.forEach((el) => {
+    el.addEventListener('click', () => applyBirthDraft(Number(el.dataset.apply)));
+  });
+}
+
+/** 生成草案（只请求，不写盘）。 */
+async function generateBirthDrafts() {
+  const kw = String($('#birth-kw')?.value ?? '').trim();
+  const vision = String($('#birth-vision')?.value ?? '').trim();
+  mindBirthKw = kw;
+  mindBirthVision = vision;
+  if (!kw && !vision) {
+    const m = $('#birth-msg');
+    if (m) m.textContent = '至少写一点形象关键词或一句愿景。';
+    return;
+  }
+  mindBirthBusy = true;
+  mindBirthOpen = true;   // 直接生成时也要把面板打开，否则草案渲染在折叠区里看不见
+  renderMindPage();
+  const busyMsg = $('#birth-msg');
+  if (busyMsg) busyMsg.textContent = '正在生成（一次模型调用）…';
+
+  try {
+    const r = await api('/api/mind/charter/draft', {
+      method: 'POST',
+      body: JSON.stringify({ seed: { keywords: kw, vision } })
+    });
+    mindBirthDrafts = Array.isArray(r.drafts) ? r.drafts : [];
+    mindBirthPick = 0;
+    mindBirthName = mindBirthDrafts[0]?.name?.[0] || '';
+    mindBirthBusy = false;
+    renderMindPage();
+    const m = $('#birth-msg');
+    if (m) m.textContent = mindBirthDrafts.length ? `生成了 ${mindBirthDrafts.length} 组` : '没有可用的草案';
+  } catch (e) {
+    mindBirthBusy = false;
+    mindBirthDrafts = [];
+    renderMindPage();
+    const m = $('#birth-msg');
+    if (m) m.textContent = `生成失败：${e.message}`;
+  }
+}
+
+/** 采用一组草案：填进编辑表单（仍不写盘，要用户再点保存）。 */
+function applyBirthDraft(index) {
+  const d = mindBirthDrafts[index];
+  if (!d) return;
+  const base = mindState?.charter || {};
+  mindBirthPick = index;
+  mindForm = {
+    selfImage: d.selfImage,
+    baseline: d.baseline,
+    scenarioPrivate: base.scenario?.private || '',
+    scenarioGroup: base.scenario?.group || '',
+    hardRules: base.hardRules || []
+  };
+  mindEditing = true;
+  renderMindPage();
 }
 
 async function saveMindCharter() {
@@ -228,9 +360,17 @@ async function saveMindCharter() {
   };
   const msg = $('#mind-save-msg');
   if (msg) msg.textContent = '保存中…';
+  // 采用草案时选定的名字一并写入。只在这里改 botName：
+  // 名字是社交标识，不该被"生成"顺手换掉，必须经过"采用这组"这一步。
+  const payload = { persona: { charter } };
+  if (mindBirthName) payload.persona.botName = mindBirthName;
   try {
-    await api('/api/config', { method: 'POST', body: JSON.stringify({ persona: { charter } }) });
+    await api('/api/config', { method: 'POST', body: JSON.stringify(payload) });
     mindEditing = false;
+    mindForm = null;
+    mindBirthName = '';
+    mindBirthDrafts = [];
+    mindBirthOpen = false;
     await loadMindPage();
   } catch (e) {
     if (msg) msg.textContent = `保存失败：${e.message}`;

@@ -24,7 +24,9 @@ import {
   getAction,
   availableActions,
   resolveSleepWindow,
-  classifySleep
+  classifySleep,
+  buildBirthPrompt,
+  parseBirthDrafts
 } from './mind/index.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt, todayKey, extractJson } from './util.js';
@@ -1764,6 +1766,28 @@ export class Orchestrator {
     });
 
     return { ok: true, empty: parsed.empty === true, applied, rejected };
+  }
+
+  /**
+   * 出生仪式：由主人给的种子生成身份草案。
+   *
+   * **只生成，不写盘**。写盘必须经过主人确认（UI 的"采用这组"），
+   * 因为"她一开始是谁"是一次性的，不该由一次模型调用直接定下来。
+   *
+   * @param {object} seed { keywords, vision }
+   * @param {object} [opts] 测试注入：`chat(messages)`
+   * @returns {Promise<{ok:boolean, drafts?:object[], rejected?:object[], reason?:string, usage?:object}>}
+   */
+  async draftCharter(seed = {}, { chat = null } = {}) {
+    const cfg = getConfig();
+    const messages = buildBirthPrompt({
+      botName: cfg.persona?.botName,
+      keywords: seed.keywords,
+      vision: seed.vision
+    });
+    const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
+    const parsed = parseBirthDrafts(String(res?.message?.content ?? ''), 3);
+    return { ...parsed, usage: res?.usage || null };
   }
 
   // ── 心跳（节律）────────────────────────────────────────────────────────

@@ -1843,3 +1843,14 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 .mind-form .hint { font-size: 11px; color: var(--tx3); }
 .mind-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .mind-empty { color: var(--tx3); font-size: 13px; }
+/* 出生仪式：草案卡。刻意做成"选中就有边框"的物理感，
+   因为这一步是不可逆的（采用后写进配置），要让人意识到自己选了什么。 */
+.mind-draft {
+  border: 1px solid var(--bd); border-radius: 12px;
+  padding: 10px 12px; margin-top: 10px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.mind-draft.picked { border-color: var(--ac); box-shadow: 0 0 0 1px var(--ac) inset; }
+.mind-chip[data-pick-name] { cursor: pointer; }
+.mind-chip[data-pick-name]:hover { color: var(--tx); }
+.mind-chip.picked { outline: 1px solid var(--ac); color: var(--tx); }
