@@ -9,6 +9,28 @@ $$('.tab[data-nav]').forEach((tab) => {
   tab.addEventListener('click', () => switchNav(tab.dataset.nav));
 });
 
+// ── 侧栏收起 / 展开 ──
+// 记忆到 localStorage：布局偏好属于"这台机器上的我"，不该写进后端配置
+// （换台机器屏幕宽度不同，各自的偏好本来就该不同）。
+(function initRail() {
+  const btn = $('#rail-toggle');
+  const apply = (collapsed) => {
+    document.body.classList.toggle('rail-collapsed', collapsed);
+    if (btn) {
+      btn.textContent = collapsed ? '»' : '«';
+      btn.title = collapsed ? '展开侧栏' : '收起侧栏';
+    }
+  };
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('qqa-rail-collapsed') === '1'; } catch { /* ignore */ }
+  apply(collapsed);
+  btn?.addEventListener('click', () => {
+    collapsed = !collapsed;
+    apply(collapsed);
+    try { localStorage.setItem('qqa-rail-collapsed', collapsed ? '1' : '0'); } catch { /* ignore */ }
+  });
+})();
+
 // ── 启动 ──
 (async function init() {
   try {

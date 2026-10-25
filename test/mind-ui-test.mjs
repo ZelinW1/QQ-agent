@@ -214,12 +214,15 @@ console.log('\n=== 5. 接线 ===');
   check(html.includes('data-nav="her"'), 'index.html 有「她」这个顶层分组');
   check(html.includes('id="view-mind"'), 'index.html 有对应视图');
   check(html.includes('id="subnav"'), 'index.html 有二级导航容器');
+  check(html.includes('id="rail-toggle"') && html.includes('tab-ico'), '侧栏可收起（图标 + 开关）');
   check(html.includes('/app/13-mind.js'), 'index.html 加载了 13-mind.js');
 
   const core = fs.readFileSync(path.join(ROOT, 'ui/app/00-core.js'), 'utf8');
   check(/if \(name === 'mind'\) loadMindPage\(\);/.test(core), 'switchTab 会加载心智页');
   check(core.includes('const NAV_GROUPS = {'), '00-core 定义了信息架构表');
   check(core.includes("id: 'stream'") && core.includes("id: 'profiles'"), '二级项包含 记忆流 / 会话配置');
+  // 「旧印象」不再是导航入口：数据已被关系档案取代，留着入口只会让人分不清两套记忆
+  check(!core.includes("id: 'legacy-memory'"), '旧印象已从导航移除');
   // 回归守卫：她的四个二级项共用一个视图，switchTab 的同步逻辑不能把 mindMode
   // 改回去（否则点二级项 = 刷新当前页）。
   check(core.includes('currentItem.view !== name'), 'switchTab 会跳过"同一个视图"的分组同步');

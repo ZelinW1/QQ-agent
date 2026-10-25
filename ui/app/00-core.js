@@ -783,8 +783,10 @@ const NAV_GROUPS = {
     items: [
       { id: 'sessions', label: '会话过程', view: 'sessions' },
       { id: 'chats', label: '消息存档', view: 'chats' },
-      { id: 'usage', label: '用量', view: 'usage' },
-      { id: 'legacy-memory', label: '旧印象', view: 'memory' }
+      { id: 'usage', label: '用量', view: 'usage' }
+      // 「旧印象」（memberImpression）不再作为入口：它已被心智的关系档案取代，
+      // 历史数据已在开启心智时并入关系（可在「她 → 状态 → 关系」里看到换算后的结果）。
+      // 视图与接口保留，需要查阅原始数据时用 /api/memory-files。
     ]
   },
   settings: {

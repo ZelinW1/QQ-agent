@@ -1865,28 +1865,47 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 
 /* ── 一级竖向导航 + 二级横向 ────────────────────────────────────────────
    一级只有三项（她 / 记录 / 设置），做成顶栏会显得空，而且挤压内容高度；
-   竖向副栏把"去哪"固定住，横向二级条回答"具体哪一件"，两者分工清楚。 */
-body { --rail-w: 92px; }
+   竖向副栏把"去哪"固定住，横向二级条回答"具体哪一件"，两者分工清楚。
+   侧栏**从标题栏下方开始**，不覆盖顶部：品牌与状态条需要整行宽度，
+   被侧栏压住一角比"顶部被占"更难看，也更难读。 */
+body { --rail-w: 92px; --topbar-h: 52px; }
 #tabs {
-  position: fixed; left: 0; top: 0; bottom: 0; width: var(--rail-w);
+  position: fixed; left: 0; top: var(--topbar-h); bottom: 0; width: var(--rail-w);
   height: auto; flex-direction: column; align-items: stretch;
   justify-content: flex-start; gap: 4px;
-  padding: 16px 10px;
+  padding: 12px 10px;
   border-bottom: none; border-right: 1px solid var(--bd);
-  overflow: visible; z-index: 40;
+  overflow: visible; z-index: 20;
+  transition: width .16s var(--ease-out-quart, ease);
 }
 #tabs .tab {
   height: 40px; padding: 0 12px; border-radius: 10px;
   text-align: left; font-size: 13.5px;
+  display: flex; align-items: center;
 }
 #tabs .tab::after { display: none; }
 #tabs .tab.active {
   color: var(--tx);
   background: color-mix(in srgb, var(--ac) 15%, transparent);
 }
-#tabs .nav-spacer, #tabs .nav-extra { display: none; }
-#subnav, #layout { margin-left: var(--rail-w); }
+#tabs .nav-spacer { flex: 1; }
+#tabs .nav-extra { display: none; }
+#subnav, #layout { margin-left: var(--rail-w); transition: margin-left .16s var(--ease-out-quart, ease); }
 #subnav { padding: 12px 18px 8px; }
+
+/* 收起态：只留单字图标，内容区让出宽度。
+   单字取自分组名首字（她/记/设），不引入图标库 —— 三个字足够辨认。 */
+.tab-ico { display: none; }
+body.rail-collapsed { --rail-w: 56px; }
+body.rail-collapsed .tab-label { display: none; }
+body.rail-collapsed .tab-ico { display: inline; }
+body.rail-collapsed #tabs .tab { justify-content: center; padding: 0; }
+.rail-toggle {
+  appearance: none; border: 1px solid var(--bd); background: transparent;
+  color: var(--tx3); font: inherit; font-size: 13px; line-height: 1;
+  height: 30px; border-radius: 9px; cursor: pointer; margin-top: 8px;
+}
+.rail-toggle:hover { color: var(--tx); background: var(--hover); }
 
 /* ── 二级导航（她 / 记录 / 设置 之下）────────────────────────────
    顶层是"来干什么"，这里是"具体哪一件"。样式刻意比顶层轻：

@@ -70,13 +70,14 @@
   </div>
 
   <nav id="tabs">
-    <button class="tab" data-nav="her">她</button>
-    <button class="tab" data-nav="records">记录</button>
-    <button class="tab" data-nav="settings">设置</button>
+    <button class="tab" data-nav="her"><span class="tab-ico">她</span><span class="tab-label">她</span></button>
+    <button class="tab" data-nav="records"><span class="tab-ico">记</span><span class="tab-label">记录</span></button>
+    <button class="tab" data-nav="settings"><span class="tab-ico">设</span><span class="tab-label">设置</span></button>
+    <span class="nav-spacer"></span>
+    <button class="rail-toggle" id="rail-toggle" title="收起侧栏" aria-label="收起侧栏">«</button>
     <!-- 社区/市场入口：上游模板自带的（金句墙、意见收集、Skill/插件市场、人设广场、官网）。
          本机自用场景下不需要，整组收起 —— 但**保留 DOM**：09-community.js 与
          10-feedback.js 仍按 id 绑定它们，删掉会抛错。要恢复时去掉 hidden 即可。 -->
-    <span class="nav-spacer"></span>
     <span class="nav-extra hidden">
       <button class="nav-btn hidden" id="quote-confirm-btn">确认金句</button>
       <button class="nav-btn" id="quote-btn" title="把机器人的精彩发言收录到金句墙">金句上传</button>
