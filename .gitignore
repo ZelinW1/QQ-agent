@@ -16,6 +16,9 @@ snowluma/
 
 # 依赖
 node_modules/
+# 本项目用 npm（package-lock.json 是唯一的锁文件）。
+# pnpm-lock.yaml 是本地误装留下的，不参与版本管理。
+pnpm-lock.yaml
 
 # 运行时临时文件
 .trash/
