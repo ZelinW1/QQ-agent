@@ -39,6 +39,8 @@ let mindEvents = [];
 let mindProfiles = {};
 let mindProfileKeys = [];
 let mindChats = [];
+// 记忆流筛选（按人 / 按会话）。空串 = 全部。
+let mindStreamFilter = { actor: '', chatKey: '' };
 
 const mindClamp = (v) => Math.max(0, Math.min(100, Number(v) || 0));
 const mindMode = () => (typeof state !== 'undefined' && state.mindMode) || 'state';
@@ -60,14 +62,27 @@ async function loadMindPage() {
   box.innerHTML = '<div class="mind-empty">正在读取…</div>';
   try {
     const jobs = [api('/api/mind/state')];
-    if (mode === 'stream') jobs.push(api('/api/mind/events?limit=80').catch(() => ({ events: [] })));
+    if (mode === 'stream') {
+      // 筛选放在服务端做（事件可能上百条，客户端只是拿到最近 N 条后再筛，
+      // 会把"这个人的第 81 条"漏掉）。同时拉会话列表用于展示名字。
+      // 手拼查询串而不用 URLSearchParams：后者不是 vm 环境的全局对象，
+      // 用它在测试里会直接抛错（浏览器里没问题，但测试也是真实调用方）。
+      const parts = ['limit=80'];
+      if (mindStreamFilter.actor) parts.push(`actor=${encodeURIComponent(mindStreamFilter.actor)}`);
+      if (mindStreamFilter.chatKey) parts.push(`chatKey=${encodeURIComponent(mindStreamFilter.chatKey)}`);
+      jobs.push(api(`/api/mind/events?${parts.join('&')}`).catch(() => ({ events: [] })));
+      jobs.push(api('/api/chats').catch(() => ({ chats: [] })));
+    }
     if (mode === 'profiles') {
       jobs.push(api('/api/chat-profiles').catch(() => ({ profiles: {}, chatKeys: [] })));
       jobs.push(api('/api/chats').catch(() => ({ chats: [] })));
     }
     const [st, a, b] = await Promise.all(jobs);
     mindState = st;
-    if (mode === 'stream') mindEvents = a?.events || [];
+    if (mode === 'stream') {
+      mindEvents = a?.events || [];
+      mindChats = b?.chats || [];
+    }
     if (mode === 'profiles') {
       mindProfiles = a?.profiles || {};
       mindProfileKeys = a?.chatKeys || [];
@@ -316,7 +331,37 @@ function mindIdentitySection(d) {
 
 // ── 记忆流 ─────────────────────────────────────────────────────────────
 function mindStreamSection() {
-  if (!mindEvents.length) return mindCard('记忆流', '<div class="mind-empty">还没有任何经历记录。</div>');
+  const rels = mindState?.relations || [];
+  const actorOpts = [
+    { v: '', t: '所有人' },
+    { v: 'self', t: '她自己' },
+    ...rels.map((r) => ({ v: r.userId, t: r.nickname || r.names?.[0] || r.userId }))
+  ];
+  const chatOpts = [
+    { v: '', t: '所有会话' },
+    ...(mindChats || []).map((c) => ({ v: c.key, t: c.name || c.key }))
+  ];
+  const options = (list, cur) => list
+    .map((o) => `<option value="${esc(o.v)}"${o.v === cur ? ' selected' : ''}>${esc(o.t)}</option>`)
+    .join('');
+  const filtering = Boolean(mindStreamFilter.actor || mindStreamFilter.chatKey);
+
+  const filterBar = `
+    <div class="mind-form" style="margin-bottom:12px">
+      <div class="mind-grid" style="gap:10px">
+        <label>按人
+          <select id="mind-stream-actor">${options(actorOpts, mindStreamFilter.actor)}</select>
+        </label>
+        <label>按会话
+          <select id="mind-stream-chat">${options(chatOpts, mindStreamFilter.chatKey)}</select>
+        </label>
+      </div>
+    </div>`;
+
+  if (!mindEvents.length) {
+    return mindCard('记忆流', `${filterBar}<div class="mind-empty">${filtering ? '这个范围内还没有记录。' : '还没有任何经历记录。'}</div>`);
+  }
+
   const rows = mindEvents.map((e) => {
     const who = e.actorId && e.actorId !== 'self' ? `${e.actorName || e.actorId}：` : '';
     const tags = (e.tags || []).length ? `<span class="mind-rel-meta">${e.tags.map((t) => esc(t)).join(' / ')}</span>` : '';
@@ -332,7 +377,8 @@ function mindStreamSection() {
       <div class="mind-rel-line">${esc(who)}${esc(e.text)}</div>
     </div>`;
   }).join('');
-  return mindCard(`记忆流（最近 ${mindEvents.length} 条，从新到旧）`, rows);
+
+  return mindCard(`记忆流（${mindEvents.length} 条，从新到旧）`, filterBar + rows);
 }
 
 // ── 会话配置 ───────────────────────────────────────────────────────────
@@ -388,6 +434,15 @@ function mindBindEvents(box) {
   $('#mind-prof-save')?.addEventListener('click', () => saveProfile(false));
   $('#mind-prof-clear')?.addEventListener('click', () => saveProfile(true));
   $('#mind-prof-key')?.addEventListener('change', fillProfileForm);
+  // 记忆流筛选：改选后重新拉取（筛选在服务端做）
+  $('#mind-stream-actor')?.addEventListener('change', (e) => {
+    mindStreamFilter.actor = String(e.target?.value || '');
+    loadMindPage();
+  });
+  $('#mind-stream-chat')?.addEventListener('change', (e) => {
+    mindStreamFilter.chatKey = String(e.target?.value || '');
+    loadMindPage();
+  });
   box.querySelectorAll?.('[data-pick-name]')?.forEach((el) => {
     el.addEventListener('click', () => { mindBirthName = el.dataset.pickName; renderMindPage(); });
   });

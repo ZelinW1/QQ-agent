@@ -1103,9 +1103,11 @@ export function createRoutes(deps) {
         if (!mind) return json(res, 200, { ok: true, events: [] });
         const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 60));
         const chatKey = String(url.searchParams.get('chatKey') || '').trim();
+        const actorId = String(url.searchParams.get('actor') || '').trim();
         const includeCompacted = url.searchParams.get('compacted') === '1';
         const events = mind.queryEvents({
           ...(chatKey ? { chatKey } : {}),
+          ...(actorId ? { actorId } : {}),
           limit,
           includeCompacted
         });

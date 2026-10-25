@@ -137,6 +137,12 @@ await check('记忆流：返回事件时间线（从新到旧）', async () => {
   const e = r.data.events[0];
   assert.ok(typeof e.text === 'string' && typeof e.ts === 'number', '事件有正文与时间');
   assert.ok(typeof e.salience === 'number', '带重要度');
+
+  // 按人筛选（服务端过滤，不是客户端截断）
+  const byActor = await env.request('GET', '/api/mind/events?actor=777&limit=5');
+  assert.ok(byActor.data.events.every((x) => x.actorId === '777'), '按人筛选只返回该人的事件');
+  const none = await env.request('GET', '/api/mind/events?actor=999&limit=5');
+  assert.equal(none.data.events.length, 0, '没有这个人的事件时返回空');
 });
 
 await check('会话配置：读 / 写 / 清除', async () => {

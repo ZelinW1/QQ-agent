@@ -40,20 +40,21 @@ function renderSettingsSidebar() {
   if (!sidebar) return;
   const menu = [
     ['api', '模型 API'],
-    ['search', '搜索服务'],
     // 「人设」与「记忆」不在这里：它们已经归到顶层的「她」（身份/状态）
     // 与「记录」（旧印象）。同一个设定有两个入口，用户就会怀疑哪边才是真的。
     ['allow', '聊天白名单'],
-    ['chat', '聊天设置'],
-    ['desktop', '桌面端'],
     ['onebot', 'OneBot（SnowLuma）'],
-    ['tools', '工具与技能']
+    ['chat', '聊天设置'],
+    ['tools', '工具与技能'],
+    ['search', '搜索服务'],
+    ['desktop', '桌面端']
   ];
   sidebar.innerHTML = `
     <div class="settings-runstate">
       <div class="rs-title">机器人运行状态</div>
       <div class="rs-row"><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
       <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${esc(s.orchestrator.model)}` : '模型：未设置')}</div>
+      <div class="rs-row muted" style="line-height:1.5;margin-top:6px">这里只放运行参数。她的身份、记忆、作息在左侧「她」里。</div>
     </div>
     <div class="settings-menu">
       ${menu.map(([id, label]) => `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}">${label}${id === 'desktop' && (typeof updateAvailable !== 'undefined' && updateAvailable) ? '<span class="update-dot" title="发现新版本"></span>' : ''}</button>`).join('')}

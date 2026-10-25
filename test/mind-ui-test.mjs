@@ -143,13 +143,16 @@ console.log('\n=== 1c. 记忆流 / 会话配置 ===');
   const { sandbox: s1c, box: b1c } = makeSandbox(STATE, (p) => (
     p.startsWith('/api/mind/events')
       ? { ok: true, events: [{ id: 'e1', ts: Date.now(), actorId: '777', actorName: '小王', kind: 'interaction', text: '他说组里在裁人', salience: 0.9, tags: ['工作'], summaryOf: [] }] }
-      : null
+      : (p === '/api/chats' ? { chats: [{ key: 'private:777', name: '小王' }] } : null)
   ));
   s1c.state = { mindMode: 'stream' };
   await s1c.loadMindPage();
   check(b1c.innerHTML.includes('记忆流'), '记忆流页');
   check(b1c.innerHTML.includes('他说组里在裁人'), '展示事件正文');
   check(b1c.innerHTML.includes('小王'), '展示当事人');
+  check(b1c.innerHTML.includes('mind-stream-actor') && b1c.innerHTML.includes('mind-stream-chat'), '有按人 / 按会话筛选');
+  check(b1c.innerHTML.includes('她自己'), '筛选项包含"她自己"');
+  check(b1c.innerHTML.includes('所有会话'), '筛选项包含"所有会话"');
 
   const { sandbox: s1d, box: b1d } = makeSandbox(STATE, (p) => (
     p.startsWith('/api/chat-profiles')
