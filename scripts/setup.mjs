@@ -152,96 +152,32 @@ function isSnowlumaReady() {
   return fs.existsSync(indexMjs) && fs.existsSync(nodeExe);
 }
 
+/**
+ * 协议端：本分支不再代为下载 / 分发 / 安装。
+ *
+ * 上游在 0.4 版把口径改成了"协议端由使用者自行准备"，并移除了协议端安装脚本；
+ * 我们跟随这个口径，同时也不去碰第三方程序的账号目录：
+ *   · 只检测本机是否已有可用的协议端目录（供应用内"一键启动"使用）
+ *   · 没有就打印指引，由使用者自行安装任意 OneBot v11 实现
+ */
 async function installSnowluma() {
-  if (isSnowlumaReady() && !FORCE) {
-    log('✅ SnowLuma 已就绪（', SNOWLUMA_DIR, '），跳过。需要重装请加 --force');
+  if (isSnowlumaReady()) {
+    log('✅ 检测到本机协议端（', SNOWLUMA_DIR, '），跳过。');
     return;
   }
-
-  if (FORCE && fs.existsSync(SNOWLUMA_DIR)) {
-    log('--force：删除旧 SnowLuma 目录');
-    fs.rmSync(SNOWLUMA_DIR, { recursive: true, force: true });
-  }
-
-  fs.mkdirSync(SNOWLUMA_DIR, { recursive: true });
-
-  // 尝试从 GitHub Release 下载
-  const zipPath = path.join(QQ_CACHE_DIR, 'snowluma.zip');
-  fs.mkdirSync(QQ_CACHE_DIR, { recursive: true });
-
-  try {
-    const apiUrl = `https://api.github.com/repos/${SNOWLUMA_REPO}/releases/tags/${SNOWLUMA_VERSION}`;
-    log('查询 SnowLuma Release:', apiUrl);
-    const res = await fetch(apiUrl, { headers: { 'User-Agent': 'qq-agent-setup' } });
-    if (!res.ok) throw new Error(`GitHub API ${res.status}`);
-    const rel = await res.json();
-    const asset = (rel.assets ?? []).find((a) => a.name === SNOWLUMA_ASSET);
-    if (!asset) throw new Error(`Release ${SNOWLUMA_VERSION} 中没有 ${SNOWLUMA_ASSET}`);
-
-    // ⚠️ 供应链防线：
-    //  - 下载源被环境变量改写（SNOWLUMA_REPO / SNOWLUMA_VERSION）时**必须**同时给出
-    //    SNOWLUMA_SHA256，否则拒绝下载 —— 否则任何人只要改一个环境变量，
-    //    就能让安装脚本下载并执行任意 zip（而 zip 里就是将被 spawn 的代码）。
-    //  - 走官方仓库 + 默认版本时，用常量里固定的官方资产摘要做完整性校验。
-    if (!SNOWLUMA_SHA256 && (SNOWLUMA_REPO_OVERRIDDEN || SNOWLUMA_VERSION_OVERRIDDEN)) {
-      die('检测到 SNOWLUMA_REPO / SNOWLUMA_VERSION 被覆盖，但未提供 SNOWLUMA_SHA256。\n'
-        + '  为防供应链投毒，拒绝从非官方来源下载。请设置 SNOWLUMA_SHA256=<zip 的 sha256> 后重试。');
-    }
-    if (!SNOWLUMA_SHA256) {
-      warn('未提供 SNOWLUMA_SHA256 —— 本次下载不做完整性校验。');
-      warn('  建议把官方 zip 的 sha256 固定到 SNOWLUMA_SHA256 环境变量或本文件常量里。');
-    }
-
-    // 缓存命中：手动下载（或上次残留）的 zip 先用起来 —— 让报错提示里
-    // 「手动下载后放入缓存目录」真的可操作（Node fetch 不走系统代理，
-    // 走代理上网的环境下载常超时，手动下载是重要退路）。
-    // 来源不论是缓存还是现场下载，都按同一份官方哈希做完整性校验。
-    if (fs.existsSync(zipPath)) {
-      const got = fileSha256(zipPath);   // 大写十六进制（见 lib/download.mjs）
-      const expect = String(SNOWLUMA_SHA256 || '').trim().toUpperCase();
-      if (expect && got !== expect) {
-        warn(`缓存 zip 哈希不符（${got}），删除后重新下载`);
-        fs.rmSync(zipPath, { force: true });
-      } else {
-        log(`使用缓存 zip（跳过下载）：${zipPath}`, expect ? `sha256=${got}` : '（未固定哈希，未校验）');
-      }
-    }
-    if (!fs.existsSync(zipPath)) {
-      await download(asset.browser_download_url, zipPath, {
-        expectedSha256: SNOWLUMA_SHA256 || null,
-        label: 'SnowLuma '
-      });
-    }
-
-    log('解压到', SNOWLUMA_DIR);
-    unzip(zipPath, SNOWLUMA_DIR);
-
-    // 官方 zip 可能带一层嵌套目录，上提内容
-    const entries = fs.readdirSync(SNOWLUMA_DIR);
-    if (!fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs'))) {
-      const inner = entries.find((e) => fs.existsSync(path.join(SNOWLUMA_DIR, e, 'index.mjs')));
-      if (inner) {
-        log(`调整目录层级：${inner}/ -> ./`);
-        for (const f of fs.readdirSync(path.join(SNOWLUMA_DIR, inner))) {
-          fs.renameSync(path.join(SNOWLUMA_DIR, inner, f), path.join(SNOWLUMA_DIR, f));
-        }
-        fs.rmSync(path.join(SNOWLUMA_DIR, inner), { recursive: true, force: true });
-      }
-    }
-
-    fs.rmSync(zipPath, { force: true });
-  } catch (error) {
-    warn(`自动下载 SnowLuma 失败：${error.message}`);
-    warn(`请手动下载 SnowLuma ${SNOWLUMA_VERSION} 并解压到 ${SNOWLUMA_DIR}`);
-    warn(`下载地址：https://github.com/${SNOWLUMA_REPO}/releases/tag/${SNOWLUMA_VERSION}`);
-
-    if (!isSnowlumaReady()) {
-      die('SnowLuma 目录不完整，无法继续。请下载后重跑 setup');
-    }
-  }
-
-  if (!isSnowlumaReady()) die('SnowLuma 安装后校验失败：index.mjs 或 node.exe 缺失');
-  log('✅ SnowLuma 安装完成');
+  warn('');
+  warn('='.repeat(66));
+  warn('本分支不代为下载、分发或安装 OneBot 协议端。');
+  warn('');
+  warn('请自行准备一个 OneBot v11 协议端（需要提供正向 WebSocket 事件接口 + HTTP API），');
+  warn('按它自己的说明安装并登录，然后在「设置 → OneBot」里填写：');
+  warn('  · WebSocket 地址（形如 ws://127.0.0.1:3001）');
+  warn('  · HTTP 地址（形如 http://127.0.0.1:3000）');
+  warn('  · 对应的访问令牌');
+  warn('');
+  warn('第三方程序与 QQ 客户端的版本要求、使用许可与风险，请以对应项目的说明为准。');
+  warn('='.repeat(66));
+  warn('');
 }
 
 /**
@@ -635,23 +571,25 @@ async function main() {
   if (CHECK_ONLY) {
     const sl = isSnowlumaReady();
     const qq = isQqPortableReady();
-    log(`SnowLuma: ${sl ? '✅ 就绪' : '❌ 缺失'}`);
-    log(`便携 QQ:  ${qq ? '✅ 就绪' : '❌ 缺失'}`);
+    log(`协议端:    ${sl ? '✅ 就绪' : '❌ 未提供（自行准备即可）'}`);
+    log(`便携 QQ:  ${qq ? '✅ 就绪' : '❌ 缺失（可选）'}`);
     const cb = readClientBuild();
     if (cb) log(`协议栈 CLIENT_BUILD: ${cb}（本脚本期望 ${EXPECTED_CLIENT_BUILD}）`);
-    if (sl && qq) { checkClientBuildMatch(); return; }
-    process.exit(1);
+    // --check 只报告状态：协议端/便携 QQ 都属"可选外部依赖"，
+    // 缺了不影响应用本身启动，所以这里不再用退出码判失败。
+    if (sl && qq) checkClientBuildMatch();
+    return;
   }
 
   log('=== QQ Agent Setup ===');
-  log(`SnowLuma: ${SNOWLUMA_VERSION}`);
-  log(`QQ:       ${QQ_VERSION}`);
+  log('协议端:   由使用者自行准备（本脚本不下载、不分发）');
+  log(`QQ:       ${QQ_VERSION}（便携包可选，本脚本不下载）`);
   log(`工作目录: ${ROOT}`);
   log('');
 
-  // 1. SnowLuma
+  // 1. 协议端：只检测 + 给指引
   await installSnowluma();
-  // 1.5 让协议栈声明的版本与实际运行的 QQ 一致（见 alignClientBuild 注释）
+  // 1.5 仅当本机已有协议端目录时，才去对齐它声明的客户端版本
   alignClientBuild();
 
   // 2. 便携 QQ：只检测 + 给上游地址，不下载不安装
@@ -665,10 +603,13 @@ async function main() {
   log('');
   log('=== 校验 ===');
   const checks = [
-    ['SnowLuma index.mjs', fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs'))],
-    ['SnowLuma node.exe', fs.existsSync(path.join(SNOWLUMA_DIR, 'node.exe'))],
     ['QQ Agent src/app.js', fs.existsSync(path.join(ROOT, 'src', 'app.js'))],
   ];
+  // 协议端与便携 QQ 都是"可选的外部依赖"：缺了只影响应用内一键启动/本机进程管理，
+  // 连外部 OneBot 照样能用 —— 所以不列入失败项，只做提示。
+  if (!isSnowlumaReady()) {
+    log('  ℹ️  本机协议端目录未就绪（不影响应用启动；按上方提示自行准备即可）');
+  }
   // 便携 QQ 缺失不算失败：它只影响"应用内一键启动"，连外部 OneBot 照样能用。
   if (!SKIP_QQ && !fs.existsSync(path.join(QQ_PORTABLE_DIR, 'QQ.exe'))) {
     log('  ℹ️  便携 QQ 未就绪（不影响应用启动；需要时按上方提示放置）');

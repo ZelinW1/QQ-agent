@@ -661,7 +661,7 @@ function hideLoading() {
 async function pollUntilReady(startedAt) {
   try {
     const status = await api('/api/status');
-    if (!status.onebot?.connected) setLoadingStatus(status.onebot?.diagnosis || 'SnowLuma 已就绪，正在连接 OneBot…');
+    if (!status.onebot?.connected) setLoadingStatus(status.onebot?.diagnosis || '协议端已就绪，正在连接 OneBot…');
     else setLoadingStatus(`OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}，即将进入控制台…`);
     // 服务已可达，无需等到 OneBot 完全连上即可进入控制台（体检卡会继续提示）
     return true;
@@ -669,7 +669,7 @@ async function pollUntilReady(startedAt) {
     // startedAt 由 bootLoop 传入：曾经在这里声明，每轮重置，
     // 45 秒超时判定永远为 false，"启动超时"提示从未出现过
     if (Date.now() - startedAt > 45000) {
-      setLoadingStatus('启动超时。请确认项目内 snowluma 文件夹完整，或到设置页手动启动 SnowLuma。');
+      setLoadingStatus('启动超时。请确认本机协议端目录完整，或到「协议端」页手动启动。');
       return false;
     }
     return false;
@@ -724,7 +724,7 @@ function renderBanner() {
     html = '⏸ 机器人已暂停，不会处理任何消息。';
   } else if (s && !s.onebot.connected && !s.onebot.everConnected) {
     show = true;
-    html = '🔌 OneBot（SnowLuma）还没连上：请确认 SnowLuma 已启动，且设置里的 WS/HTTP 地址正确。';
+    html = '🔌 OneBot 还没连上：请确认本机协议端已启动，且设置里的 WS/HTTP 地址正确。';
   }
   if (show) {
     // 出现交给 .banner 自带的 pageIn；uiShow 只负责作废进行中的淡出并落实状态
@@ -801,7 +801,7 @@ const NAV_GROUPS = {
       { id: 'config', label: '运行配置', view: 'settings' },
       { id: 'skills', label: '技能', view: 'skills' },
       { id: 'plugins', label: '插件', view: 'plugins' },
-      { id: 'snowluma', label: 'SnowLuma', view: 'snowluma' }
+      { id: 'snowluma', label: '协议端', view: 'snowluma' }
     ]
   }
 };

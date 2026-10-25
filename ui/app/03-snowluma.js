@@ -106,7 +106,11 @@ async function loadSnowlumaPage({ quiet = false } = {}) {
 
     box.innerHTML = `
       <div class="snowluma-page-card">
-        <h2>SnowLuma（OneBot 网关）</h2>
+        <h2>协议端（OneBot v11）</h2>
+        <div class="hint" style="margin-bottom:10px">
+          协议端由你自行安装与登录。本页只管理"你放在本机目录里的那个协议端进程"，
+          不代为下载或分发；不读它的账号目录，也不提取令牌。
+        </div>
 
         <!-- 一键启动区域（核心入口） -->
         ${!onebotConnected ? `
@@ -114,14 +118,14 @@ async function loadSnowlumaPage({ quiet = false } = {}) {
           <div style="font-size:15px;font-weight:600;margin-bottom:8px">🚀 快速启动</div>
           <div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.6">
             ${!qqReady ? '便携 QQ 未就绪：本分支不代为安装。可从上游项目作者的分发页获取后放到 <code>runtime/qq-portable/</code>（或连接外部 OneBot）' :
-              !qqRunning ? '点击下面按钮，自动完成：启动 QQ → 启动 SnowLuma → 连接 OneBot' :
-              !running ? 'QQ 已运行，点击启动 SnowLuma 并连接' :
-              'SnowLuma 已运行，等待 OneBot 连接…'}
+              !qqRunning ? '点击下面按钮，自动完成：启动 QQ → 启动本机协议端 → 连接 OneBot' :
+              !running ? 'QQ 已运行，点击启动本机协议端并连接' :
+              '协议端已运行，等待 OneBot 连接…'}
           </div>
           <button class="btn btn-primary" id="quick-start-btn" style="font-size:14px;padding:10px 20px" ${!qqReady ? 'disabled' : ''}>
             ${!qqReady ? '便携 QQ 未就绪' :
-              !qqRunning ? '一键启动（QQ + SnowLuma）' :
-              !running ? '启动 SnowLuma' :
+              !qqRunning ? '一键启动（QQ + 协议端）' :
+              !running ? '启动协议端' :
               '等待连接…'}
           </button>
           <span id="quick-start-hint" class="muted" style="font-size:12px;margin-left:12px"></span>
@@ -152,11 +156,11 @@ async function loadSnowlumaPage({ quiet = false } = {}) {
 
         <hr class="sl-sep">
 
-        <!-- SnowLuma 状态 -->
+        <!-- 协议端状态 -->
         <div class="snowluma-qq-section">
           <div class="snowluma-state-row">
             <span class="dot ${running ? 'dot-on' : 'dot-off'}"></span>
-            <span>SnowLuma：<strong>${running ? '运行中' : '未运行'}</strong></span>
+            <span>协议端：<strong>${running ? '运行中' : '未运行'}</strong></span>
             ${pid ? `<span class="muted">pid ${pid}</span>` : ''}
             <span class="muted">${embedded ? '内置模式（随 QQ Agent 退出）' : (running ? '独立模式' : '')}</span>
           </div>
@@ -166,17 +170,17 @@ async function loadSnowlumaPage({ quiet = false } = {}) {
             <span class="muted">WS ${s.onebot?.error ? `：${s.onebot.error}` : ''}</span>
           </div>
           <div class="snowluma-state-row muted">
-            <span>目录：${esc(dir || '（未找到项目内 snowluma/ 文件夹）')}</span>
+            <span>目录：${esc(dir || '（未找到本机协议端目录）')}</span>
           </div>
           <div class="snowluma-state-row">
             <span>WebUI：</span>
             ${webuiUrl
-              ? `<button class="btn btn-small" id="sl-open-webui-btn" title="在浏览器中打开 SnowLuma 控制台">${esc(webuiUrl)}</button>`
-              : '<span class="muted">等待 SnowLuma 启动后自动识别…</span>'}
+              ? `<button class="btn btn-small" id="sl-open-webui-btn" title="在浏览器中打开协议端控制台">${esc(webuiUrl)}</button>`
+              : '<span class="muted">等待协议端启动后自动识别…</span>'}
           </div>
           <div class="snowluma-actions">
-            <button class="btn btn-primary" id="sl-start-btn" ${running ? 'disabled' : ''}>${running ? '已运行' : '启动 SnowLuma'}</button>
-            <button class="btn btn-danger" id="sl-stop-btn" ${running ? '' : 'disabled'}>关闭 SnowLuma</button>
+            <button class="btn btn-primary" id="sl-start-btn" ${running ? 'disabled' : ''}>${running ? '已运行' : '启动协议端'}</button>
+            <button class="btn btn-danger" id="sl-stop-btn" ${running ? '' : 'disabled'}>关闭协议端</button>
             <button class="btn btn-small" id="sl-refresh-btn">刷新状态</button>
             <button class="btn btn-small" id="sl-open-folder-btn">打开文件夹</button>
             <span id="sl-hint" class="muted" style="font-size:12px"></span>

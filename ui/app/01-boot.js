@@ -48,9 +48,9 @@ function updateReadinessDots(s) {
   dots[0].className = 'rdot' + (qqRunning ? ' on' : '');
   dots[0].title = qqRunning ? 'QQ 内核运行中' : 'QQ 内核未运行（点击前往启动）';
 
-  // 圆点 1：SnowLuma
+  // 圆点 1：协议端
   dots[1].className = 'rdot' + (slRunning ? ' on' : '');
-  dots[1].title = slRunning ? 'SnowLuma 运行中' : 'SnowLuma 未运行（点击前往启动）';
+  dots[1].title = slRunning ? '协议端运行中' : '协议端未运行（点击前往启动）';
 
   // 圆点 2：OneBot
   dots[2].className = 'rdot' + (obConnected ? ' on' : (slRunning ? ' wait' : ''));

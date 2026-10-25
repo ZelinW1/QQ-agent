@@ -43,7 +43,7 @@ function renderSettingsSidebar() {
     // 「人设」与「记忆」不在这里：它们已经归到顶层的「她」（身份/状态）
     // 与「记录」（旧印象）。同一个设定有两个入口，用户就会怀疑哪边才是真的。
     ['allow', '聊天白名单'],
-    ['onebot', 'OneBot（SnowLuma）'],
+    ['onebot', 'OneBot 连接'],
     ['chat', '发送与群聊'],
     ['tools', '工具与技能'],
     ['search', '搜索服务'],
@@ -1017,16 +1017,16 @@ function renderDesktopSection(c) {
 
 function renderOnebotSection(c) {
   return `
-    <h3 id="settings-onebot">OneBot（SnowLuma）</h3>
-    <div class="hint" style="margin-bottom:10px">SnowLuma 的启动、关闭与日志已移动到顶部「SnowLuma」页签。此处只保留连接配置。</div>
-    <div class="field"><label>SnowLuma 程序目录（留空 = 自动使用项目内 snowluma/ 文件夹）</label>
+    <h3 id="settings-onebot">OneBot 连接</h3>
+    <div class="hint" style="margin-bottom:10px">协议端的启动、关闭与日志已移动到顶部「协议端」页。此处只保留连接配置。</div>
+    <div class="field"><label>本机协议端目录（留空 = 自动使用项目内默认目录）</label>
       <div style="display:flex;gap:8px">
         <input type="text" id="cfg-snowlumadir" value="${esc(c.snowluma.dir || '')}" style="flex:1" />
         <button class="btn btn-small" id="open-snowluma-btn">打开文件夹</button>
       </div>
       <div class="hint" id="snowluma-hint"></div></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-snowlumalaunch" ${c.snowluma.autoLaunch ? 'checked' : ''} />
-      <label for="cfg-snowlumalaunch">QQ Agent 启动时自动拉起 SnowLuma（未运行时）</label></div>
+      <label for="cfg-snowlumalaunch">QQ Agent 启动时自动拉起本机协议端（未运行时）</label></div>
     <div class="field-row">
       <div class="field"><label>WebSocket 地址（收消息）</label><input type="text" id="cfg-wsurl" value="${esc(c.snowluma.wsUrl)}" /></div>
       <div class="field"><label>HTTP 地址（发消息）</label><input type="text" id="cfg-httpurl" value="${esc(c.snowluma.httpUrl)}" /></div>
@@ -1035,7 +1035,7 @@ function renderOnebotSection(c) {
           <input type="password" id="cfg-obtoken" value="${esc(c.snowluma?.hasAccessToken ? '******' : '')}" placeholder="输入新令牌可替换；留空保持不变" autocomplete="new-password" style="flex:1" />
           <button class="btn btn-small" id="cfg-obtoken-toggle" type="button">显示</button>
         </div></div>
-      <div class="field"><label>HTTP 令牌（与 WS 不同时填；SnowLuma 默认分开）</label>
+      <div class="field"><label>HTTP 令牌（与 WS 不同时填；有些实现默认分开）</label>
         <div style="display:flex;gap:8px">
           <input type="password" id="cfg-obhttptoken" value="${esc(c.snowluma?.hasHttpAccessToken ? '******' : '')}" placeholder="输入新令牌可替换；留空保持不变" autocomplete="new-password" style="flex:1" />
           <button class="btn btn-small" id="cfg-obhttptoken-toggle" type="button">显示</button>
