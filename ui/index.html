@@ -73,6 +73,7 @@
     <button class="tab active" data-tab="sessions">会话</button>
     <button class="tab" data-tab="chats">存档</button>
     <button class="tab" data-tab="memory">记忆</button>
+    <button class="tab" data-tab="mind">心智</button>
     <button class="tab" data-tab="usage">用量</button>
     <button class="tab" data-tab="skills">技能</button>
     <button class="tab" data-tab="plugins">插件</button>
@@ -132,6 +133,12 @@
       </div>
     </section>
 
+    <!-- 心智视图：她现在的样子（自我/关系/节律）+ 身份槽位编辑。
+         与「记忆」分开：记忆页是查聊天记录与群友印象，心智页是看她自己。 -->
+    <section id="view-mind" class="view">
+      <div id="mind-page" class="usage-pane"></div>
+    </section>
+
     <!-- 用量视图 -->
     <section id="view-usage" class="view">
       <div id="usage-page" class="usage-pane"></div>
@@ -171,6 +178,7 @@
   <script defer src="/app/09-community.js"></script>
   <script defer src="/app/10-feedback.js"></script>
   <script defer src="/app/12-concept2-ui.js"></script>
+  <script defer src="/app/13-mind.js"></script>
   <script defer src="/app/11-init.js"></script>
 
   <!-- 阿里云验证码 2.0（意见收集/金句上传共用）：容器常驻；AliyunCaptchaConfig 与
