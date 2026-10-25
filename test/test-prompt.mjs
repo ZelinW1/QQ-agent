@@ -18,6 +18,7 @@ const { MemoryStore } = await import('../src/memory.js');
 const { buildSystemPrompt, buildUserPrompt, buildPastState, resolveContextTier, stripMentions } = await import('../src/prompt.js');
 const { segmentsToText } = await import('../src/onebot.js');
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/config.js');
+const { PERSONAS } = await import('../src/personas.js');
 
 // 注入测试配置
 const cfg = structuredClone(DEFAULT_CONFIG);
@@ -151,10 +152,18 @@ const proactivePrompt = buildUserPrompt({
 });
 assert.ok(proactivePrompt.includes('【已读信息】'), '主动模式也带已读信息');
 
-// ── 7. 默认人设 = 原版小鲸鱼角色卡（已适配新架构，不含旧机制指令） ──
-assert.ok(DEFAULT_CONFIG.persona.roleText.includes('DeepSeek 小鲸鱼'), '默认人设为原版小鲸鱼角色卡');
-for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mark_read', 'qq_wait_for_messages', 'qq_send_message', '空格分隔（例如']) {
-  assert.ok(!DEFAULT_CONFIG.persona.roleText.includes(banned), `默认人设不应包含旧架构指令：${banned}`);
+// ── 7. 默认身份 = charter 分槽（不再默认使用整段角色卡） ──
+// 背景（M2-2）：默认 roleText 改为空，身份由 persona.charter 提供；
+// 两者是"二选一"的模式开关，同时配置会互相打架。
+assert.equal(DEFAULT_CONFIG.persona.roleText, '', '默认不再使用整段 roleText（改用 charter）');
+assert.ok(DEFAULT_CONFIG.persona.charter.selfImage.includes('小鲸鱼'), '默认身份由 charter.selfImage 提供');
+assert.ok(DEFAULT_CONFIG.persona.charter.hardRules.length >= 3, '默认带可枚举的硬规矩');
+assert.ok(DEFAULT_CONFIG.persona.charter.scenario.private.length > 0, '默认带私聊场合说明');
+// 旧角色卡仍作为素材库保留（设置页可选），但默认不参与渲染
+assert.ok(PERSONAS.xiaojingyu.text.includes('DeepSeek 小鲸鱼'), '旧角色卡仍保留在素材库');
+for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mark_read', 'qq_wait_for_messages', 'qq_send_message']) {
+  const charterText = JSON.stringify(DEFAULT_CONFIG.persona.charter);
+  assert.ok(!charterText.includes(banned), `默认 charter 不应包含旧架构指令：${banned}`);
 }
 
 // ── 收尾：清理隔离数据目录 ──

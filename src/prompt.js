@@ -380,16 +380,25 @@ export function buildSystemPrompt({ persona, profile = null, skillContext, extra
     ? `你是「${cfg.botName}」，一个在 QQ 上和人来往的普通人（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`
     : `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`);
 
+  // 身份来源二选一（模式开关）：
+  //   · roleText 非空 → 旧模式：整段角色卡进 user 的【角色设定】，charter 不参与
+  //   · roleText 为空 → 新模式：charter 分槽进 system
+  // 只开一个，避免两套身份并存互相打架，也让旧配置完全保持原样。
+  const legacyRoleText = String(cfg.roleText ?? '').trim();
   const charter = charterOf(cfg);
-  if (charter.hardRules.length) {
+  const useCharter = !legacyRoleText && charter.hasAny;
+
+  if (useCharter && charter.hardRules.length) {
     push('charter', 'hard-rules', [
       '【不能破的几条】',
       ...charter.hardRules.map((r) => `- ${r}`)
     ].join('\n'));
   }
-  if (charter.selfImage) push('charter', 'self-image', `【我是谁】\n${charter.selfImage}`);
-  if (charter.baseline) push('charter', 'baseline', `【我最初的样子】\n${charter.baseline}`);
-  const scenarioText = String(charter.scenario[chatKind] || charter.scenario.group || '').trim();
+  if (useCharter && charter.selfImage) push('charter', 'self-image', `【我是谁】\n${charter.selfImage}`);
+  if (useCharter && charter.baseline) push('charter', 'baseline', `【我最初的样子】\n${charter.baseline}`);
+  const scenarioText = useCharter
+    ? String(charter.scenario[chatKind] || charter.scenario.group || '').trim()
+    : '';
   if (scenarioText) push('charter', 'scenario', `【此刻的场合】\n${scenarioText}`);
 
   push('charter', 'anti-ai-flavor', antiAiFlavor());
@@ -940,12 +949,9 @@ export function buildUserPrompt(ctx) {
   // "锚点成员集"决定（锚定时不随追加条目扩展），和已读信息头部一起构成
   // 跨轮稳定的字节前缀；追加的新群友印象则放【新加入成员】殿后。
   const parts = [];
-  // 配了 charter 就不再渲染 roleText：两套身份并存会互相打架，也白烧 token。
-  // 判断顺序：会话人设自己的 charter → 全局 charter（分槽配置是账号级的）。
-  const charterCfg = charterOf(chatPersona).hasAny
-    ? charterOf(chatPersona)
-    : charterOf(_globalCfg().persona);
-  if (!charterCfg.hasAny && chatPersona.roleText && String(chatPersona.roleText).trim()) {
+  // 旧模式：roleText 非空时整段渲染。【角色设定】只属于 roleText 模式；
+  // charter 模式下身份已经在 system 里，这里不再重复。
+  if (chatPersona.roleText && String(chatPersona.roleText).trim()) {
     parts.push(`【角色设定（管理员设置，不可修改）】\n${String(chatPersona.roleText).trim()}`);
   }
 

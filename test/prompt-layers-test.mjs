@@ -22,6 +22,7 @@ const check = (cond, msg, detail = '') => {
 const { PROMPT_LAYERS, validateSections, renderSections, layerOrder } = await import(src('src/prompt-layers.js'));
 const { buildSystemPrompt, buildUserPrompt } = await import(src('src/prompt.js'));
 const { updateConfig } = await import(src('src/config.js'));
+const { DEFAULT_CHARTER } = await import(src('src/personas.js'));
 
 // ── 1. 层的定义 ─────────────────────────────────────────────────────────
 console.log('\n=== 1. 层定义 ===');
@@ -133,10 +134,23 @@ console.log('\n=== 6. charter 槽位与私聊口吻 ===');
     contextLimit: 10, promptAnchor: { prev: null }, session: {}
   };
 
-  // 默认（没配 charter）：仍然渲染 roleText
-  const before = buildUserPrompt({ ...base });
-  check(before.includes('【角色设定'), '没配 charter 时仍用 roleText');
+  // ── 模式开关：roleText 非空 → 旧模式；为空 → charter 模式 ──
+  updateConfig({ persona: { roleText: '你是测试群里的测试机。' } });
+  const legacy = buildUserPrompt({ ...base });
+  check(legacy.includes('【角色设定'), 'roleText 非空时走旧模式（user 里有角色设定）');
+  check(!buildSystemPrompt({}).includes('【我是谁】'), '旧模式下 charter 不参与（不会两套身份并存）');
 
+  updateConfig({ persona: { roleText: '' } });
+  const charterMode = buildUserPrompt({ ...base });
+  check(!charterMode.includes('【角色设定'), 'roleText 为空时不再渲染角色设定');
+  check(charterMode.length < legacy.length, 'user 提示因此变短');
+
+  // ── 默认 charter 自带内容 ──
+  const dflt = buildSystemPrompt({ chatKind: 'private' });
+  check(dflt.includes('【我是谁】') && dflt.includes('小鲸鱼'), '默认 charter 提供身份');
+  check(dflt.includes('【不能破的几条】'), '默认 charter 带硬规矩');
+
+  // ── 自定义槽位 ──
   updateConfig({
     persona: {
       charter: {
@@ -160,14 +174,18 @@ console.log('\n=== 6. charter 槽位与私聊口吻 ===');
   check(grp.includes('现在在一群人里，别抢话'), '群聊用 scenario.group');
   check(grp.includes('一个混在 QQ 群里的普通群友'), '群聊保留"群友"身份句');
 
-  // 配了 charter 就不再渲染 roleText：两套身份并存会互相打架
-  const after = buildUserPrompt({ ...base });
-  check(!after.includes('【角色设定'), '配了 charter 后 user 里不再有 roleText');
-  check(after.length < before.length, 'user 提示因此变短');
-
-  // 恢复默认，避免影响其它断言
-  updateConfig({ persona: { charter: { selfImage: '', baseline: '', scenario: { private: '', group: '' }, hardRules: [] } } });
-  check(buildUserPrompt({ ...base }).includes('【角色设定'), '清空 charter 后回到 roleText');
+  // 恢复默认（roleText 空 + 默认 charter）
+  updateConfig({
+    persona: {
+      roleText: '',
+      charter: {
+        selfImage: DEFAULT_CHARTER.selfImage,
+        baseline: DEFAULT_CHARTER.baseline,
+        scenario: { ...DEFAULT_CHARTER.scenario },
+        hardRules: [...DEFAULT_CHARTER.hardRules]
+      }
+    }
+  });
 }
 
 console.log(`\n提示词分层：通过 ${pass}，失败 ${fail}`);

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PERSONAS } from './personas.js';
+import { PERSONAS, DEFAULT_CHARTER } from './personas.js';
 import { sliderToTier } from './tier-slider.js';   // 零依赖模块，避免循环依赖
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -176,7 +176,11 @@ export const DEFAULT_CONFIG = {
   persona: {
     botName: '小鲸鱼',
     selfNickname: '',                       // 在群里的展示名（留空用 QQ 昵称）
-    roleText: PERSONAS.xiaojingyu.text,     // 默认人设：原版"小鲸鱼"角色卡（适配版）
+    // 旧的一整段角色卡。留空 = 使用下面的 charter（推荐）。
+    // 非空时走"roleText 模式"：user 提示里渲染【角色设定】，charter 的
+    // selfImage/baseline/scenario/hardRules 全部不参与 —— 两种模式只开一个，
+    // 避免两套身份并存互相打架。PERSONAS.xiaojingyu 仍作为素材库可选。
+    roleText: '',
     participation: 'medium',                // low | medium | high —— 参与度参考
     customRules: '',                        // 追加自定义规则（可选）
     // 系统提示词覆盖（可选）：非空时**整体替换** buildSystemPrompt 的默认行为准则。
@@ -192,10 +196,10 @@ export const DEFAULT_CONFIG = {
     //   user 提示里不再渲染 roleText —— 避免两套身份并存、互相打架。
     // 这些槽位**她改不了**（self_revise 只写 mind/self.json），只有管理员能改。
     charter: {
-      selfImage: '',                    // 我是谁：名字、形象、来历
-      baseline: '',                     // 最初的我：还没经历这些事时是个什么样的人
-      scenario: { private: '', group: '' },  // 场合：一对一 / 群里，分寸不同
-      hardRules: []                     // 不能破的几条（可枚举 → 可测试、可审计）
+      selfImage: DEFAULT_CHARTER.selfImage,   // 我是谁：名字、形象、来历
+      baseline: DEFAULT_CHARTER.baseline,     // 最初的我：还没经历这些事时是个什么样的人
+      scenario: { ...DEFAULT_CHARTER.scenario },  // 场合：一对一 / 群里，分寸不同
+      hardRules: [...DEFAULT_CHARTER.hardRules]   // 不能破的几条（可枚举 → 可测试、可审计）
     }
   },
   // 用户自定义人设库（保存在配置里，可在设置页添加/选择）
