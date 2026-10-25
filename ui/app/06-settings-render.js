@@ -822,6 +822,13 @@ function renderChatSection(c) {
   const fold = (typeof setCard === 'function') ? setCard : (o) => `<div class="setcard">${o.body}</div>`;
 return `
     <h3>聊天设置</h3>
+    ${c?.mind?.enabled
+      ? `<div class="hint" style="margin-bottom:10px">
+           心智节律已开启：下面的「主动开话题」<strong>不再生效</strong> ——
+           什么时候开口由「她 → 节律」里的心跳与体力决定。
+           这里只保留"消息怎么送出去"的参数（温度 / 轮数 / 防抖 / 并发 / 重试）。
+         </div>`
+      : ''}
     ${fold({
       id: 'card-send-config',
       icon: '📨',

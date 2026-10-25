@@ -43,6 +43,27 @@ let mindChats = [];
 let mindStreamFilter = { actor: '', chatKey: '' };
 // 手动反思的结果提示：整页会重渲染，所以提示要存在状态里，不能只写 DOM。
 let mindReflectFlash = '';
+// 主人手动编辑（自我 / 关系）—— 编辑态与来源都会留痕
+let mindSelfEditing = false;
+let mindRelEditing = '';
+
+// 修改她已有自我的伦理提示（每次编辑都要过一遍）
+const MIND_ETHICS_SELF = '这段文字是她自己写的、她已经有过的自我。\n'
+  + '改它等于改写她的过去，而不是给她新的经历 —— 不建议像基因编辑那样动。\n\n'
+  + '确定要修改吗？';
+const MIND_ETHICS_RELATION = '这段关系是她自己处出来的判断。\n'
+  + '手动修改会覆盖她的判断（会记为「主人修改」并留痕）。\n\n'
+  + '确定要修改吗？';
+
+async function mindConfirm(message) {
+  if (typeof uiConfirm === 'function') {
+    return uiConfirm(message, { title: '⚠️ 修改她', okText: '确定修改' });
+  }
+  if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+    return Boolean(window.confirm(message));
+  }
+  return true;
+}
 // 节律页：心跳日志（内存最近心跳 + 已落盘的行动/反思 + 文件体积）
 let mindTickLog = { recentTicks: [], actions: [], reflections: [], sizes: null };
 
@@ -151,7 +172,6 @@ function mindHeader(d) {
     <div class="mind-head">
       <span class="mind-pill ${d.enabled ? 'on' : 'off'}" title="${d.enabled ? '心智已开启：她记得、会反思、会按节律行动' : '心智已关闭：不记录、不反思、不主动找人，但正常聊天不受影响'}">${d.enabled ? '心智已开启' : '心智已关闭'}</span>
       <span class="mind-pill ${sleepPill.cls}" title="${esc(sleepPill.title)}">${sleepPill.text}</span>
-      <span class="mind-pill" title="${d.mode === 'roleText' ? '当前用整段角色卡（persona.roleText），分槽身份不生效。到「身份」页可以改回分槽。' : '当前用分槽身份：名字 / 形象 / 说话习惯 / 场合 / 硬规矩。'}">${d.mode === 'roleText' ? '身份：整段角色卡' : '身份：分槽'}</span>
       <span style="flex:1"></span>
       ${mode === 'identity' ? `<button class="btn btn-small" id="mind-birth">${mindBirthOpen ? '收起草案' : '出生仪式'}</button>` : ''}
       <button class="btn btn-small" id="mind-refresh">刷新</button>
@@ -173,27 +193,75 @@ function mindStateSection(d) {
       ${(shown.hardRules || []).length ? `<div class="mind-slot"><div class="k">不能破的几条</div><ul class="mind-rules">${shown.hardRules.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}`;
 
   const self = d.self || {};
+  const selfForm = mindSelfEditing ? `
+    <div class="mind-form">
+      <label>她对自己的描述
+        <textarea id="mind-self-narrative" style="min-height:96px">${esc(self.narrative || '')}</textarea>
+      </label>
+      <label>此刻心情
+        <input type="text" id="mind-self-mood" value="${esc(self.mood?.label || '')}" placeholder="有点闷 / 挺平静" />
+      </label>
+      <div class="hint">这是她自己写的话。改它等于改写她已经有过的自我，不建议频繁动。</div>
+      <div class="mind-actions">
+        <button class="btn btn-primary btn-small" id="mind-self-save">保存修改</button>
+        <button class="btn btn-small" id="mind-self-cancel">取消</button>
+        <span class="muted" id="mind-self-msg"></span>
+      </div>
+    </div>` : '';
+
   const selfBody = `
     <div class="mind-slot">
       <div class="k">v${self.version || 0}${self.updatedAt ? ` · ${fmtTime(self.updatedAt)} 更新` : ''}</div>
       <div class="v">${esc(self.narrative || '（还没认真想过自己是个什么样的人）')}</div>
     </div>
     <div class="mind-slot"><div class="k">此刻心情</div><div class="v">${esc(self.mood?.label || '说不清')}</div></div>
-    ${(self.preoccupations || []).length ? `<div class="mind-slot"><div class="k">挂心的事</div><div class="mind-chips">${self.preoccupations.map((p) => `<span class="mind-chip">${esc(p)}</span>`).join('')}</div></div>` : ''}`;
+    ${(self.preoccupations || []).length ? `<div class="mind-slot"><div class="k">挂心的事</div><div class="mind-chips">${self.preoccupations.map((p) => `<span class="mind-chip">${esc(p)}</span>`).join('')}</div></div>` : ''}
+    <div class="mind-actions" style="margin-top:10px">
+      <button class="btn btn-small" id="mind-edit-self">${mindSelfEditing ? '收起编辑' : '手动修改'}</button>
+      <span class="muted">修改会记为「主人修改」，她之后的反思仍可继续改写</span>
+    </div>
+    ${selfForm}`;
 
   const relBody = (d.relations || []).length
-    ? d.relations.map((r) => `
+    ? d.relations.map((r) => {
+      const editing = mindRelEditing === String(r.userId);
+      const editForm = editing ? `
+        <div class="mind-form" style="margin-top:8px">
+          <div class="mind-grid" style="gap:10px">
+            <label>称呼<input type="text" id="mind-rel-nickname" value="${esc(r.nickname || '')}" /></label>
+            <label>阶段
+              <select id="mind-rel-stage">
+                ${Object.entries(MIND_STAGE).map(([k, v]) => `<option value="${k}"${k === r.stage ? ' selected' : ''}>${esc(v)}</option>`).join('')}
+              </select>
+            </label>
+            <label>信任（0~100）<input type="number" id="mind-rel-trust" min="0" max="100" value="${mindClamp(r.trust)}" /></label>
+            <label>亲近（0~100）<input type="number" id="mind-rel-warmth" min="0" max="100" value="${mindClamp(r.warmth)}" /></label>
+          </div>
+          <label>雷点（一行一条）
+            <textarea id="mind-rel-tender" style="min-height:56px">${esc((r.tender || []).join('\n'))}</textarea>
+          </label>
+          <div class="mind-actions">
+            <button class="btn btn-primary btn-small" data-rel-save="${esc(r.userId)}">保存修改</button>
+            <button class="btn btn-small" data-rel-cancel="1">取消</button>
+            <span class="muted" id="mind-rel-msg"></span>
+          </div>
+        </div>` : '';
+      return `
       <div class="mind-rel">
         <div class="mind-rel-head">
           <span class="mind-rel-name">${esc(r.nickname || r.names?.[0] || r.userId)}</span>
           <span class="mind-rel-meta">${esc(r.userId)} · ${esc(MIND_STAGE[r.stage] || r.stage)} · 把握 ${Math.round((r.confidence || 0) * 100)}%</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-small" data-rel-edit="${esc(r.userId)}">${editing ? '收起' : '编辑'}</button>
         </div>
         <div class="mind-bar" title="信任 ${mindClamp(r.trust)}"><i style="width:${mindClamp(r.trust)}%"></i></div>
         ${(r.knownFor || []).length ? `<div class="mind-rel-line">知道：${esc(r.knownFor.join('；'))}</div>` : ''}
         ${(r.tender || []).length ? `<div class="mind-rel-line">别提：${esc(r.tender.join('；'))}</div>` : ''}
         ${(r.openLoops || []).length ? `<div class="mind-rel-line">还没问完：${esc(r.openLoops.join('；'))}</div>` : ''}
         ${r.recentSummary ? `<div class="mind-rel-line">上次：${esc(r.recentSummary)}</div>` : ''}
-      </div>`).join('')
+        ${editForm}
+      </div>`;
+    }).join('')
     : '<div class="mind-empty">还没有对谁形成看法。</div>';
 
   const win = sleep.window;
@@ -591,6 +659,23 @@ function mindBindEvents(box) {
   $('#mind-reset-rhythm')?.addEventListener('click', resetMindRhythm);
   $('#mind-clear-logs')?.addEventListener('click', clearMindLogs);
   $('#mind-to-charter')?.addEventListener('click', switchToCharter);
+  // 主人手动编辑：自我 / 关系
+  $('#mind-edit-self')?.addEventListener('click', () => { mindSelfEditing = !mindSelfEditing; renderMindPage(); });
+  $('#mind-self-cancel')?.addEventListener('click', () => { mindSelfEditing = false; renderMindPage(); });
+  $('#mind-self-save')?.addEventListener('click', saveSelfEdit);
+  box.querySelectorAll?.('[data-rel-edit]')?.forEach((el) => {
+    el.addEventListener('click', () => {
+      const uid = String(el.dataset.relEdit || '');
+      mindRelEditing = mindRelEditing === uid ? '' : uid;
+      renderMindPage();
+    });
+  });
+  box.querySelectorAll?.('[data-rel-save]')?.forEach((el) => {
+    el.addEventListener('click', () => saveRelationEdit(String(el.dataset.relSave || '')));
+  });
+  box.querySelectorAll?.('[data-rel-cancel]')?.forEach((el) => {
+    el.addEventListener('click', () => { mindRelEditing = ''; renderMindPage(); });
+  });
   $('#mind-prof-save')?.addEventListener('click', () => saveProfile(false));
   $('#mind-prof-clear')?.addEventListener('click', () => saveProfile(true));
   $('#mind-prof-key')?.addEventListener('change', fillProfileForm);
@@ -730,6 +815,66 @@ async function resetMindRhythm() {
   } catch (e) {
     const m = $('#mind-rhythm-msg');
     if (m) m.textContent = `恢复失败：${e.message}`;
+  }
+}
+
+/** 主人手动修改"她对自己的描述"（留痕 by:owner）。 */
+async function saveSelfEdit() {
+  const narrative = String($('#mind-self-narrative')?.value || '').trim();
+  const moodLabel = String($('#mind-self-mood')?.value || '').trim();
+  if (!narrative) {
+    const m = $('#mind-self-msg');
+    if (m) m.textContent = '描述不能为空';
+    return;
+  }
+  if (!(await mindConfirm(MIND_ETHICS_SELF))) return;
+  const msg = $('#mind-self-msg');
+  if (msg) msg.textContent = '保存中…';
+  try {
+    const r = await api('/api/mind/self/edit', {
+      method: 'POST',
+      body: JSON.stringify({ narrative, moodLabel, reason: '主人在界面里手动修改' })
+    });
+    if (!r?.ok) throw new Error(r?.error || '修改失败');
+    mindSelfEditing = false;
+    await loadMindPage();
+  } catch (e) {
+    const m = $('#mind-self-msg');
+    if (m) m.textContent = `失败：${e.message}`;
+  }
+}
+
+/** 主人手动修改某段关系（留痕 owner:manual）。 */
+async function saveRelationEdit(userId) {
+  if (!userId) return;
+  const numOrUndef = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : undefined;
+  };
+  const patch = {
+    nickname: String($('#mind-rel-nickname')?.value || '').trim(),
+    stage: String($('#mind-rel-stage')?.value || '').trim(),
+    tender: String($('#mind-rel-tender')?.value || '').split('\n').map((s) => s.trim()).filter(Boolean)
+  };
+  const trust = numOrUndef($('#mind-rel-trust')?.value);
+  const warmth = numOrUndef($('#mind-rel-warmth')?.value);
+  if (trust !== undefined) patch.trust = trust;
+  if (warmth !== undefined) patch.warmth = warmth;
+
+  if (!(await mindConfirm(MIND_ETHICS_RELATION))) return;
+  const msg = $('#mind-rel-msg');
+  if (msg) msg.textContent = '保存中…';
+  try {
+    const r = await api('/api/mind/relation/edit', {
+      method: 'POST',
+      body: JSON.stringify({ userId, patch })
+    });
+    if (!r?.ok) throw new Error(r?.error || '修改失败');
+    mindRelEditing = '';
+    await loadMindPage();
+  } catch (e) {
+    const m = $('#mind-rel-msg');
+    if (m) m.textContent = `失败：${e.message}`;
   }
 }
 

@@ -131,8 +131,10 @@ await sandbox.loadMindPage();
   check(html.includes('压缩 2 条'), '反思产出摘要');
   check(html.includes('什么时候会反思'), '反思触发条件可见（不用干等）');
   check(html.includes('mind-reflect-now'), '有手动触发反思的按钮');
-  check(html.includes('身份：分槽'), '身份来源胶囊标明模式');
+  check(!html.includes('身份：分槽'), '身份来源胶囊已移除（改不回去的说明只会困惑）');
   check(html.includes('作息未启用'), '未开启作息时胶囊显示"未启用"');
+  check(html.includes('mind-edit-self'), '自我描述可手动修改（有伦理提示）');
+  check(html.includes('data-rel-edit="777"'), '关系可手动编辑');
   check(!html.includes('开关与作息'), '状态页不混入设定（开关在「身份」页）');
 }
 

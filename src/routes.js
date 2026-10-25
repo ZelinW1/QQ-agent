@@ -1202,6 +1202,63 @@ export function createRoutes(deps) {
       }
     },
     {
+      // 主人手动编辑"她对自己的描述"。
+      // 与工具 self_revise 的区别：来源记为 owner（changelog 可追溯），
+      // 而且**不做人格底线校验之外的新限制** —— 主人本来就该有最终决定权。
+      // 界面上有伦理提示：这是改写她已经经历过的自我，不建议当基因编辑用。
+      method: 'POST', pattern: '/api/mind/self/edit',
+      handler: async ({ req, res, json }) => {
+        const mind = orchestrator?.mind || null;
+        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        let body = {};
+        try { body = await readBody(req); } catch { body = {}; }
+
+        const patch = {};
+        if (typeof body.narrative === 'string') patch.narrative = body.narrative.slice(0, 1200);
+        if (body.moodLabel !== undefined || body.moodValence !== undefined) {
+          patch.mood = { label: String(body.moodLabel ?? '').slice(0, 20), valence: body.moodValence };
+        }
+        if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: '没有要修改的内容' });
+
+        const r = mind.reviseSelf(patch, {
+          by: 'owner',
+          reason: String(body.reason || '主人在界面里手动修改').slice(0, 120)
+        });
+        if (!r.ok) return json(res, 200, { ok: false, error: r.reason || '修改被拒绝' });
+        return json(res, 200, { ok: true, version: r.self.version, narrative: r.self.narrative });
+      }
+    },
+    {
+      // 主人手动编辑某段关系（信任/亲近/阶段/称呼/雷点）。
+      // evidence 记 'owner:manual'，之后看关系档案时能分辨"这是她自己处出来的"还是"主人改的"。
+      method: 'POST', pattern: '/api/mind/relation/edit',
+      handler: async ({ req, res, json }) => {
+        const mind = orchestrator?.mind || null;
+        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        let body = {};
+        try { body = await readBody(req); } catch { body = {}; }
+
+        const userId = String(body.userId || '').trim();
+        if (!/^\d{1,15}$/.test(userId)) return json(res, 400, { ok: false, error: 'userId 必须是数字 QQ 号' });
+
+        const ALLOW = ['nickname', 'stage', 'trust', 'warmth', 'knownFor', 'tender', 'recentSummary'];
+        const patch = {};
+        for (const k of ALLOW) if (body.patch && body.patch[k] !== undefined) patch[k] = body.patch[k];
+        if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: '没有要修改的内容' });
+
+        const r = mind.patchRelation(userId, patch, { evidence: ['owner:manual'], now: Date.now() });
+        if (!r.ok) return json(res, 200, { ok: false, error: r.reason || '修改失败' });
+        return json(res, 200, {
+          ok: true,
+          relation: {
+            userId, stage: r.relation.stage, trust: r.relation.trust,
+            warmth: r.relation.warmth, nickname: r.relation.nickname
+          },
+          clamp: r.clamp || []
+        });
+      }
+    },
+    {
       // 心跳日志：最近心跳（内存，含跳过）+ 已落盘的行动/反思 + 文件体积。
       // 分开给两份数据是刻意的：跳过的心跳每 60 秒一次，写盘会无限膨胀；
       // 但用户排查时又需要看到"她刚才为什么没动"，所以放内存里滚动保留。

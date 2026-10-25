@@ -220,6 +220,41 @@ await check('清空日志：只清日志文件，不动记忆', async () => {
   assert.equal(log.actions.length, 0, '行动日志已清空');
 });
 
+await check('主人手动修改自我：留痕 by=owner，她仍可继续改写', async () => {
+  const before = (await env.request('GET', '/api/mind/state')).data;
+  const r = await env.request('POST', '/api/mind/self/edit', {
+    body: { narrative: '我是小鲸鱼。这是主人手动改过的一句。', moodLabel: '平静' }
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.ok, true);
+  const after = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(after.self.version, before.self.version + 1, '版本 +1');
+  assert.ok(after.self.narrative.includes('主人手动改过'), '内容已更新');
+  assert.ok(!String(r.data.error || '').length, '没有错误');
+});
+
+await check('主人手动修改关系：数值钳制 + 留痕 owner:manual', async () => {
+  const r = await env.request('POST', '/api/mind/relation/edit', {
+    body: { userId: '777', patch: { nickname: '王哥', trust: 90, warmth: 90, stage: 'close' } }
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.ok, true);
+  // 存储层钳制：阶段一次一级、trust 单次 ±10
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  const rel = d.relations.find((x) => x.userId === '777');
+  assert.ok(rel.trust <= 90, 'trust 有值');
+  assert.ok(['familiar', 'close'].includes(rel.stage), `阶段被钳制（${rel.stage}）`);
+});
+
+await check('手动编辑的入参校验', async () => {
+  const badUser = await env.request('POST', '/api/mind/relation/edit', { body: { userId: 'abc', patch: { trust: 50 } } });
+  assert.equal(badUser.status, 400);
+  const empty = await env.request('POST', '/api/mind/relation/edit', { body: { userId: '777', patch: {} } });
+  assert.equal(empty.status, 400);
+  const noBody = await env.request('POST', '/api/mind/self/edit', { body: {} });
+  assert.equal(noBody.status, 400);
+});
+
 // ── 5. 安全性 ───────────────────────────────────────────────────────────
 await check('响应里不含任何密钥字段', async () => {
   const r = await env.request('GET', '/api/mind/state');
@@ -240,10 +275,11 @@ await check('设置 roleText 后，模式切到 roleText（UI 要如实显示）
 });
 
 await check('关闭 mind 后 enabled=false，但仍能读到她的状态（只读不隐藏）', async () => {
+  const before = (await env.request('GET', '/api/mind/state')).data;
   await env.request('POST', '/api/config', { body: { mind: { enabled: false } } });
   const d = (await env.request('GET', '/api/mind/state')).data;
   assert.equal(d.enabled, false);
-  assert.equal(d.self.version, 3);
+  assert.equal(d.self.version, before.self.version, '关闭后仍能读到自我（版本不变）');
 });
 
 await env.teardown();
