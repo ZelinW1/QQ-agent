@@ -302,13 +302,9 @@ a, button, input, textarea, select, summary,
 .banner.hidden { display: block !important; opacity: 0; height: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; border-bottom-width: 0; animation: none; }
 .banner a { color: var(--ac); }
 
-/* ══ 5. 导航页签 ══ */
-#tabs {
-  display: flex; align-items: center; gap: 2px;
-  padding: 0 14px; height: 44px; flex: 0 0 auto;
-  border-bottom: 1px solid var(--bd); background: var(--bg1);
-  overflow-x: auto; scrollbar-width: none; position: relative;
-}
+/* ══ 5. 导航页签 ══
+   布局本身在文件末尾的「一级竖向导航」段里定义（那条规则才是生效的）。
+   这里只保留滚动条与公共的 .tab 外观，避免同一个选择器被定义两次。 */
 #tabs::-webkit-scrollbar { display: none; }
 .nav-spacer { flex: 1; }
 .tab {
@@ -1876,9 +1872,9 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 body { --rail-w: 104px; --topbar-h: 52px; }
 #tabs {
   position: fixed; left: 0; top: var(--topbar-h); bottom: 0; width: var(--rail-w);
-  height: auto; flex-direction: column; align-items: stretch;
+  display: flex; flex-direction: column; align-items: stretch;
   justify-content: flex-start; gap: 4px;
-  padding: 12px 10px;
+  padding: 12px 10px; background: var(--bg1);
   border-bottom: none; border-right: 1px solid var(--bd);
   overflow: visible; z-index: 20;
   transition: width .16s var(--ease-out-quart, ease);

@@ -921,27 +921,17 @@ function bindSettingsEvents(c) {
     });
   }).catch(() => {});
 
-  // ── 检查更新（桌面端区块） ──
+  // ── 版本（只显示本地版本，不联网检查） ──
   const curVerEl = $('#update-current');
   if (curVerEl) {
     api('/api/version').then((d) => { curVerEl.textContent = `v${d.version || '?'}`; })
       .catch(() => { curVerEl.textContent = ''; });
   }
-  const checkUpdateBtn = $('#check-update-btn');
-  if (checkUpdateBtn) checkUpdateBtn.addEventListener('click', async () => {
-    const hint = $('#update-hint');
-    checkUpdateBtn.disabled = true;
-    if (hint) hint.textContent = '检查中…';
-    const data = await runUpdateCheck({ manual: true });   // 手动：即使关过浮窗也再弹一次
-    if (!data) {
-      if (hint) hint.textContent = '检查失败：网络不可达';
-    } else if (!data.ok) {
-      if (hint) hint.textContent = `检查失败：${data.error || '未知错误'}`;
-    } else if (data.hasUpdate) {
-      // 有新版：给下载链接。Electron 里 target=_blank 会被 main.js 转给系统浏览器。
-      if (hint) hint.innerHTML = `发现新版本 <b>v${esc(data.latest)}</b>（当前 v${esc(data.current)}） <a href="${esc(data.url)}" target="_blank" rel="noopener">去下载</a>`;
-    } else if (hint) hint.textContent = `已是最新（v${data.current}）`;
-    checkUpdateBtn.disabled = false;
+  // 仓库链接：Electron 里交给系统浏览器（target=_blank 本来也会被 main.js 接管，
+  // 这里显式处理是为了不依赖那层兜底，同时让"点了有反应"可被静态审计到）
+  $('#open-repo-link')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open('https://github.com/ZelinW1/QQ-agent', '_blank', 'noopener');
   });
 
   // ── OneBot 区块事件 ──

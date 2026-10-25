@@ -54,10 +54,10 @@ function allowed(kind, id, cfg) {
   return cfg.allowAllWhenEmpty === true;
 }
 
-// ── 版本更新检查 ─────────────────────────────────────────────────────
-// 线上版本信息只有一份：kondius.cn/qq-agent/version.json（发版时手动改）。
-// 由后端代取而不是前端直连：绕过 CORS，且失败信息能统一回给 UI。
-const UPDATE_INFO_URL = 'https://kondius.cn/qq-agent/version.json';
+// ── 版本 ─────────────────────────────────────────────────────────────
+// 本分支不做线上更新检查（原实现会请求原作者服务器的 version.json，
+// 把上游版本当成"你的新版本"）。版本号只从 package.json 读。
+// 升级方式：自己拉仓库或替换安装包 —— 见 routes.js 的 REPO_URL。
 
 function localVersion() {
   try {
@@ -1294,7 +1294,7 @@ export function createApp({ log = console.log } = {}) {
   const apiRoutes = createRoutes({
     store, memory, sessions, onebot, orchestrator,
     emit, log,
-    localVersion, compareSemver, UPDATE_INFO_URL,
+    localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
     readBody, authorize,
     snowlumaDir, snowlumaWsPort, snowlumaWebuiUrl, snowlumaWebuiPort, snowlumaStatus, snowlumaLogs,

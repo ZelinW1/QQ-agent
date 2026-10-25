@@ -647,52 +647,11 @@ function openSite() {
   window.open('https://kondius.cn/qq-agent', '_blank', 'noopener');
 }
 
-// ── 自动检查更新 ──
-// 节奏：启动时一次 + 之后每小时一次（version.json 作者手动改，这个频率足够）。
-// 有更新 → 弹浮窗引导下载；用户手动关掉浮窗 → 本次启动内不再弹（重启恢复）。
-// 但只要检测到新版，设置侧栏「桌面端」右侧就一直挂红点，直到版本追平。
-let updateAvailable = false;
-let updateToastDismissed = false;   // 本次启动内用户关过更新浮窗
-
-function renderUpdateDot() {
-  // 侧栏菜单每次重渲染都会重建（菜单 HTML 里已按 updateAvailable 画了点）；
-  // 这里兜底处理"侧栏已渲染完、检测结果刚到"的情况。
-  const item = document.querySelector('.settings-menu-item[data-section="desktop"]');
-  if (!item) return;
-  let dot = item.querySelector('.update-dot');
-  if (updateAvailable && !dot) {
-    dot = document.createElement('span');
-    dot.className = 'update-dot';
-    item.appendChild(dot);
-  } else if (!updateAvailable && dot) {
-    dot.remove();
-  }
-  // 桌面端页签的版本文案同步：有新版时"检查线上是否有新版本"→"发现新版本"
-  const st = document.getElementById('update-status-text');
-  if (st) {
-    st.innerHTML = updateAvailable ? '<b style="color:var(--orange)">；发现新版本</b>' : '；检查线上是否有新版本';
-  }
-}
-
-async function runUpdateCheck({ manual = false } = {}) {
-  try {
-    const data = await api('/api/update-check');
-    if (!data?.ok) return data;   // 网络/服务器错误原样返回，手动检查要显示原因
-    updateLatest = data;
-    updateAvailable = !!data.hasUpdate;
-    renderUpdateDot();
-    // 自动检查弹浮窗；本次启动内被用户关过就不再弹（手动点「检查更新」除外）
-    if (updateAvailable && (!updateToastDismissed || manual)) {
-      showUploadToast(
-        `发现新版本 v${data.latest}（当前 v${data.current}）`,
-        data.url,
-        { onClose: () => { updateToastDismissed = true; } }
-      );
-    }
-    return data;
-  } catch { return null; }
-}
-let updateLatest = null;
+// ── 更新检查：本分支不做 ──
+// 原实现会在启动时请求原作者服务器上的 version.json，并把上游版本当成
+// "你的新版本"来提示下载。分支里这是错的：升级由使用者自己拉仓库/换包。
+// 保留这个常量是因为侧栏菜单的红点逻辑仍在读它（恒为 false 即从不显示红点）。
+const updateAvailable = false;
 
 // ── 金句上传 ──
 state.quoteMode = false;

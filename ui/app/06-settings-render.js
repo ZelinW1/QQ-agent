@@ -1004,12 +1004,15 @@ function renderDesktopSection(c) {
       <span class="hint" id="reset-data-hint" style="margin-left:10px"></span>
       <div class="hint" style="margin-top:6px">⚠️ 此操作会删除所有用户数据（配置、聊天记录、记忆、表情包），不可恢复。建议先备份。</div>
     </div>
-    <h3>版本更新</h3>
-    <div class="field"><label>当前版本 <b id="update-current">…</b><span id="update-status-text">${(typeof updateAvailable !== 'undefined' && updateAvailable) ? '<b style="color:var(--orange)">；发现新版本</b>' : '；检查线上是否有新版本'}</span></label>
-      <div style="display:flex;gap:10px;align-items:center">
-        <button class="btn btn-small" id="check-update-btn">检查更新</button>
-        <span class="hint" id="update-hint" style="margin:0"></span>
-      </div></div>`;
+    <h3>版本</h3>
+    <div class="field">
+      <label>当前版本 <b id="update-current">…</b></label>
+      <div class="hint" style="margin-top:6px">
+        本分支<strong>不连接任何更新服务器</strong>（不会去查原作者的 version.json）。
+        升级方式：从 <a href="https://github.com/ZelinW1/QQ-agent" id="open-repo-link" target="_blank" rel="noopener">仓库</a>
+        拉取代码，或直接替换安装包。
+      </div>
+    </div>`;
 }
 
 function renderOnebotSection(c) {

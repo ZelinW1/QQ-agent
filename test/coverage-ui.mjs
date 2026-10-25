@@ -185,25 +185,25 @@ await c.check('两个页面的主题机制统一：data-theme + qqa-theme', () =
 
 c.section('2.1 页签 ↔ 视图容器');
 
-await c.check('每个页签都有对应的 view-<name> 容器', () => {
-  const tabs = [...html.matchAll(/data-tab="([\w-]+)"/g)].map((m) => m[1]);
-  assert.ok(tabs.length >= 5, `页签数量异常（${tabs.length}）：${tabs.join(', ')}`);
-  const missing = tabs.filter((t) => !html.includes(`id="view-${t}"`));
-  assert.equal(missing.length, 0,
-    `这些页签没有对应的视图容器（点上去会没有任何反应）：${missing.join(', ')}`);
+await c.check('一级导航的每个二级项都有对应的视图容器', () => {
+  // 现在的结构是「一级分组(her/records/settings) + 二级导航项」，
+  // 二级项通过 view 字段指向真正的视图容器。旧的 data-tab 已不存在。
+  const views = [...appJs.matchAll(/\{ id: '[\w-]+', label: '[^']+', view: '([\w-]+)'/g)].map((m) => m[1]);
+  const unique = [...new Set(views)];
+  assert.ok(unique.length >= 4, `二级导航项数量异常（${unique.length}）：${unique.join(', ')}`);
+  for (const v of unique) {
+    assert.ok(html.includes(`id="view-${v}"`), `二级项指向的视图容器不存在：view-${v}`);
+  }
+  // 一级分组：心智 / 记录 / 设置
+  const navs = [...html.matchAll(/data-nav="([\w-]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(navs, ['her', 'records', 'settings'], `一级分组异常：${navs.join(', ')}`);
 });
 
-await c.check('「插件」页签存在，且紧挨着「技能」右边', () => {
-  const tabs = [...html.matchAll(/data-tab="([\w-]+)"/g)].map((m) => m[1]);
-  const i = tabs.indexOf('skills');
-  assert.ok(i >= 0, '找不到「技能」页签');
-  assert.ok(tabs.includes('plugins'), '找不到「插件」页签');
-  assert.equal(tabs[i + 1], 'plugins',
-    `「插件」应当紧跟在「技能」右边，实际顺序：${tabs.join(' → ')}`);
-  // 两个视图容器也都得在
-  for (const id of ['view-skills', 'view-plugins']) {
-    assert.ok(html.includes(`id="${id}"`), `缺少视图容器 ${id}`);
-  }
+await c.check('工具与技能合并为一个设置分区（不再有独立的技能/插件页签）', () => {
+  // 页签时代已过去：技能与插件合并进「工具与技能」，不再各占一个入口。
+  assert.ok(appJs.includes("['tools', '工具与技能']"), '缺少「工具与技能」分区');
+  assert.ok(!appJs.includes("['skills', '技能']"), '仍有独立的「技能」入口');
+  assert.ok(!appJs.includes("['plugins', '插件']"), '仍有独立的「插件」入口');
 });
 
 await c.check('切换页签会加载对应页（switchTab 里两个分支都在）', () => {
@@ -223,13 +223,13 @@ await c.check('技能页与插件页按 kind 隔离（不会把插件渲染进�
     `条目过滤没有按 kind 判型：${m[1]}`);
 });
 
-await c.check('landing.html 的下载链接带版本号（官网同目录部署，相对路径即可）', () => {
-  // 2026-09-07 起下载链接刻意改为"带版本号的相对路径"（commit e359c29）：
-  // 安装包与落地页同目录部署在官网，相对路径在部署环境有效；
-  // "必须绝对地址"的旧断言是按本地服务口径写的，与部署事实相反。
-  const m = /href="([^"]*qq-agent-v[\d.]+-setup\.exe)"/.exec(landing);
+await c.check('landing.html 的下载链接指向同目录安装包（文件名带版本）', () => {
+  // 安装包与落地页同目录部署在官网，相对路径在部署环境有效。
+  // 分支后安装包改名（QQ-Agent-V0.4-Preview-Setup.exe），这里不再绑死原作者的命名。
+  const m = /href="([\w.-]+\.exe)"/.exec(landing);
   assert.ok(m, '找不到安装包下载链接');
-  assert.ok(/^[\w.-]+\.exe$/.test(m[1]), `应为同目录相对文件名（带版本号），实际：${m[1]}`);
+  assert.ok(/^[\w.-]+\.exe$/.test(m[1]), `应为同目录相对文件名，实际：${m[1]}`);
+  assert.ok(/v?\d+\.\d+/i.test(m[1]), `文件名应带版本号，实际：${m[1]}`);
 });
 
 // ── 3. vendor 镜像一致性 ─────────────────────────────────────────────────
@@ -272,7 +272,9 @@ await c.check('app.js 里 $(\'#id\') / getElementById 引用的 id 都能被创�
     'cfg-useofficialprice', 'cfg-tools-enabled', 'cfg-imagesend',
     'cfg-persona-unified', 'cfg-autostart', 'cfg-closetray', 'cfg-showvision',
     'cfg-proactive', 'cfg-sticker', 'cfg-websearch', 'cfg-allowallwhenempty',
-    'cfg-mem-consolidate', 'cfg-mem-usechat'
+    'cfg-mem-consolidate', 'cfg-mem-usechat',
+    // 心智页的开关走 switchHtml(id, …)，静态扫描同样看不到
+    'mind-sw-on', 'mind-sw-sleep'
   ]);
   const refs = new Set();
   for (const m of appJs.matchAll(/\$\('#([\w-]+)'\)/g)) refs.add(m[1]);

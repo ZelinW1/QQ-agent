@@ -116,12 +116,14 @@ c.section('1. 状态 / 用量 / 价格');
     assert.ok(r.data && typeof r.data === 'object');
   });
 
-  await c.check('GET /api/update-check：联网检查更新，失败也返回结构化结果', async () => {
+  await c.check('GET /api/update-check：只报本地版本与本分支仓库（不联网）', async () => {
     const r = await hit('GET', '/api/update-check');
-    assert.equal(r.status, 200, `应 200（失败也走 ok:false），实际 ${r.status}`);
-    assert.ok('ok' in r.data, '应返回 ok 字段');
-    assert.ok('current' in r.data, '应返回当前版本');
-    assert.ok(r.data.ok === true ? typeof r.data.hasUpdate === 'boolean' : true, '成功时应给出 hasUpdate');
+    assert.equal(r.status, 200);
+    assert.equal(r.data.ok, true);
+    assert.equal(r.data.mode, 'local', '不应再去请求上游 version.json');
+    assert.ok(r.data.current, '应返回当前版本');
+    assert.equal(r.data.hasUpdate, false, '分支不主动报"有新版本"');
+    assert.ok(String(r.data.repo || '').includes('ZelinW1/QQ-agent'), '应给出本分支仓库地址');
   });
 }
 

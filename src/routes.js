@@ -36,6 +36,9 @@ import { getGlobalBlocklist, updateGlobalBlocklist, FIXED_PRICE_FEED_URL } from 
 import { listAccounts, removeAccount, loginAccount, publishModule, verifyInstallCodes, installByCode } from './market.js';
 import { detectDialect as detectThinkingDialect } from './thinking.js';
 
+// 本分支的仓库地址：版本页只展示它，不去任何服务器查"有没有新版本"。
+const REPO_URL = 'https://github.com/ZelinW1/QQ-agent';
+
 /**
  * 构建路由表。
  * @param {object} deps 依赖注入
@@ -45,7 +48,7 @@ export function createRoutes(deps) {
     store, memory, sessions, onebot, orchestrator,
     emit, log,
     // app.js 内部的过程/状态
-    localVersion, compareSemver, UPDATE_INFO_URL,
+    localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
     readBody, authorize,
     snowlumaDir, snowlumaWsPort, snowlumaWebuiUrl, snowlumaStatus, snowlumaLogs,
@@ -1618,25 +1621,19 @@ export function createRoutes(deps) {
       handler: async ({ res, json }) => json(res, 200, { version: localVersion() })
     },
     {
+      // 版本信息：只报本地版本与本分支仓库，**不联网**。
+      // 原来的实现会去请求原作者服务器上的 version.json —— 对分支来说这是个错误：
+      // 它会把上游版本当成"你的新版本"，还引导你去下载上游包。
       method: 'GET', pattern: '/api/update-check',
-      handler: async ({ res, json }) => {
-        const current = localVersion();
-        try {
-          const r = await fetch(UPDATE_INFO_URL, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const info = await r.json();
-          const latest = String(info.version || '');
-          if (!latest) throw new Error('version.json 缺少 version 字段');
-          return json(res, 200, {
-            ok: true, current, latest,
-            hasUpdate: compareSemver(latest, current) > 0,
-            url: String(info.url || 'https://kondius.cn/qq-agent'),
-            notes: String(info.notes || '')
-          });
-        } catch (error) {
-          return json(res, 200, { ok: false, current, error: String(error?.message ?? error) });
-        }
-      }
+      handler: async ({ res, json }) => json(res, 200, {
+        ok: true,
+        mode: 'local',
+        current: localVersion(),
+        latest: localVersion(),
+        hasUpdate: false,
+        repo: REPO_URL,
+        note: '本分支不连接更新服务器；升级请自行拉取仓库或替换安装包'
+      })
     },
 
     // ── 模型 / 会话 / 存档 ───────────────────────────────────────────
