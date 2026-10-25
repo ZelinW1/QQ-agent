@@ -79,15 +79,19 @@
     <button class="tab" data-tab="plugins">插件</button>
     <button class="tab" data-tab="snowluma">SnowLuma</button>
     <button class="tab" data-tab="settings">设置</button>
-    <!-- 社区功能（右侧）：金句上传 / 意见收集。金句勾选模式下「确认金句」出现在最左 -->
+    <!-- 社区/市场入口：上游模板自带的（金句墙、意见收集、Skill/插件市场、人设广场、官网）。
+         本机自用场景下不需要，整组收起 —— 但**保留 DOM**：09-community.js 与
+         10-feedback.js 仍按 id 绑定它们，删掉会抛错。要恢复时去掉 hidden 即可。 -->
     <span class="nav-spacer"></span>
-    <button class="nav-btn hidden" id="quote-confirm-btn">确认金句</button>
-    <button class="nav-btn" id="quote-btn" title="把机器人的精彩发言收录到金句墙">金句上传</button>
-    <button class="nav-btn" id="feedback-btn" title="向作者反馈意见和建议">意见收集</button>
-    <button class="nav-btn nav-btn-market" id="skill-market-btn" title="打开 Skill 市场">Skill 市场</button>
-    <button class="nav-btn nav-btn-market" id="plugin-market-btn" title="打开插件市场">插件市场</button>
-    <button class="nav-btn nav-btn-persona" id="persona-plaza-btn" title="打开人设广场">人设广场</button>
-    <button class="nav-btn nav-btn-hot" id="open-site-btn" title="打开 QQ Agent 网站">打开网站！</button>
+    <span class="nav-extra hidden">
+      <button class="nav-btn hidden" id="quote-confirm-btn">确认金句</button>
+      <button class="nav-btn" id="quote-btn" title="把机器人的精彩发言收录到金句墙">金句上传</button>
+      <button class="nav-btn" id="feedback-btn" title="向作者反馈意见和建议">意见收集</button>
+      <button class="nav-btn nav-btn-market" id="skill-market-btn" title="打开 Skill 市场">Skill 市场</button>
+      <button class="nav-btn nav-btn-market" id="plugin-market-btn" title="打开插件市场">插件市场</button>
+      <button class="nav-btn nav-btn-persona" id="persona-plaza-btn" title="打开人设广场">人设广场</button>
+      <button class="nav-btn nav-btn-hot" id="open-site-btn" title="打开 QQ Agent 网站">打开网站！</button>
+    </span>
   </nav>
 
   <main id="layout">

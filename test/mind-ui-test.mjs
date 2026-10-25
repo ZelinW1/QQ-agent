@@ -183,6 +183,13 @@ console.log('\n=== 5. 接线 ===');
 
   const css = fs.readFileSync(path.join(ROOT, 'ui/style.css'), 'utf8');
   check(css.includes('.mind-wrap') && css.includes('.mind-rel'), '样式已定义');
+
+  // 社区/市场入口整组收起（本机自用场景不需要），但 DOM 保留 ——
+  // 09/10 两个脚本仍按 id 绑定它们，删掉会抛错。
+  const navExtra = /<span class="nav-extra hidden">[\s\S]*?open-site-btn[\s\S]*?<\/span>/.test(html);
+  check(navExtra, '社区/市场入口被整组收起且 DOM 仍在');
+  check(html.includes('id="mind-page"') && html.indexOf('data-tab="mind"') < html.indexOf('data-tab="sessions"'),
+    '心智是第一个页签');
 }
 
 // ── 6. 真实服务：脚本能被浏览器取到 ────────────────────────────────────
