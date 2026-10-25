@@ -157,34 +157,37 @@ for (let i = 0; i < 40; i++) {
 const cov = {};
 cov['首屏'] = scan('首屏');
 
-// ── 1) 逐个页签（点真实按钮）────────────────────────────────────────────
-// 注意：8 个 view 都是 index.html 里的静态节点，切页签不会新建元素
-//（它们在首屏那轮就已全部扫到）。所以这里统计"访问过的页签数"，而不是新增元素数。
-// ⚠️ 这份列表必须与 index.html 里的 .tab 保持一致 —— 漏掉一个页签，
-// 那一页的按钮就永远不会被接线检查覆盖（skills/plugins 曾经就是这样被漏掉的）。
+// ── 1) 逐组 × 逐二级项（点真实按钮）────────────────────────────────────
+// 顶层是分组（data-nav），二级是组内项（data-nav-item），两者都是真实 DOM 节点。
+// 注意：视图节点在 index.html 里静态存在，切换不会新建元素（首屏那轮已扫到），
+// 这里统计"访问过多少个二级项"，目的是**确保每一页都真的被打开过**。
 const visitedTabs = [];
-for (const t of ['sessions', 'chats', 'memory', 'mind', 'usage', 'skills', 'plugins', 'snowluma', 'settings']) {
-  const tabBtn = window.document.querySelector(`.tab[data-tab="${t}"]`);
-  if (tabBtn) tabBtn.click(); else { try { window.switchTab(t); } catch { /* ignore */ } }
-  await sleep(800);
-  visitedTabs.push(t);
-  cov[`页签/${t}`] = scan(`页签/${t}`);
+const visitedGroups = [];
+for (const groupBtn of [...window.document.querySelectorAll('.tab[data-nav]')]) {
+  const gid = groupBtn.dataset.nav;
+  groupBtn.click();
+  await sleep(700);
+  visitedGroups.push(gid);
+  // 二级项在切组后才渲染出来，必须每次重新查
+  const items = [...window.document.querySelectorAll('[data-nav-item]')].map((el) => el.dataset.navItem);
+  for (const itemId of items) {
+    const btn = window.document.querySelector(`[data-nav-item="${itemId}"]`);
+    if (!btn) continue;
+    btn.click();
+    await sleep(700);
+    const key = `${gid}/${itemId}`;
+    visitedTabs.push(key);
+    cov[`页签/${key}`] = scan(`页签/${key}`);
+  }
 }
 
-// 上面那份清单必须覆盖 index.html 声明的**全部**页签。
-// 漏一个的后果很隐蔽：那一页永远不会被接线检查扫到 —— 页面上"看得见但点了没反应"
-// 的控件就此长期潜伏（skills 页此前就是这样被漏掉的）。
-await c.check('页签遍历覆盖了 index.html 声明的全部页签', () => {
-  const declared = [...html.matchAll(/data-tab="([\w-]+)"/g)].map((m) => m[1]);
-  const missed = declared.filter((t) => !visitedTabs.includes(t));
-  if (missed.length) {
-    throw new Error(`这些页签没被遍历到（请同步本文件的页签清单）：${missed.join(', ')}`);
-  }
-  const extra = visitedTabs.filter((t) => !declared.includes(t));
-  if (extra.length) {
-    throw new Error(`遍历清单里有 index.html 未声明的页签：${extra.join(', ')}`);
-  }
-  return `${declared.length} 个页签全部覆盖`;
+// 顶层分组必须全覆盖；每个组至少有一个二级项被访问。
+await c.check('分组遍历覆盖了 index.html 声明的全部顶层分组', () => {
+  const declaredGroups = [...html.matchAll(/data-nav="([\w-]+)"/g)].map((m) => m[1]);
+  const missed = declaredGroups.filter((g) => !visitedGroups.includes(g));
+  if (missed.length) throw new Error(`这些分组没被遍历到：${missed.join(', ')}`);
+  if (!visitedTabs.length) throw new Error('没有任何二级项被访问');
+  return `${declaredGroups.length} 个分组 / ${visitedTabs.length} 个二级项`;
 });
 
 // ── 2) 设置页各分区（点侧栏菜单项）────────────────────────────────────────
@@ -207,7 +210,8 @@ const MODALS = [
   ['人设新建', 'openPersonaCreateModal', [], 'persona'],
   ['全局人设设置', 'openGlobalPersonaModal', [], 'persona'],
   ['模型选择器', 'openModelPicker', [], 'api'],
-  ['记忆模型选择器', 'openMemoryModelPicker', [], 'memory'],
+  // 「记忆模型选择器」不再测：设置页的「记忆」分区已移除（旧印象退役后
+  // 那组设置没有入口了）。函数本身还在，留着由 git 历史与类型检查看着。
   ['模型添加', 'openModelAddModal', ['https://example.com/v1', 'k', ['m1', 'm2']], 'api'],
   ['模型配置', 'openModelConfigModal', [], 'api'],
   ['模型管理', 'openModelManageModal', [], 'api'],

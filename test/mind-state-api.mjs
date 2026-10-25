@@ -128,7 +128,40 @@ await check('计数：事件与关系', async () => {
   assert.equal(d.counts.relations, 1);
 });
 
-// ── 2. 安全性 ───────────────────────────────────────────────────────────
+// ── 4. 新增的两个数据源 ─────────────────────────────────────────────────
+await check('记忆流：返回事件时间线（从新到旧）', async () => {
+  const r = await env.request('GET', '/api/mind/events?limit=5');
+  assert.equal(r.status, 200);
+  assert.ok(Array.isArray(r.data.events), 'events 是数组');
+  assert.ok(r.data.events.length >= 1, '有事件');
+  const e = r.data.events[0];
+  assert.ok(typeof e.text === 'string' && typeof e.ts === 'number', '事件有正文与时间');
+  assert.ok(typeof e.salience === 'number', '带重要度');
+});
+
+await check('会话配置：读 / 写 / 清除', async () => {
+  const g = await env.request('GET', '/api/chat-profiles');
+  assert.equal(g.status, 200);
+  assert.ok(g.data.profiles && typeof g.data.profiles === 'object', '返回 profiles 映射');
+
+  const w = await env.request('POST', '/api/chat-profiles', {
+    body: { chatKey: 'private:777', patch: { persona: { participation: 'high' } } }
+  });
+  assert.equal(w.status, 200);
+  assert.equal(w.data.profiles['private:777'].persona.participation, 'high', '覆盖已写入');
+
+  const c = await env.request('POST', '/api/chat-profiles', {
+    body: { chatKey: 'private:777', clear: true }
+  });
+  assert.equal(c.data.profiles['private:777'], undefined, '清除后键消失（不是留下空对象）');
+});
+
+await check('会话配置：缺 chatKey → 400', async () => {
+  const r = await env.request('POST', '/api/chat-profiles', { body: {} });
+  assert.equal(r.status, 400);
+});
+
+// ── 5. 安全性 ───────────────────────────────────────────────────────────
 await check('响应里不含任何密钥字段', async () => {
   const r = await env.request('GET', '/api/mind/state');
   for (const banned of ['apiKey', 'accessToken', 'baseUrl', 'Bearer ']) {

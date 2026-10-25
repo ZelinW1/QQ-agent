@@ -1862,3 +1862,32 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 .mind-chip[data-pick-name] { cursor: pointer; }
 .mind-chip[data-pick-name]:hover { color: var(--tx); }
 .mind-chip.picked { outline: 1px solid var(--ac); color: var(--tx); }
+
+/* ── 二级导航（她 / 记录 / 扩展 / 设置 之下）────────────────────────────
+   顶层是"来干什么"，这里是"具体哪一件"。样式刻意比顶层轻：
+   一级用 tab（重），二级用小号胶囊（轻），层级一眼能分出来。 */
+.subnav {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 0 18px 10px;
+}
+.subnav:empty { display: none; }
+.subnav-item {
+  appearance: none; border: 1px solid transparent; background: transparent;
+  color: var(--tx2); font: inherit; font-size: 12.5px;
+  padding: 4px 11px; border-radius: 999px; cursor: pointer;
+}
+.subnav-item:hover { background: var(--hover); color: var(--tx); }
+.subnav-item.active {
+  background: color-mix(in srgb, var(--ac) 16%, transparent);
+  color: var(--tx); border-color: color-mix(in srgb, var(--ac) 40%, transparent);
+}
+.mind-form select {
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--bd);
+  background: var(--bg0); color: var(--tx); font: inherit; font-size: 13px;
+  box-sizing: border-box; width: 100%;
+}
+.mind-form input[type="text"] {
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--bd);
+  background: var(--bg0); color: var(--tx); font: inherit; font-size: 13px;
+  box-sizing: border-box; width: 100%;
+}

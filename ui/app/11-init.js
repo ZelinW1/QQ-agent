@@ -1,12 +1,12 @@
 // 〔页签切换 / 启动〕——M9 拆分第 12 段（末段）
 'use strict';
-// ── 标签页切换 ──
-// ⚠️ 必须统一走 switchTab：曾经这里把切换逻辑 inline 复制了一份，
+// ── 顶层分组切换 ──
+// ⚠️ 必须统一走 switchNav/switchTab：曾经这里把切换逻辑 inline 复制了一份，
 //    结果漏了 usage 分支 —— 点「用量」页签只切了视图、从不加载内容，
 //    页面永远空白（轮询走的是"只更新数值"路径，骨架从未建立也救不回来）。
-//    两条路径各维护一份必然再次分叉，所以这里只准调 switchTab。
-$$('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+//    两条路径各维护一份必然再次分叉，所以这里只准调 switchNav。
+$$('.tab[data-nav]').forEach((tab) => {
+  tab.addEventListener('click', () => switchNav(tab.dataset.nav));
 });
 
 // ── 启动 ──
@@ -44,7 +44,10 @@ $$('.tab').forEach((tab) => {
     refreshStatus();
     startStatusPoller();
     connectSSE();
-    // 默认落在「心智」：这个产品的主体是她，而不是会话列表。
+    // 默认落在「她 → 状态」：这个产品的主体是她，而不是会话列表。
+    // ⚠️ 这里只做高亮与子导航，不调 switchNav/switchTab —— 启动阶段不该
+    //    多出一个异步写 state.tab 的路径（会与并发的视图加载抢状态）。
+    initNav();
     loadMindPage();
     loadSessions();
     loadMemoryView();

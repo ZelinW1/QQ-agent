@@ -120,11 +120,48 @@ await sandbox.loadMindPage();
   check(html.includes('77'), '节律：体力数值');
   check(html.includes('最近反思'), '反思卡');
   check(html.includes('压缩 2 条'), '反思产出摘要');
-  check(html.includes('开关与作息') && html.includes('mind-sleep-start'), '开关与作息卡');
-  check(html.includes('23:30'), '入睡时间用配置值填充');
+  check(!html.includes('开关与作息'), '状态页不混入设定（开关在「身份」页）');
 }
 
-// ── 2. 转义（防注入）───────────────────────────────────────────────────
+// ── 1b. 身份页（设定都在这里）───────────────────────────────────────────
+console.log('\n=== 1b. 身份页 ===');
+{
+  const { sandbox: s1b, box: b1b } = makeSandbox(STATE);
+  s1b.state = { mindMode: 'identity' };
+  await s1b.loadMindPage();
+  const html = b1b.innerHTML;
+  check(html.includes('开关与作息') && html.includes('mind-sleep-start'), '开关与作息卡');
+  check(html.includes('23:30'), '入睡时间用配置值填充');
+  check(html.includes('出生仪式'), '出生仪式入口');
+  check(html.includes('mind-f-name') && html.includes('mind-f-voice'), '身份表单（名字 / 说话习惯）');
+  check(!html.includes('最近反思'), '身份页不重复展示状态');
+}
+
+// ── 1c. 记忆流与会话配置 ───────────────────────────────────────────────
+console.log('\n=== 1c. 记忆流 / 会话配置 ===');
+{
+  const { sandbox: s1c, box: b1c } = makeSandbox(STATE, (p) => (
+    p.startsWith('/api/mind/events')
+      ? { ok: true, events: [{ id: 'e1', ts: Date.now(), actorId: '777', actorName: '小王', kind: 'interaction', text: '他说组里在裁人', salience: 0.9, tags: ['工作'], summaryOf: [] }] }
+      : null
+  ));
+  s1c.state = { mindMode: 'stream' };
+  await s1c.loadMindPage();
+  check(b1c.innerHTML.includes('记忆流'), '记忆流页');
+  check(b1c.innerHTML.includes('他说组里在裁人'), '展示事件正文');
+  check(b1c.innerHTML.includes('小王'), '展示当事人');
+
+  const { sandbox: s1d, box: b1d } = makeSandbox(STATE, (p) => (
+    p.startsWith('/api/chat-profiles')
+      ? { ok: true, profiles: { 'private:777': { persona: { participation: 'high' } } }, chatKeys: ['private:777'] }
+      : (p === '/api/chats' ? { chats: [{ key: 'private:777', name: '小王' }] } : null)
+  ));
+  s1d.state = { mindMode: 'profiles' };
+  await s1d.loadMindPage();
+  check(b1d.innerHTML.includes('会话配置'), '会话配置页');
+  check(b1d.innerHTML.includes('小王'), '列出会话名');
+  check(b1d.innerHTML.includes('已有覆盖'), '显示已有覆盖');
+}
 console.log('\n=== 2. 转义 ===');
 {
   const evil = JSON.parse(JSON.stringify(STATE));
@@ -174,22 +211,27 @@ console.log('\n=== 4. 保存 ===');
 console.log('\n=== 5. 接线 ===');
 {
   const html = fs.readFileSync(path.join(ROOT, 'ui/index.html'), 'utf8');
-  check(html.includes('data-tab="mind"'), 'index.html 有「心智」页签');
+  check(html.includes('data-nav="her"'), 'index.html 有「她」这个顶层分组');
   check(html.includes('id="view-mind"'), 'index.html 有对应视图');
+  check(html.includes('id="subnav"'), 'index.html 有二级导航容器');
   check(html.includes('/app/13-mind.js'), 'index.html 加载了 13-mind.js');
 
   const core = fs.readFileSync(path.join(ROOT, 'ui/app/00-core.js'), 'utf8');
   check(/if \(name === 'mind'\) loadMindPage\(\);/.test(core), 'switchTab 会加载心智页');
+  check(core.includes('const NAV_GROUPS = {'), '00-core 定义了信息架构表');
+  check(core.includes("id: 'stream'") && core.includes("id: 'profiles'"), '二级项包含 记忆流 / 会话配置');
 
   const css = fs.readFileSync(path.join(ROOT, 'ui/style.css'), 'utf8');
   check(css.includes('.mind-wrap') && css.includes('.mind-rel'), '样式已定义');
+  check(css.includes('.subnav-item'), '二级导航样式已定义');
 
   // 社区/市场入口整组收起（本机自用场景不需要），但 DOM 保留 ——
   // 09/10 两个脚本仍按 id 绑定它们，删掉会抛错。
   const navExtra = /<span class="nav-extra hidden">[\s\S]*?open-site-btn[\s\S]*?<\/span>/.test(html);
   check(navExtra, '社区/市场入口被整组收起且 DOM 仍在');
-  check(html.includes('id="mind-page"') && html.indexOf('data-tab="mind"') < html.indexOf('data-tab="sessions"'),
-    '心智是第一个页签');
+  // 顶层只有四个分组，且顺序是 她 → 记录 → 扩展 → 设置
+  const groups = [...html.matchAll(/data-nav="(\w+)"/g)].map((m) => m[1]);
+  check(groups.join(',') === 'her,records,ext,settings', `顶层分组顺序（${groups.join(',')}）`);
 }
 
 // ── 6. 真实服务：脚本能被浏览器取到 ────────────────────────────────────
@@ -216,6 +258,9 @@ console.log('\n=== 7. 出生仪式 ===');
   const { sandbox: s7, box: b7, calls: c7, el } = makeSandbox(STATE, (p) => (
     p === '/api/mind/charter/draft' ? { ok: true, drafts: [DRAFT] } : null
   ));
+  await s7.loadMindPage();
+  // 出生仪式在「身份」页：先切模式，否则它不会渲染（这正是分层的目的）
+  s7.state = { mindMode: 'identity' };
   await s7.loadMindPage();
   check(b7.innerHTML.includes('出生仪式'), '页面上有出生仪式入口');
 

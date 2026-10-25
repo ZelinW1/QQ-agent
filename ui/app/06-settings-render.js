@@ -41,8 +41,8 @@ function renderSettingsSidebar() {
   const menu = [
     ['api', '模型 API'],
     ['search', '搜索服务'],
-    ['memory', '记忆'],
-    ['persona', '人设'],
+    // 「人设」与「记忆」不在这里：它们已经归到顶层的「她」（身份/状态）
+    // 与「记录」（旧印象）。同一个设定有两个入口，用户就会怀疑哪边才是真的。
     ['allow', '聊天白名单'],
     ['chat', '聊天设置'],
     ['desktop', '桌面端'],

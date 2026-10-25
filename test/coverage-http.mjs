@@ -1127,6 +1127,45 @@ c.section('15. 接口覆盖率统计');
     'POST /api/qq-portable/stop'
   ]);
 
+  // ── 心智 / 会话配置（M2 新增接口）：必须在覆盖率断言之前打一遍，
+  //    否则覆盖率统计会把它们算成"未覆盖"。
+  await c.check('心智状态与记忆流接口', async () => {
+    const st = await hit('GET', '/api/mind/state');
+    assert.equal(st.status, 200);
+    assert.equal(st.data.ok, true);
+    for (const k of ['enabled', 'mode', 'charter', 'self', 'relations', 'tick', 'sleep']) {
+      assert.ok(k in st.data, `mind/state 缺少字段 ${k}`);
+    }
+    const ev = await hit('GET', '/api/mind/events?limit=5');
+    assert.equal(ev.status, 200);
+    assert.ok(Array.isArray(ev.data.events), 'events 应为数组');
+  });
+
+  await c.check('会话级配置接口（读 / 写 / 清除 / 校验）', async () => {
+    const g = await hit('GET', '/api/chat-profiles');
+    assert.equal(g.status, 200);
+    assert.ok(g.data.profiles && typeof g.data.profiles === 'object');
+
+    const w = await hit('POST', '/api/chat-profiles', {
+      body: JSON.stringify({ chatKey: 'group:456', patch: { persona: { participation: 'low' } } })
+    });
+    assert.equal(w.status, 200);
+    assert.equal(w.data.profiles['group:456'].persona.participation, 'low');
+
+    const c2 = await hit('POST', '/api/chat-profiles', { body: JSON.stringify({ chatKey: 'group:456', clear: true }) });
+    assert.equal(c2.status, 200);
+    assert.equal(c2.data.profiles['group:456'], undefined);
+
+    const bad = await hit('POST', '/api/chat-profiles', { body: JSON.stringify({}) });
+    assert.equal(bad.status, 400);
+  });
+
+  await c.check('出生仪式接口：缺种子时 400（不会去调模型）', async () => {
+    const r = await hit('POST', '/api/mind/charter/draft', { body: JSON.stringify({}) });
+    assert.equal(r.status, 400);
+    assert.ok(r.data && r.data.ok === false);
+  });
+
   await c.check('声明的 API 路由覆盖率 ≥ 90%', async () => {
     const src = fs.readFileSync(path.join(ROOT, 'src', 'routes.js'), 'utf8');
     // 正确解析：正则字面量（支持 \/ 转义与字符类），不能用非贪婪 [^\n]*?
@@ -1170,6 +1209,9 @@ c.section('15. 接口覆盖率统计');
     assert.ok(pct >= 90, `接口覆盖率只有 ${pct}%（${covered.length}/${routes.length}），未覆盖：\n  ${missing.join('\n  ')}`);
   });
 }
+
+// ── 心智 / 会话配置（M2 新增的接口，纳入覆盖率统计）──────────────
+// 放在覆盖率断言之后只作冒烟即可；真正的覆盖统计依赖上面那段提前调用。
 
 await ctx.teardown();
 c.finish();

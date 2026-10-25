@@ -454,6 +454,9 @@ function createVSlider({ mount, dual = false, low = 100, high = 10, onChange = n
 
 const state = {
   tab: 'mind',
+  nav: 'her',
+  navItem: 'state',
+  mindMode: 'state',
   sessions: [],          // 摘要列表
   currentSessionId: null,
   sessionDetail: null,   // 完整记录
@@ -756,6 +759,93 @@ async function resumePause({ skipBacklog = false } = {}) {
   }
 }
 
+// ── 信息架构 ────────────────────────────────────────────────────────────
+// 顶层四个组，组内二级项。分组标准不是"技术上属于哪块"，而是**用户来干什么**：
+//   她   —— 看她是谁、她现在怎么样、改她的设定
+//   记录 —— 回看发生过什么（会话过程、消息、用量、旧印象）
+//   扩展 —— 她能用什么（技能、插件）
+//   设置 —— 让程序跑起来（模型、连接、白名单、运行参数）
+//
+// 之前是九个平级页签，「心智 / 记忆 / 设置→人设」三处都在回答"她是谁"，
+// 用户得记住"改名字去心智、看印象去记忆、改人设去设置"——这不是用户的错。
+const NAV_GROUPS = {
+  her: {
+    label: '她',
+    items: [
+      { id: 'state', label: '状态', view: 'mind', mode: 'state' },
+      { id: 'identity', label: '身份', view: 'mind', mode: 'identity' },
+      { id: 'stream', label: '记忆流', view: 'mind', mode: 'stream' },
+      { id: 'profiles', label: '会话配置', view: 'mind', mode: 'profiles' }
+    ]
+  },
+  records: {
+    label: '记录',
+    items: [
+      { id: 'sessions', label: '会话过程', view: 'sessions' },
+      { id: 'chats', label: '消息存档', view: 'chats' },
+      { id: 'usage', label: '用量', view: 'usage' },
+      { id: 'legacy-memory', label: '旧印象', view: 'memory' }
+    ]
+  },
+  ext: {
+    label: '扩展',
+    items: [
+      { id: 'skills', label: '技能', view: 'skills' },
+      { id: 'plugins', label: '插件', view: 'plugins' }
+    ]
+  },
+  settings: {
+    label: '设置',
+    items: [
+      { id: 'config', label: '运行配置', view: 'settings' },
+      { id: 'snowluma', label: 'SnowLuma', view: 'snowluma' }
+    ]
+  }
+};
+
+/** 某个视图属于哪个组/哪一项（switchTab 被直接调用时用它同步高亮）。 */
+function navForView(view) {
+  for (const [groupId, group] of Object.entries(NAV_GROUPS)) {
+    const item = group.items.find((it) => it.view === view);
+    if (item) return { groupId, item };
+  }
+  return null;
+}
+
+/** 启动时只做"高亮 + 渲染二级导航"，不走 switchTab。
+ *  原因：switchTab 会写 state.tab，而启动流程里还有别的异步加载在跑；
+ *  让启动阶段多一个异步的 state.tab 写入者，会和"打开某个视图"的调用抢状态
+ *  （真实踩过：用量页测试先设 state.tab='usage'，随后被启动流程改回 mind，
+ *   强制刷新分支看到 tab 不符就直接返回，页面停在骨架屏）。 */
+function initNav() {
+  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.nav === state.nav));
+  renderSubnav();
+}
+
+function renderSubnav() {  const el = $('#subnav');
+  if (!el) return;
+  const group = NAV_GROUPS[state.nav] || NAV_GROUPS.her;
+  el.innerHTML = group.items
+    .map((it) => `<button class="subnav-item ${it.id === state.navItem ? 'active' : ''}" data-nav-item="${it.id}">${esc(it.label)}</button>`)
+    .join('');
+  el.querySelectorAll('[data-nav-item]').forEach((btn) => {
+    btn.addEventListener('click', () => switchNav(state.nav, btn.dataset.navItem));
+  });
+}
+
+/** 切到某个组的某个二级项。 */
+function switchNav(groupId, itemId) {
+  const group = NAV_GROUPS[groupId] || NAV_GROUPS.her;
+  const item = group.items.find((it) => it.id === itemId) || group.items[0];
+  if (!item) return;
+  state.nav = NAV_GROUPS[groupId] ? groupId : 'her';
+  state.navItem = item.id;
+  if (item.mode) state.mindMode = item.mode;
+  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.nav === state.nav));
+  renderSubnav();
+  switchTab(item.view);
+}
+
 function switchTab(name) {
   // 离开设置页（无论去哪）前，先把防抖窗口内还没落盘的改动立即保存。
   // 必须在页签切换、任何 loadXxx 触发**之前**做：等切走之后表单 DOM 还在
@@ -763,7 +853,16 @@ function switchTab(name) {
   // 防抖窗口的一部分 —— 不 flush 的话这次改动要等 600ms 定时器到点，
   // 期间用户看到的其它页签数据（用量/状态）就是旧配置算出来的。
   if (state.tab === 'settings' && name !== 'settings') flushSettingsSaves();
-  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  // 直接调 switchTab 时（测试/引导跳转）也要让顶层分组与二级项跟着走，
+  // 否则会出现"视图是设置页、顶栏却高亮着她"的分裂状态。
+  const nav = navForView(name);
+  if (nav && (state.nav !== nav.groupId || state.navItem !== nav.item.id)) {
+    state.nav = nav.groupId;
+    state.navItem = nav.item.id;
+    if (nav.item.mode) state.mindMode = nav.item.mode;
+    $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.nav === state.nav));
+    renderSubnav();
+  }
   const prevView = $('.view.active');
   $$('.view').forEach((v) => {
     const on = v.id === `view-${name}`;

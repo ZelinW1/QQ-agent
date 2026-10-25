@@ -70,15 +70,10 @@
   </div>
 
   <nav id="tabs">
-    <button class="tab active" data-tab="mind">心智</button>
-    <button class="tab" data-tab="sessions">会话</button>
-    <button class="tab" data-tab="chats">存档</button>
-    <button class="tab" data-tab="memory">记忆</button>
-    <button class="tab" data-tab="usage">用量</button>
-    <button class="tab" data-tab="skills">技能</button>
-    <button class="tab" data-tab="plugins">插件</button>
-    <button class="tab" data-tab="snowluma">SnowLuma</button>
-    <button class="tab" data-tab="settings">设置</button>
+    <button class="tab" data-nav="her">她</button>
+    <button class="tab" data-nav="records">记录</button>
+    <button class="tab" data-nav="ext">扩展</button>
+    <button class="tab" data-nav="settings">设置</button>
     <!-- 社区/市场入口：上游模板自带的（金句墙、意见收集、Skill/插件市场、人设广场、官网）。
          本机自用场景下不需要，整组收起 —— 但**保留 DOM**：09-community.js 与
          10-feedback.js 仍按 id 绑定它们，删掉会抛错。要恢复时去掉 hidden 即可。 -->
@@ -93,6 +88,9 @@
       <button class="nav-btn nav-btn-hot" id="open-site-btn" title="打开 QQ Agent 网站">打开网站！</button>
     </span>
   </nav>
+  <!-- 二级导航：由 00-core 的 NAV_GROUPS 渲染。分组的目的是让"看状态 / 改设定 /
+       翻记录 / 调运行"四件事各有归处，而不是九个平级页签互相争位置。 -->
+  <div id="subnav" class="subnav"></div>
 
   <main id="layout">
     <!-- 会话视图 -->

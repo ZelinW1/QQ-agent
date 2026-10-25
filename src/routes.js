@@ -1095,6 +1095,70 @@ export function createRoutes(deps) {
       }
     },
     {
+      // 记忆流：她经历过的事（事件时间线）。
+      // 与「最近反思」的区别：反思是压缩后的结论，这里是一手经历。
+      method: 'GET', pattern: '/api/mind/events',
+      handler: async ({ res, json, url }) => {
+        const mind = orchestrator?.mind || null;
+        if (!mind) return json(res, 200, { ok: true, events: [] });
+        const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 60));
+        const chatKey = String(url.searchParams.get('chatKey') || '').trim();
+        const includeCompacted = url.searchParams.get('compacted') === '1';
+        const events = mind.queryEvents({
+          ...(chatKey ? { chatKey } : {}),
+          limit,
+          includeCompacted
+        });
+        // 时间线从新到旧更好读（存储层按升序返回）
+        const list = events.slice().reverse().map((e) => ({
+          id: e.id, ts: e.ts,
+          chatKey: e.chatKey || '',
+          actorId: e.actorId || '',
+          actorName: e.actorName || '',
+          kind: e.kind || '',
+          text: String(e.text || ''),
+          salience: Number(e.salience) || 0,
+          valence: Number(e.valence) || 0,
+          tags: Array.isArray(e.tags) ? e.tags : [],
+          compacted: e.compacted === true,
+          summaryOf: Array.isArray(e.summaryOf) ? e.summaryOf : []
+        }));
+        return json(res, 200, { ok: true, events: list });
+      }
+    },
+    {
+      // 会话级配置：每个群/私聊独享一套覆盖（M0 做好的 chatProfiles，此前没有界面）
+      method: 'GET', pattern: '/api/chat-profiles',
+      handler: async ({ res, json }) => {
+        const cfg = getConfig();
+        return json(res, 200, {
+          ok: true,
+          profiles: cfg.chatProfiles || {},
+          chatKeys: (store.listChats?.() || [])
+        });
+      }
+    },
+    {
+      method: 'POST', pattern: '/api/chat-profiles',
+      handler: async ({ req, res, json }) => {
+        let body = {};
+        try { body = await readBody(req); } catch { body = {}; }
+        const chatKey = String(body.chatKey || '').trim();
+        if (!chatKey) return json(res, 400, { ok: false, error: '缺少 chatKey' });
+
+        const current = { ...(getConfig().chatProfiles || {}) };
+        if (body.clear === true) {
+          delete current[chatKey];
+        } else {
+          const patch = (body.patch && typeof body.patch === 'object') ? body.patch : {};
+          current[chatKey] = { ...(current[chatKey] || {}), ...patch };
+        }
+        // __replace__：映射型字段要"删掉旧键"，普通深合并做不到（见 config.deepMerge）
+        updateConfig({ chatProfiles: { __replace__: current } });
+        return json(res, 200, { ok: true, profiles: getConfig().chatProfiles || {} });
+      }
+    },
+    {
       // 出生仪式：只出草案，**不写盘**。
       // 写盘走 POST /api/config —— 必须由主人点"采用这组"之后才发生。
       // 理由：身份是一次性的，不该被一次模型调用直接定下来。

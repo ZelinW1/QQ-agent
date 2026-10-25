@@ -210,27 +210,28 @@ if (firstDay) {
   console.log('  （无按天数据，跳过）');
 }
 
-// ── 回归：模拟真实点击「用量」页签 ──
+// ── 回归：走真实导航到「记录 → 用量」 ──
 // 2026-09-05 bug：点击处理器 inline 复制了 switchTab 逻辑却漏了 usage 分支，
 // 上面直接调 loadUsageView 的测试全绿，但用户点页签永远空白。
-// 这一段走真实点击路径（触发绑定的 click 监听 → switchTab → loadUsageView）。
-console.log('\n=== 回归：模拟真实点击「用量」页签 ===');
-const usageTab = tabStubs.find((t) => t.dataset.tab === 'usage');
-const clickHandlers = (usageTab && usageTab._ev && usageTab._ev.click) || [];
-check('用量页签已绑定点击事件', clickHandlers.length > 0);
-// 先切走、清空页面，模拟用户从别的页签点过来
+// 界面改成两级导航后，"点页签"变成"切分组 + 点二级项"；
+// 这里直接调 switchNav（用户点击最终走的就是它），二级项的点击接线
+// 由 coverage-wiring 逐个真实点击覆盖。
+console.log('\n=== 回归：切到「记录 → 用量」 ===');
+const switchNavFn = ctx.switchNav || sandbox.switchNav;
+check('switchNav 已定义（分组导航入口）', typeof switchNavFn === 'function');
+// 先切走、清空页面，模拟用户从别的分组点过来
 vm.runInContext("state.tab = 'sessions';", ctx);
 usageBox.innerHTML = '';
-for (const fn of clickHandlers) fn({ preventDefault() {} });
+if (typeof switchNavFn === 'function') switchNavFn('records', 'usage');
 let clickedHtml = '';
 for (let i = 0; i < 40; i++) {
   await new Promise((r) => setTimeout(r, 100));
   clickedHtml = String(usageBox.innerHTML || '');
   if (clickedHtml.includes('用量与成本')) break;
 }
-check('点击后 state.tab = usage', vm.runInContext('state.tab', ctx) === 'usage');
-check('点击后页面有实质内容（含「用量与成本」）', clickedHtml.includes('用量与成本'), clickedHtml.slice(0, 80));
-check('点击后不是错误提示', !clickedHtml.includes('加载失败'), clickedHtml.slice(0, 80));
+check('切换后 state.tab = usage', vm.runInContext('state.tab', ctx) === 'usage');
+check('切换后页面有实质内容（含「用量与成本」）', clickedHtml.includes('用量与成本'), clickedHtml.slice(0, 80));
+check('切换后不是错误提示', !clickedHtml.includes('加载失败'), clickedHtml.slice(0, 80));
 
 await app.stop();
 console.log('\n' + (fail ? 'FAILED ' + fail : 'ALL PASSED ' + pass));
