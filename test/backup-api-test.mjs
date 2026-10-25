@@ -63,7 +63,20 @@ let zipBuf = null;
   check(JSON.stringify(cfgBefore.data.api) === JSON.stringify(cfgAfter.data.api), '本机 API 设置未被覆盖');
 }
 
-// ── 4. 坏包被拒绝 ───────────────────────────────────────────────────────
+// ── 4. 运行中禁止导入 ───────────────────────────────────────────────────
+{
+  const orch = env.app.orchestrator;
+  orch.runningChats.add('private:777');
+  const res = await fetch(`${env.base}/api/backup/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/zip' },
+    body: zipBuf
+  });
+  check(res.status === 409, `有会话在跑时导入 → 409（实际 ${res.status}）`);
+  orch.runningChats.delete('private:777');
+}
+
+// ── 5. 坏包被拒绝 ───────────────────────────────────────────────────────
 {
   const res = await fetch(`${env.base}/api/backup/import`, {
     method: 'POST',

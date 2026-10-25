@@ -44,7 +44,7 @@ function renderSettingsSidebar() {
     // 与「记录」（旧印象）。同一个设定有两个入口，用户就会怀疑哪边才是真的。
     ['allow', '聊天白名单'],
     ['onebot', 'OneBot（SnowLuma）'],
-    ['chat', '聊天设置'],
+    ['chat', '发送与群聊'],
     ['tools', '工具与技能'],
     ['search', '搜索服务'],
     ['desktop', '桌面端']
@@ -821,14 +821,12 @@ function renderChatSection(c) {
   const st = c.store || {};
   const fold = (typeof setCard === 'function') ? setCard : (o) => `<div class="setcard">${o.body}</div>`;
 return `
-    <h3>聊天设置</h3>
-    ${c?.mind?.enabled
-      ? `<div class="hint" style="margin-bottom:10px">
-           心智节律已开启：下面的「主动开话题」<strong>不再生效</strong> ——
-           什么时候开口由「她 → 节律」里的心跳与体力决定。
-           这里只保留"消息怎么送出去"的参数（温度 / 轮数 / 防抖 / 并发 / 重试）。
-         </div>`
-      : ''}
+    <h3>发送与群聊</h3>
+    <div class="hint" style="margin-bottom:12px">
+      这一页混着两类参数：<strong>怎么把消息送出去</strong>（发送与节奏，通用）与
+      <strong>群聊里怎么反应</strong>（群聊行为，一对一不适用）。下面用分组标题隔开。
+    </div>
+    <div class="settings-group-label">发送与节奏（通用）</div>
     ${fold({
       id: 'card-send-config',
       icon: '📨',
@@ -880,6 +878,7 @@ return `
       </div>
       <div class="hint">改动即时生效（自动保存），无需单独点保存。</div>`
     })}
+    <div class="settings-group-label">群聊行为（只影响群聊，一对一会忽略）</div>
     ${fold({
       id: 'card-active-config',
       icon: '⚡',
@@ -918,7 +917,11 @@ return `
       <div class="hint">改动即时生效（自动保存），无需单独点保存。</div>`
     })}
 
-    ${fold({
+    ${c?.mind?.enabled
+      // 心智开启后这组参数完全失效：不再渲染输入框，只说明现在由谁接管。
+      // 留着可编辑的控件才是真的误导 —— 用户会以为调了有用。
+      ? `<div class="hint" style="margin:10px 0">「主动开话题」已被「心智 → 节律」接管：什么时候开口由心跳与体力决定，这组旧参数不再生效。</div>`
+      : fold({
       id: 'card-proactive',
       icon: '💬',
       title: '主动开话题',
@@ -933,6 +936,7 @@ return `
       </div>`
     })}
 
+    <div class="settings-group-label">表情包（收发都适用）</div>
     ${fold({
       id: 'card-sticker',
       icon: '😄',

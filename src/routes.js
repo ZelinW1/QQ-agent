@@ -1285,6 +1285,13 @@ export function createRoutes(deps) {
       // 包里没有 config.json，所以导入**不会**覆盖本机设置与 API Key。
       method: 'POST', pattern: '/api/backup/import',
       handler: async ({ req, res, json }) => {
+        // 正在跑对话时禁止导入：她可能正在写 mind 文件，覆盖会写出半新半旧的状态。
+        // 宁可让用户先暂停，也不做"边跑边换血"。
+        const busyRuns = Number(orchestrator?.runningChats?.size) || 0;
+        const busyWake = Number(orchestrator?.pendingWake?.size) || 0;
+        if (busyRuns > 0 || busyWake > 0) {
+          return json(res, 409, { ok: false, error: '有会话正在运行或等待处理，请先点右上角「暂停」再导入' });
+        }
         const len = Number(req.headers['content-length'] || 0);
         if (len > 600 * 1024 * 1024) return json(res, 413, { ok: false, error: '备份文件过大' });
         const chunks = [];

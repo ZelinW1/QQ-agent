@@ -1859,6 +1859,15 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 .mind-chip[data-pick-name]:hover { color: var(--tx); }
 .mind-chip.picked { outline: 1px solid var(--ac); color: var(--tx); }
 
+/* 设置页里的分组标题：一页里混着"通用"和"只影响群聊"两类参数，
+   靠这个标签隔开，比拆成两个侧栏入口更不容易让人找错地方。 */
+.settings-group-label {
+  margin: 18px 0 8px; padding-bottom: 6px;
+  border-bottom: 1px dashed var(--bd);
+  font-size: 12px; font-weight: 650; letter-spacing: .04em; color: var(--tx3);
+}
+.settings-group-label:first-of-type { margin-top: 4px; }
+
 /* ── 一级竖向导航 + 二级横向 ────────────────────────────────────────────
    一级只有三项（她 / 记录 / 设置），做成顶栏会显得空，而且挤压内容高度；
    竖向副栏把"去哪"固定住，横向二级条回答"具体哪一件"，两者分工清楚。
