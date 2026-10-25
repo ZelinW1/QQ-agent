@@ -156,7 +156,7 @@ assert.ok(proactivePrompt.includes('【已读信息】'), '主动模式也带已
 // 背景（M2-2）：默认 roleText 改为空，身份由 persona.charter 提供；
 // 两者是"二选一"的模式开关，同时配置会互相打架。
 assert.equal(DEFAULT_CONFIG.persona.roleText, '', '默认不再使用整段 roleText（改用 charter）');
-assert.ok(DEFAULT_CONFIG.persona.charter.selfImage.includes('小鲸鱼'), '默认身份由 charter.selfImage 提供');
+assert.ok(DEFAULT_CONFIG.persona.charter.selfImage.includes('{botName}'), '默认身份用 {botName} 占位（改名后不会自称旧名）');
 assert.ok(DEFAULT_CONFIG.persona.charter.hardRules.length >= 3, '默认带可枚举的硬规矩');
 assert.ok(DEFAULT_CONFIG.persona.charter.scenario.private.length > 0, '默认带私聊场合说明');
 // 旧角色卡仍作为素材库保留（设置页可选），但默认不参与渲染

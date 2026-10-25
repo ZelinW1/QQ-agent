@@ -174,7 +174,7 @@ console.log('\n=== 6. charter 槽位与私聊口吻 ===');
   check(grp.includes('现在在一群人里，别抢话'), '群聊用 scenario.group');
   check(grp.includes('一个混在 QQ 群里的普通群友'), '群聊保留"群友"身份句');
 
-  // 恢复默认（roleText 空 + 默认 charter）
+  // 恢复默认（roleText 空 + 默认 charter），再做占位符断言
   updateConfig({
     persona: {
       roleText: '',
@@ -186,6 +186,13 @@ console.log('\n=== 6. charter 槽位与私聊口吻 ===');
       }
     }
   });
+
+  // 占位符：{botName} 必须跟着 botName 走，否则改个名字她还在自称旧名
+  updateConfig({ persona: { botName: '阿蓝' } });
+  const renamed = buildSystemPrompt({});
+  check(renamed.includes('我叫阿蓝'), 'charter 里的 {botName} 被替换成实际名字');
+  check(!renamed.includes('{botName}'), '渲染后不残留占位符');
+  updateConfig({ persona: { botName: '小鲸鱼' } });
 }
 
 console.log(`\n提示词分层：通过 ${pass}，失败 ${fail}`);

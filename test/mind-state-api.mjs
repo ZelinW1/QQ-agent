@@ -1,0 +1,156 @@
+// GET /api/mind/state 的接口自测（GUI 的数据源）。
+//
+// 守的是"界面能如实显示"：身份来源模式、她说自己是谁、关系、体力、作息、
+// 以及**响应里不能有密钥**。
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { bootApp } from './_harness.mjs';
+
+const pass = [], fail = [];
+async function check(name, fn) {
+  try { await fn(); pass.push(name); console.log(`  ✓ ${name}`); }
+  catch (e) { fail.push(name); console.error(`  ✗ ${name}\n      ${e.message}`); }
+}
+
+const env = await bootApp({
+  config: {
+    allow: { groups: ['456'], private: ['777'] },
+    // harness 的基础配置里带 roleText（旧模式），这里显式清空以验证 charter 模式
+    persona: { roleText: '' },
+    mind: { enabled: true, scope: 'private', sleep: { enabled: false } }
+  }
+});
+const { dataDir } = env;
+
+// ── 预置一份"她活了一阵子"的状态 ───────────────────────────────────────
+const mindDir = path.join(dataDir, 'mind');
+fs.mkdirSync(path.join(mindDir, 'relations'), { recursive: true });
+fs.mkdirSync(path.join(mindDir, 'events', 'private_777'), { recursive: true });
+
+const now = Date.now();
+fs.writeFileSync(path.join(mindDir, 'self.json'), JSON.stringify({
+  version: 3,
+  updatedAt: now,
+  narrative: '我是小鲸鱼。最近我发现自己对熟人话多。',
+  mood: { label: '有点闷', valence: -0.3 },
+  preoccupations: ['想问裁员的事'],
+  changelog: []
+}), 'utf8');
+
+fs.writeFileSync(path.join(mindDir, 'relations', '777.json'), JSON.stringify({
+  userId: '777', names: ['小王'], stage: 'familiar', trust: 62, warmth: 70,
+  nickname: '王哥', knownFor: ['做后端'], tender: ['别问裁员'],
+  openLoops: [{ text: '他后来怎么样了' }], recentSummary: '聊到裁员',
+  confidence: 0.8, evidence: ['e_seed'], contexts: {}, updatedAt: now
+}), 'utf8');
+
+const monthKey = `${new Date(now).getFullYear()}-${String(new Date(now).getMonth() + 1).padStart(2, '0')}`;
+fs.writeFileSync(
+  path.join(mindDir, 'events', 'private_777', `${monthKey}.jsonl`),
+  `${JSON.stringify({ id: 'e_seed', ts: now - 3600000, chatKey: 'private:777', actorId: '777', actorName: '小王', kind: 'interaction', text: '他说组里在裁人', valence: -0.5, salience: 0.9, tags: [], refs: {}, compacted: false, summaryOf: [] })}\n`,
+  'utf8'
+);
+
+fs.writeFileSync(path.join(mindDir, 'tick.json'), JSON.stringify({
+  energy: 77, energyAt: now, nextTickAt: 0, today: '2026-10-25',
+  todayProactive: 1, todayDecisions: 3, todayReflections: 1,
+  lastInteractionAt: now, lastReflectAt: now - 7200000, lastReflectAttemptAt: now - 7200000,
+  snoozes: {}, sleep: { state: 'awake', since: 0, nightKey: '', stayUps: 0 }, notes: []
+}), 'utf8');
+
+// ── 1. 基本形状 ─────────────────────────────────────────────────────────
+await check('GET /api/mind/state 返回完整状态', async () => {
+  const r = await env.request('GET', '/api/mind/state');
+  assert.equal(r.status, 200);
+  const d = r.data;
+  assert.equal(d.ok, true);
+  assert.equal(d.available, true);
+  assert.equal(d.enabled, true);
+  assert.equal(d.scope, 'private');
+});
+
+await check('身份来源模式：默认 charter（roleText 为空）', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(d.mode, 'charter');
+  assert.ok(d.charterResolved.selfImage.length > 20, 'charter 里有默认身份');
+  // 槽位原文保留模板（供编辑），渲染后的那份把 {botName} 换成了实际名字（供预览）
+  assert.ok(d.charter.selfImage.includes('{botName}'), '原始槽位保留占位符');
+  assert.ok(!d.charterResolved.selfImage.includes('{botName}'), '渲染后不应残留占位符');
+  assert.ok(d.charterResolved.selfImage.includes('覆盖Bot'), '名字来自 botName');
+  assert.ok(d.charter.hardRules.length >= 3, 'charter 带硬规矩');
+  assert.ok(d.charter.scenario.private.length > 0, 'charter 带私聊场合');
+  assert.equal(d.roleTextChars, 0);
+});
+
+await check('自我：版本、叙事、心情、挂心的事', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(d.self.version, 3);
+  assert.ok(d.self.narrative.includes('小鲸鱼'));
+  assert.equal(d.self.mood.label, '有点闷');
+  assert.deepEqual(d.self.preoccupations, ['想问裁员的事']);
+});
+
+await check('关系档案：昵称、阶段、信任、雷点、未完结', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(d.relations.length, 1);
+  const rel = d.relations[0];
+  assert.equal(rel.userId, '777');
+  assert.equal(rel.nickname, '王哥');
+  assert.equal(rel.stage, 'familiar');
+  assert.equal(rel.trust, 62);
+  assert.deepEqual(rel.tender, ['别问裁员']);
+  assert.deepEqual(rel.openLoops, ['他后来怎么样了']);
+});
+
+await check('节律：体力与当日计数', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(d.tick.energy, 77);
+  assert.equal(d.tick.todayProactive, 1);
+  assert.equal(d.tick.todayDecisions, 3);
+  assert.equal(d.tick.todayReflections, 1);
+  assert.equal(d.tick.sleep.state, 'awake');
+});
+
+await check('作息：开关关闭时 asleep=false，窗口为空', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(d.sleep.enabled, false);
+  assert.equal(d.sleep.asleep, false);
+});
+
+await check('计数：事件与关系', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.ok(d.counts.events >= 1, `事件数应 ≥1，实际 ${d.counts.events}`);
+  assert.equal(d.counts.relations, 1);
+});
+
+// ── 2. 安全性 ───────────────────────────────────────────────────────────
+await check('响应里不含任何密钥字段', async () => {
+  const r = await env.request('GET', '/api/mind/state');
+  for (const banned of ['apiKey', 'accessToken', 'baseUrl', 'Bearer ']) {
+    assert.ok(!r.text.includes(banned), `响应不应包含 ${banned}`);
+  }
+});
+
+// ── 3. 切换身份来源 ─────────────────────────────────────────────────────
+await check('设置 roleText 后，模式切到 roleText（UI 要如实显示）', async () => {
+  const w = await env.request('POST', '/api/config', { body: { persona: { roleText: '你是测试机。' } } });
+  assert.equal(w.status, 200);
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(d.mode, 'roleText');
+  assert.ok(d.roleTextChars > 0);
+  // 恢复
+  await env.request('POST', '/api/config', { body: { persona: { roleText: '' } } });
+});
+
+await check('关闭 mind 后 enabled=false，但仍能读到她的状态（只读不隐藏）', async () => {
+  await env.request('POST', '/api/config', { body: { mind: { enabled: false } } });
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  assert.equal(d.enabled, false);
+  assert.equal(d.self.version, 3);
+});
+
+await env.teardown();
+
+console.log(`\n心智状态接口：通过 ${pass.length}，失败 ${fail.length}`);
+if (fail.length) process.exit(1);

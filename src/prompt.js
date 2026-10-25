@@ -320,6 +320,17 @@ function charterOf(cfg) {
   };
 }
 
+/**
+ * 身份槽位里的占位符替换。
+ *
+ * 只支持 {botName}：名字是唯一"会变且必须一致"的字段。她自称的名字和
+ * 管理员配置的 botName 不一致，是很明显的破绽。
+ * 没写占位符时原样返回（不猜、不替换）。
+ */
+function fillPersonaPlaceholders(text, cfg) {
+  return String(text ?? '').replaceAll('{botName}', String(cfg?.botName ?? ''));
+}
+
 export function buildSystemPrompt({ persona, profile = null, skillContext, extraSections = [], mind = null, chatKind = 'group' } = {}) {
   // persona 是调用方显式注入的人格文本（如主人专属人设，可能来自运行期能力）；
   // 没注入时依次回落：会话快照的人设 → 全局人设。
@@ -391,13 +402,17 @@ export function buildSystemPrompt({ persona, profile = null, skillContext, extra
   if (useCharter && charter.hardRules.length) {
     push('charter', 'hard-rules', [
       '【不能破的几条】',
-      ...charter.hardRules.map((r) => `- ${r}`)
+      ...charter.hardRules.map((r) => `- ${fillPersonaPlaceholders(r, cfg)}`)
     ].join('\n'));
   }
-  if (useCharter && charter.selfImage) push('charter', 'self-image', `【我是谁】\n${charter.selfImage}`);
-  if (useCharter && charter.baseline) push('charter', 'baseline', `【我最初的样子】\n${charter.baseline}`);
+  if (useCharter && charter.selfImage) {
+    push('charter', 'self-image', `【我是谁】\n${fillPersonaPlaceholders(charter.selfImage, cfg)}`);
+  }
+  if (useCharter && charter.baseline) {
+    push('charter', 'baseline', `【我最初的样子】\n${fillPersonaPlaceholders(charter.baseline, cfg)}`);
+  }
   const scenarioText = useCharter
-    ? String(charter.scenario[chatKind] || charter.scenario.group || '').trim()
+    ? fillPersonaPlaceholders(charter.scenario[chatKind] || charter.scenario.group || '', cfg).trim()
     : '';
   if (scenarioText) push('charter', 'scenario', `【此刻的场合】\n${scenarioText}`);
 

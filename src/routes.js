@@ -963,6 +963,124 @@ export function createRoutes(deps) {
       }
     },
     {
+      // 心智状态：给设置页/GUI 看的只读快照。
+      //
+      // 为什么单独一个接口而不是塞进 /api/status：status 每几秒被轮询一次，
+      // 而关系列表、反思日志这些不该跟着高频刷新。
+      //
+      // ⚠️ 只读，且**不含任何密钥**：只取 persona.charter 与 mind 的开关类字段。
+      method: 'GET', pattern: '/api/mind/state',
+      handler: async ({ res, json }) => {
+        const cfg = getConfig();
+        const mind = orchestrator?.mind || null;
+        const m = cfg.mind || {};
+        const persona = cfg.persona || {};
+        const charter = persona.charter || {};
+
+        if (!mind) {
+          return json(res, 200, {
+            ok: true, available: false,
+            enabled: m.enabled === true,
+            reason: '心智存储未接入'
+          });
+        }
+
+        const tick = mind.getTick();
+        const self = mind.getSelf();
+        const relations = mind.listRelations();
+        const events = mind.queryEvents({ limit: 5000 });
+        const reflections = mind.listReflections({ limit: 5 });
+        const actions = mind.listActions({ limit: 10 });
+
+        // 当前身份来源：roleText 非空 = 旧模式（整段角色卡），否则 charter 模式。
+        // 与 prompt.js 判定同口径，UI 才能如实显示"现在到底在用哪套"。
+        const mode = String(persona.roleText || '').trim() ? 'roleText' : 'charter';
+
+        // 槽位原样返回（可能含 {botName}，供编辑）+ 一份渲染后的（供预览）。
+        // 两者都给，UI 才不会在"编辑模板"和"看实际效果"之间二选一。
+        const fill = (s) => String(s ?? '').replaceAll('{botName}', String(persona.botName ?? ''));
+        const charterRaw = {
+          selfImage: String(charter.selfImage || ''),
+          baseline: String(charter.baseline || ''),
+          scenario: {
+            private: String(charter.scenario?.private || ''),
+            group: String(charter.scenario?.group || '')
+          },
+          hardRules: Array.isArray(charter.hardRules) ? charter.hardRules.map(String) : []
+        };
+
+        return json(res, 200, {
+          ok: true,
+          available: true,
+          enabled: m.enabled === true,
+          scope: m.scope || 'private',
+          mode,
+          charter: charterRaw,
+          charterResolved: {
+            selfImage: fill(charterRaw.selfImage),
+            baseline: fill(charterRaw.baseline),
+            scenario: { private: fill(charterRaw.scenario.private), group: fill(charterRaw.scenario.group) },
+            hardRules: charterRaw.hardRules.map(fill)
+          },
+          roleTextChars: String(persona.roleText || '').length,
+          self: {
+            version: Number(self.version) || 0,
+            narrative: String(self.narrative || ''),
+            mood: { label: String(self.mood?.label || ''), valence: Number(self.mood?.valence) || 0 },
+            preoccupations: Array.isArray(self.preoccupations) ? self.preoccupations : [],
+            updatedAt: Number(self.updatedAt) || 0
+          },
+          relations: relations.map((r) => ({
+            userId: String(r.userId || ''),
+            names: Array.isArray(r.names) ? r.names : [],
+            nickname: String(r.nickname || ''),
+            stage: String(r.stage || 'stranger'),
+            trust: Number(r.trust) || 0,
+            warmth: Number(r.warmth) || 0,
+            knownFor: Array.isArray(r.knownFor) ? r.knownFor : [],
+            tender: Array.isArray(r.tender) ? r.tender : [],
+            openLoops: Array.isArray(r.openLoops) ? r.openLoops.map((l) => l?.text ?? String(l)) : [],
+            recentSummary: String(r.recentSummary || ''),
+            confidence: Number(r.confidence) || 0,
+            updatedAt: Number(r.updatedAt) || 0
+          })),
+          tick: {
+            energy: Number(tick.energy) || 0,
+            today: String(tick.today || ''),
+            todayProactive: Number(tick.todayProactive) || 0,
+            todayDecisions: Number(tick.todayDecisions) || 0,
+            todayReflections: Number(tick.todayReflections) || 0,
+            lastReflectAt: Number(tick.lastReflectAt) || 0,
+            lastReflectAttemptAt: Number(tick.lastReflectAttemptAt) || 0,
+            sleep: {
+              state: String(tick.sleep?.state || 'awake'),
+              stayUps: Number(tick.sleep?.stayUps) || 0,
+              nightKey: String(tick.sleep?.nightKey || '')
+            }
+          },
+          sleep: {
+            enabled: cfg.mind?.sleep?.enabled === true,
+            asleep: orchestrator?.asleep === true,
+            window: orchestrator?.sleepWindow
+              ? {
+                  nightKey: orchestrator.sleepWindow.nightKey,
+                  startAt: orchestrator.sleepWindow.startAt,
+                  endAt: orchestrator.sleepWindow.endAt
+                }
+              : null
+          },
+          counts: {
+            events: events.length,
+            uncompacted: events.filter((e) => !(Array.isArray(e.summaryOf) && e.summaryOf.length)).length,
+            relations: relations.length,
+            reflections: reflections.length
+          },
+          recentReflections: reflections,
+          recentActions: actions
+        });
+      }
+    },
+    {
       // 手动重扫磁盘：UI「刷新」按钮的后端动作。
       // 之前刷新只读内存注册表，watcher 丢事件（目录删除重建 / 网络盘 / 杀软）
       // 时新插件永远进不来。这里走 app.reloadSkills()：重扫 + 激活 + 刷工具 + 重建 watcher。
