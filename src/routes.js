@@ -1065,6 +1065,9 @@ export function createRoutes(deps) {
           sleep: {
             enabled: cfg.mind?.sleep?.enabled === true,
             asleep: orchestrator?.asleep === true,
+            // 为什么现在是这个状态：UI 要能解释"改了入睡时间却还醒着"
+            reason: String(orchestrator?.sleepReason || ''),
+            nextEligibleAt: Number(orchestrator?.sleepNextEligibleAt) || 0,
             window: orchestrator?.sleepWindow
               ? {
                   nightKey: orchestrator.sleepWindow.nightKey,
@@ -1089,6 +1092,24 @@ export function createRoutes(deps) {
             relations: relations.length,
             reflections: reflections.length
           },
+          // 反思的"为什么还没跑"：阈值、攒了几条、冷却还剩多久。
+          // 这些不显示出来，用户只能干等（真实反馈）。
+          reflect: (() => {
+            const privateChats = (store.listChats?.() || []).filter((k) => String(k).startsWith('private:'));
+            const since = Number(tick.lastReflectAt) || 0;
+            const unreflected = privateChats.reduce((n, k) => n + (mind.countUnreflected(k, since) || 0), 0);
+            const need = Math.max(1, Number(m.reflectAfterEvents) || 8);
+            const cooldown = Math.max(60000, Number(m.reflectCooldownMs) || 7200000);
+            const lastAttempt = Number(tick.lastReflectAttemptAt) || 0;
+            const cooldownUntil = lastAttempt > 0 ? lastAttempt + cooldown : 0;
+            const dailyCap = Math.max(1, Number(m.tick?.maxReflectPerDay) || 8);
+            const usedToday = tick.today === todayKey() ? (Number(tick.todayReflections) || 0) : 0;
+            return {
+              unreflected, need, cooldownUntil, usedToday, dailyCap,
+              canReflect: unreflected >= need && (cooldownUntil === 0 || Date.now() >= cooldownUntil) && usedToday < dailyCap,
+              chatKey: privateChats[0] || ''
+            };
+          })(),
           recentReflections: reflections,
           recentActions: actions
         });
@@ -1158,6 +1179,28 @@ export function createRoutes(deps) {
         // __replace__：映射型字段要"删掉旧键"，普通深合并做不到（见 config.deepMerge）
         updateConfig({ chatProfiles: { __replace__: current } });
         return json(res, 200, { ok: true, profiles: getConfig().chatProfiles || {} });
+      }
+    },
+    {
+      // 手动触发一次反思（调试/测试用）。
+      // 没有它的话，反思只会在"攒够 8 条 + 过冷却"时静默发生，
+      // 用户既不知道何时发生，也没法验证它是否工作。
+      method: 'POST', pattern: '/api/mind/reflect',
+      handler: async ({ req, res, json }) => {
+        let body = {};
+        try { body = await readBody(req); } catch { body = {}; }
+        const mind = orchestrator?.mind || null;
+        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        // 指定会话优先；否则挑一个私聊（M1 只对私聊反思）
+        const explicit = String(body.chatKey || '').trim();
+        const chatKey = explicit || (store.listChats?.() || []).find((k) => String(k).startsWith('private:')) || '';
+        if (!chatKey) return json(res, 400, { ok: false, error: '没有可反思的私聊会话' });
+        try {
+          const r = await orchestrator.reflectForChat(chatKey);
+          return json(res, 200, { ...r, chatKey });
+        } catch (error) {
+          return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+        }
       }
     },
     {
@@ -1349,6 +1392,9 @@ export function createRoutes(deps) {
         if (next.mind?.enabled === true) {
           try { orchestrator.migrateImpressionsToRelations(); } catch { /* 迁移失败不影响配置保存 */ }
         }
+        // 作息配置改完后立刻重算一次：否则胶囊要等下一次心跳才更新（最多 60 秒），
+        // 用户会以为"改了没生效"。
+        try { orchestrator.syncSleep?.(); } catch { /* 刷新失败不影响保存 */ }
         initPriceFeed(FIXED_PRICE_FEED_URL);
         emit('status', { configUpdated: true });
         // ⚠️ 必须脱敏：updateConfig 返回的是内存里的活配置对象，含明文 apiKey /

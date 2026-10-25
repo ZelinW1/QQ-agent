@@ -58,20 +58,7 @@ function renderSettingsSidebar() {
     </div>
     <div class="settings-menu">
       ${menu.map(([id, label]) => `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}">${label}${id === 'desktop' && (typeof updateAvailable !== 'undefined' && updateAvailable) ? '<span class="update-dot" title="发现新版本"></span>' : ''}</button>`).join('')}
-      <button class="settings-menu-item egg-hot" id="qrcode-egg-btn">！？群群？！</button>
     </div>`;
-  // 群二维码彩蛋：点一下弹出，再点屏幕任意位置关闭
-  // 图片 onerror 兜底：group-qrcode.jpg 正常随 ui/ 分发，
-  // 万一分发包缺了这张图，显示一句说明而不是一个裂图图标。
-  sidebar.querySelector('#qrcode-egg-btn')?.addEventListener('click', () => {
-    const ov = document.createElement('div');
-    ov.className = 'qrcode-egg-overlay';
-    ov.innerHTML = '<img src="group-qrcode.jpg" alt="群二维码" '
-      + 'onerror="this.remove(); this.parentElement?.insertAdjacentText(\'afterbegin\', \'二维码图片缺失：请把 group-qrcode.jpg 放到 ui/ 目录下\')" />';
-    const close = () => closeAnimatedOverlay(ov);
-    ov.addEventListener('click', close);
-    document.body.appendChild(ov);
-  });
   sidebar.querySelectorAll('.settings-menu-item').forEach((el) => {
     el.addEventListener('click', () => {
       // 切区块 = 整页表单重建：先把防抖窗口内挂起的保存发出，

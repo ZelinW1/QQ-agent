@@ -181,7 +181,9 @@ console.log('\n=== 6. 关闭时提示词逐字节不变 ===');
     enabled: true,
     self: { version: 1, narrative: '我是小鲸鱼。', mood: { label: '有点烦' }, preoccupations: [] },
     relations: [{ userId: '456', stage: 'familiar', trust: 62, nickname: '王哥', confidence: 0.8 }],
-    events: [{ id: 'e_1', ts: new Date(2026, 9, 20, 9, 0).getTime(), text: '他说被裁员了' }]
+    events: [{ id: 'e_1', ts: new Date(2026, 9, 20, 9, 0).getTime(), text: '他说被裁员了' }],
+    // 真实链路里由 collectMindContext 生成（取决于作息配置）
+    rhythm: '我暂时不睡，什么时候都在。'
   };
 
   // 自我与关系在 system 的 self 层（身份归身份）
@@ -189,6 +191,9 @@ console.log('\n=== 6. 关闭时提示词逐字节不变 ===');
   const sysOn = buildSystemPrompt({ mind: MIND });
   check(!sysOff.includes('【关于我自己】'), '关闭时 system 里没有自我段');
   check(sysOn.includes('【关于我自己】') && sysOn.includes('【与在场者的关系】'), '启用时 system 里有两段');
+  // 她必须知道自己的作息：否则夜里引擎拦住消息，她在对话里毫不知情
+  check(sysOn.includes('【我的日常】'), '启用时 system 里有【我的日常】');
+  check(sysOn.includes('我暂时不睡'), '未开启作息时明确告诉她"不睡"');
   check(sysOn.indexOf('【关于我自己】') > sysOn.indexOf('你是「'), '自我段在身份句之后');
   check(sysOn.indexOf('【关于我自己】') > sysOn.indexOf('【安全规则】') || !sysOn.includes('【安全规则】'),
     '自我段在安全规则之后');

@@ -127,18 +127,6 @@ footer a { color: var(--muted); }
 .tb-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 3px; }
 .tb-n { flex: none; min-width: 40px; text-align: right; font-size: 13px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
 
-/* 群二维码弹层：点任意位置关闭 */
-.qr-overlay {
-  position: fixed; inset: 0; z-index: 9999;
-  background: rgba(15,30,55,.55); backdrop-filter: blur(6px);
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-}
-.qr-overlay img {
-  max-width: min(80vw, 480px); max-height: 80vh;
-  border-radius: 14px; box-shadow: 0 24px 70px rgba(20,50,100,.35);
-}
-
 @media (max-width: 640px) {
   .hero h1 { font-size: 32px; }
   .nav-pill { padding: 4px 9px; font-size: 12px; }
@@ -161,7 +149,6 @@ html.no-theme.dark body { background: #0d1726; }
     <a class="nav-pill p-primary" href="/qq-agent/holyshits" target="_blank" rel="noopener">雷霆语录</a>
     <a class="nav-pill p-primary" href="/qq-agent/skill-market/">Skill 市场</a>
     <a class="nav-pill p-accent" href="/qq-agent/persona-plaza/">人设广场</a>
-    <button class="nav-pill p-accent" type="button" id="groupQrBtn">官方交流群</button>
     <a class="nav-pill p-sm" href="https://kondius.cn" target="_blank" rel="noopener">作者的博客？！</a>
   </div>
 </div></nav>
@@ -233,16 +220,8 @@ html.no-theme.dark body { background: #0d1726; }
 </div></footer>
 
 <script>
-// ── 大肥鱼群二维码：点任意位置关闭 ──
-(function () {
-  document.getElementById('groupQrBtn').addEventListener('click', function () {
-    const ov = document.createElement('div');
-    ov.className = 'qr-overlay';
-    ov.innerHTML = '<img src="group-qrcode.jpg" alt="大肥鱼群二维码" />';
-    ov.addEventListener('click', function () { ov.remove(); });
-    document.body.appendChild(ov);
-  });
-})();
+// 大肥鱼群二维码弹窗已移除（图片资源一并删除）。
+// 这里保留空脚本位是为了不改动后面的脚本顺序，删掉也无妨。
 </script>
 
 <script>

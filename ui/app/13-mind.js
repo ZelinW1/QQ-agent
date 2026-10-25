@@ -121,11 +121,25 @@ function renderMindPage() {
 function mindHeader(d) {
   const sleep = d.sleep || {};
   const mode = mindMode();
+  // 三个胶囊的形状固定：心智开关 / 身份来源 / 作息。
+  // 颜色规则按语义分：开启=绿；到点睡着=正常；未启用=暗灰。
+  // 作息这一枚不能"睡着才绿"——睡着是正常状态，不是告警。
+  const sleepPill = !sleep.enabled
+    ? { cls: 'off', text: '作息未启用', title: '在「身份」里打开"夜里会睡着"才会生效' }
+    : (sleep.asleep
+      ? { cls: '', text: '睡着', title: '睡着时不看消息、不做决策；醒来会把积压一起读' }
+      : {
+          cls: 'on',
+          text: '醒着',
+          title: sleep.nextEligibleAt
+            ? `刚还在聊天，安静到 ${mindClock(sleep.nextEligibleAt)} 后才会睡`
+            : (sleep.reason || '醒着')
+        });
   return `
     <div class="mind-head">
-      <span class="mind-pill ${d.enabled ? 'on' : 'off'}">${d.enabled ? '已开启' : '已关闭'}</span>
-      <span class="mind-pill">${esc(d.mode === 'roleText' ? '整段角色卡' : '分槽身份')}</span>
-      <span class="mind-pill ${sleep.asleep ? 'on' : ''}">${sleep.asleep ? '睡着' : (sleep.enabled ? '醒着' : '作息未启用')}</span>
+      <span class="mind-pill ${d.enabled ? 'on' : 'off'}" title="${d.enabled ? '心智已开启：她记得、会反思、会按节律行动' : '心智已关闭：不记录、不反思、不主动找人，但正常聊天不受影响'}">${d.enabled ? '心智已开启' : '心智已关闭'}</span>
+      <span class="mind-pill" title="${d.mode === 'roleText' ? '当前用整段角色卡（roleText），分槽身份不生效' : '当前用分槽身份：名字 / 形象 / 说话习惯 / 场合 / 硬规矩'}">${d.mode === 'roleText' ? '身份：整段角色卡' : '身份：分槽'}</span>
+      <span class="mind-pill ${sleepPill.cls}" title="${esc(sleepPill.title)}">${sleepPill.text}</span>
       <span style="flex:1"></span>
       ${mode === 'identity' ? `<button class="btn btn-small" id="mind-birth">${mindBirthOpen ? '收起草案' : '出生仪式'}</button>` : ''}
       <button class="btn btn-small" id="mind-refresh">刷新</button>
@@ -181,7 +195,20 @@ function mindStateSection(d) {
     <div class="mind-slot"><div class="k">作息</div><div class="v">${sleep.enabled ? `${sleep.asleep ? '正在睡' : '醒着'}${win ? `　今晚窗口 ${mindClock(win.startAt)} – ${mindClock(win.endAt)}` : ''}` : '未启用'}</div></div>
     <div class="mind-slot"><div class="k">上次反思</div><div class="v">${tick.lastReflectAt ? fmtTime(tick.lastReflectAt) : '还没反思过'}</div></div>`;
 
-  const refBody = (d.recentReflections || []).length
+  const ref = d.reflect || {};
+  const refStatus = `
+    <div class="mind-slot">
+      <div class="k">什么时候会反思</div>
+      <div class="v">未反思事件 ${ref.unreflected ?? 0} / 阈值 ${ref.need ?? 8} 条${
+        ref.cooldownUntil ? ` · 冷却到 ${fmtTime(ref.cooldownUntil)}` : ''
+      } · 今日 ${ref.usedToday ?? 0}/${ref.dailyCap ?? 8} 次</div>
+      <div class="mind-actions" style="margin-top:8px">
+        <button class="btn btn-primary btn-small" id="mind-reflect-now">${ref.canReflect ? '立即反思' : '现在试一次'}</button>
+        <span class="muted" id="mind-reflect-msg">${ref.canReflect ? '' : '未到阈值或仍在冷却，手动触发会直接跑一次'}</span>
+      </div>
+    </div>`;
+
+  const refBody = refStatus + ((d.recentReflections || []).length
     ? d.recentReflections.map((r) => {
         const produced = r.produced || {};
         const bits = [];
@@ -196,7 +223,7 @@ function mindStateSection(d) {
           ${r.rejected ? `<div class="mind-rel-line">丢弃 ${r.rejected} 条无依据的判断</div>` : ''}
         </div>`;
       }).join('')
-    : '<div class="mind-empty">还没反思过。</div>';
+    : '<div class="mind-empty">还没反思过。</div>');
 
   return `
     <div class="mind-grid">
@@ -234,8 +261,18 @@ function mindIdentitySection(d) {
         <label>醒来时间<input type="time" id="mind-sleep-end" value="${hhmm(sc.endHour ?? 8, sc.endMinute ?? 0)}" /></label>
         <label>每晚抖动（± 分钟）<input type="number" id="mind-sleep-jitter" min="0" max="180" value="${Number(sc.jitterMin ?? 40)}" /></label>
         <label>一晚最多再撑几次<input type="number" id="mind-sleep-stay" min="0" max="5" value="${Number(sc.maxStayUp ?? 2)}" /></label>
+        <label>安静多久才睡（分钟）
+          <input type="number" id="mind-sleep-grace" min="0" max="120" value="${Math.round(Number(sc.graceMs ?? 300000) / 60000)}" />
+        </label>
       </div>
-      <div class="hint">睡着时她不看消息、不做决策；醒来后把积压当成一批读。时段每晚有随机抖动。</div>
+      <div class="hint">
+        睡着时她不看消息、不做决策；醒来后把积压当成一批读。时段每晚有随机抖动。<br>
+        「安静多久才睡」是关键：刚聊过天就不会立刻睡。${sleep.asleep
+          ? `现在：<strong>已睡着</strong>，醒来的时间是窗口结束。`
+          : (sleep.nextEligibleAt
+            ? `现在：<strong>醒着</strong>（刚还在聊天，安静到 ${mindClock(sleep.nextEligibleAt)} 后才会睡）。`
+            : `现在：<strong>醒着</strong>${sleep.reason ? `（${esc(sleep.reason)}）` : ''}。`)}
+      </div>
       <div class="mind-actions">
         <button class="btn btn-primary btn-small" id="mind-save-switches">保存开关</button>
         <span class="muted" id="mind-sw-msg"></span>
@@ -430,6 +467,7 @@ function mindBindEvents(box) {
   $('#birth-close')?.addEventListener('click', () => { mindBirthOpen = false; mindBirthDrafts = []; renderMindPage(); });
   $('#birth-gen')?.addEventListener('click', generateBirthDrafts);
   $('#mind-save')?.addEventListener('click', saveMindCharter);
+  $('#mind-reflect-now')?.addEventListener('click', runReflectNow);
   $('#mind-save-switches')?.addEventListener('click', saveMindSwitches);
   $('#mind-prof-save')?.addEventListener('click', () => saveProfile(false));
   $('#mind-prof-clear')?.addEventListener('click', () => saveProfile(true));
@@ -462,6 +500,31 @@ function fillProfileForm() {
   if ($('#mind-prof-role')) $('#mind-prof-role').value = role;
 }
 
+// ── 手动触发反思（调试/验证用）─────────────────────────────────────────
+async function runReflectNow() {
+  const msg = $('#mind-reflect-msg');
+  const btn = $('#mind-reflect-now');
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = '正在反思（一次模型调用）…';
+  try {
+    const r = await api('/api/mind/reflect', { method: 'POST', body: JSON.stringify({}) });
+    if (r?.ok) {
+      const applied = r.applied || {};
+      const bits = [];
+      if (applied.self) bits.push('改写自我');
+      if ((applied.relations || []).length) bits.push(`关系 ×${applied.relations.length}`);
+      if (applied.compacted) bits.push(`压缩 ${applied.compacted} 条`);
+      if (msg) msg.textContent = r.empty ? '想不出什么（也算成功）' : `完成：${bits.join(' · ') || '无改动'}`;
+    } else if (msg) {
+      msg.textContent = `未完成：${r?.reason || r?.error || '未知原因'}`;
+    }
+    await loadMindPage();
+  } catch (e) {
+    if (msg) msg.textContent = `失败：${e.message}`;
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── 保存：开关与作息 ───────────────────────────────────────────────────
 async function saveMindSwitches() {
   const on = Boolean($('#mind-sw-on')?.checked);
@@ -474,6 +537,7 @@ async function saveMindSwitches() {
   const [eh, em] = parseTime($('#mind-sleep-end')?.value, 8, 0);
   const jitter = Math.max(0, Math.min(180, Number($('#mind-sleep-jitter')?.value) || 0));
   const maxStayUp = Math.max(0, Math.min(5, Number($('#mind-sleep-stay')?.value) || 0));
+  const graceMin = Math.max(0, Math.min(120, Number($('#mind-sleep-grace')?.value) || 0));
 
   const msg = $('#mind-sw-msg');
   if (msg) msg.textContent = '保存中…';
@@ -487,7 +551,8 @@ async function saveMindSwitches() {
             enabled: sleepOn,
             startHour: sh, startMinute: sm,
             endHour: eh, endMinute: em,
-            jitterMin: jitter, maxStayUp
+            jitterMin: jitter, maxStayUp,
+            graceMs: graceMin * 60000
           }
         }
       })

@@ -122,7 +122,7 @@ export function renderRecentSection(events = []) {
  * 只收稳定簇（自我版本 + 关系档），**不收事件**：事件在易变区，收进来会让
  * 每次运行都判定"配置变了"，提示词锚点永远重建，缓存收益归零。
  */
-export function mindFingerprint({ self = null, relations = [] } = {}) {
+export function mindFingerprint({ self = null, relations = [], rhythm = '' } = {}) {
   const version = Number(self?.version) || 0;
   const rows = (Array.isArray(relations) ? relations : [])
     .filter(isPlainObject)
@@ -135,7 +135,9 @@ export function mindFingerprint({ self = null, relations = [] } = {}) {
       Math.round((Number(r.confidence) || 0) * 100)
     ])
     .sort((a, b) => a[0].localeCompare(b[0]));
-  return JSON.stringify({ v: version, r: rows });
+  // rhythm 进指纹：作息时段一改，提示词里的【我的日常】就变了，
+  // 上一轮的锚点前缀不再合法，必须让 orchestrator 丢掉它。
+  return JSON.stringify({ v: version, r: rows, t: String(rhythm || '') });
 }
 
 /**
@@ -180,11 +182,24 @@ export function collectMindContext({
     limit: Math.min(autoLimit, 6)
   });
 
+  // 她的日常（作息）——她必须知道自己会睡觉，否则会在聊天里"刚刚还在、突然消失"。
+  // 这段只用配置里的固定时分，不放当前时间：它是稳定簇的一部分，不能每轮变。
+  const sleepCfg = options.sleep || null;
+  let rhythm = '';
+  if (sleepCfg && sleepCfg.enabled === true) {
+    const hhmm = (h, m) => `${String(Number(h) || 0).padStart(2, '0')}:${String(Number(m) || 0).padStart(2, '0')}`;
+    rhythm = `我晚上会睡觉（大约 ${hhmm(sleepCfg.startHour ?? 23, sleepCfg.startMinute ?? 30)} 到 ${hhmm(sleepCfg.endHour ?? 8, sleepCfg.endMinute ?? 0)}）。`
+      + '睡着时收不到消息，醒来会一次看到积压的那些。';
+  } else {
+    rhythm = '我暂时不睡，什么时候都在。';
+  }
+
   return {
     enabled: true,
     self,
     relations,
     events,
-    fingerprint: mindFingerprint({ self, relations })
+    rhythm,
+    fingerprint: mindFingerprint({ self, relations, rhythm })
   };
 }

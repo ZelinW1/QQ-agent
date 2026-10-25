@@ -184,6 +184,16 @@ console.log('\n=== 4. 编排器行为 ===');
     check((mind.getTick().sleep || {}).stayUps === 1, '撑的次数 +1');
   }
 
+  // 4f. "刚聊过所以没睡"必须能解释出来（否则用户以为功能坏了）
+  {
+    const { orch } = mkOrch();
+    // 窗口 23:30 开始；23:40 时刚聊过（1 分钟前）→ 不睡，但要给出安静到几点
+    orch.lastActivityAt = at(day, 23, 39);
+    const s = orch.syncSleep(at(day, 23, 40));
+    check(s.asleep === false && s.reason === '刚还在聊天，先不睡', `状态原因可读（${s.reason}）`);
+    check(s.nextEligibleAt === at(day, 23, 39) + 15 * MIN, '给出"安静到几点就会睡"');
+  }
+
   // 4e. 关闭作息 → 行为回到原来
   {
     updateConfig({ mind: { sleep: { enabled: false } } });

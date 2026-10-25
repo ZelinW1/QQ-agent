@@ -120,6 +120,30 @@ await check('作息：开关关闭时 asleep=false，窗口为空，但配置仍
   assert.equal(d.sleep.asleep, false);
   assert.equal(d.sleep.config.startHour, 23, '回传入睡时刻（UI 才能就地改）');
   assert.ok(d.sleep.config.jitterMin >= 0, '回传抖动');
+  assert.ok(typeof d.sleep.reason === 'string', '回传"为什么是这个状态"');
+});
+
+await check('反思状态：阈值 / 冷却 / 今日次数都可见', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+  const r = d.reflect;
+  assert.ok(r && typeof r === 'object', '有 reflect 状态');
+  for (const k of ['unreflected', 'need', 'usedToday', 'dailyCap', 'canReflect']) {
+    assert.ok(k in r, `reflect 缺少字段 ${k}`);
+  }
+  assert.ok(r.need >= 1, '阈值是正数');
+});
+
+await check('手动反思接口：指定会话时跑一次；没有会话时 400 并说明原因', async () => {
+  // 没有指定会话、也没有任何聊天记录 → 明确 400（而不是 500 或静默）
+  const none = await env.request('POST', '/api/mind/reflect', { body: {} });
+  assert.equal(none.status, 400);
+  assert.ok(String(none.data.error || '').includes('会话'), '错误要说明缺什么');
+
+  // 指定会话 → 真跑一次（模型是 mock，会答非所问，因此 ok=false 但接口 200）
+  const r = await env.request('POST', '/api/mind/reflect', { body: { chatKey: 'private:777' } });
+  assert.equal(r.status, 200);
+  assert.equal(typeof r.data.ok, 'boolean');
+  if (!r.data.ok) assert.ok(String(r.data.reason || '').length > 0, '失败要给原因');
 });
 
 await check('计数：事件与关系', async () => {

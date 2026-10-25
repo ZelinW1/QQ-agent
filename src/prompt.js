@@ -444,6 +444,17 @@ export function buildSystemPrompt({ persona, profile = null, skillContext, extra
   if (mind && mind.enabled === true) {
     push('self', 'mind-self', renderSelfSection(mind.self));
     push('self', 'mind-relations', renderRelationsSection(mind.relations));
+    // 她的日常：作息与"会自己整理记忆"这两件事必须让她自己知道。
+    // 否则引擎在夜里拦住消息、在后台反思，而她在对话里对此一无所知 ——
+    // 表现就是"刚刚还在聊，突然没反应"和"她不知道自己记得什么"。
+    if (mind.rhythm) {
+      push('self', 'mind-rhythm', [
+        '【我的日常】',
+        `- ${mind.rhythm}`,
+        '- 我会自己整理记忆：把零碎的事收成更少的几条，顺手更新对某些人的看法。',
+        '- 值得留的事（对方的近况、约定、让我在意的话）我会顺手记一笔，不然聊完就忘了。'
+      ].join('\n'));
+    }
   }
 
   // ④ skills —— 扩展片段一律殿后（动态内容动不到前面的字节）

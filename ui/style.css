@@ -976,10 +976,6 @@ td b, .tbl td b { color: var(--tx); font-weight: 600; }
 .settings-menu-item.active, .smi.on {
   background: var(--ac-soft); color: var(--ac); font-weight: 650;
 }
-.settings-menu-item.egg-hot {
-  background: var(--ac); color: #fff; font-weight: 700; text-align: center; margin-top: 10px;
-}
-.settings-menu-item.egg-hot:hover { filter: brightness(1.08); color: #fff; }
 .update-dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   background: var(--err); margin-left: 6px;
@@ -1260,7 +1256,7 @@ td b, .tbl td b { color: var(--tx); font-weight: 600; }
 .bl-global-toggle.on { background: var(--err); color: #fff; border-color: var(--err); }
 
 /* 弹窗 */
-.modal-overlay, .model-modal-overlay, .qrcode-egg-overlay {
+.modal-overlay, .model-modal-overlay {
   position: fixed; inset: 0; z-index: 200; background: var(--overlay);
   display: flex; align-items: center; justify-content: center; padding: 24px;
   animation: fadeIn var(--dur-base) var(--ease-in-out);
@@ -1501,10 +1497,6 @@ td b, .tbl td b { color: var(--tx); font-weight: 600; }
 .upload-toast .ut-title { font-weight: 650; font-size: 13.5px; }
 .upload-toast .ut-close { color: var(--tx3); }
 .upload-toast .ut-link { color: var(--ac); font-size: 12px; }
-.qrcode-egg-overlay img {
-  max-width: min(320px, 80vw); border-radius: var(--r-md); border: 1px solid var(--bd);
-  animation: popIn var(--dur-slow) var(--ease-spring);
-}
 .fb-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
 .fb-img { position: relative; border: 1px solid var(--bd); border-radius: var(--r-sm); overflow: hidden; aspect-ratio: 1; }
 .fb-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -1551,9 +1543,9 @@ td b, .tbl td b { color: var(--tx); font-weight: 600; }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
 @keyframes fadeOut { 0% { opacity: 1; } 100% { opacity: 0; } }
 
-.modal-overlay, .model-modal-overlay, .qrcode-egg-overlay { animation: fadeIn var(--dur-base) var(--ease-in-out); }
+.modal-overlay, .model-modal-overlay { animation: fadeIn var(--dur-base) var(--ease-in-out); }
 .model-modal { animation: popIn var(--dur-slow) var(--ease-spring); }
-.modal-overlay.closing, .model-modal-overlay.closing, .qrcode-egg-overlay.closing { animation: fadeOut var(--dur-base) var(--ease-in-out) forwards; }
+.modal-overlay.closing, .model-modal-overlay.closing.closing { animation: fadeOut var(--dur-base) var(--ease-in-out) forwards; }
 .modal-overlay.closing .modal, .model-modal-overlay.closing .model-modal,
 .modal-overlay.closing .skill-modal { animation: popOut var(--dur-base) var(--ease-in-out) forwards; }
 .model-modal-overlay.closing .model-modal { animation: popOut var(--dur-base) var(--ease-in-out) forwards; }

@@ -120,6 +120,10 @@ await sandbox.loadMindPage();
   check(html.includes('77'), '节律：体力数值');
   check(html.includes('最近反思'), '反思卡');
   check(html.includes('压缩 2 条'), '反思产出摘要');
+  check(html.includes('什么时候会反思'), '反思触发条件可见（不用干等）');
+  check(html.includes('mind-reflect-now'), '有手动触发反思的按钮');
+  check(html.includes('身份：分槽'), '身份来源胶囊标明模式');
+  check(html.includes('作息未启用'), '未开启作息时胶囊显示"未启用"');
   check(!html.includes('开关与作息'), '状态页不混入设定（开关在「身份」页）');
 }
 

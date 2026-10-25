@@ -386,7 +386,9 @@ export const DEFAULT_CONFIG = {
       startHour: 23, startMinute: 30,   // 打算睡的时段
       endHour: 8, endMinute: 0,         // 打算醒的时段（可跨午夜）
       jitterMin: 40,                // 每晚入睡/醒来各随机 ±N 分钟
-      graceMs: 900000,              // 刚聊过天就先不睡（15 分钟内有过活动）
+      graceMs: 300000,              // 刚聊过天就先不睡（5 分钟内有过活动）
+      // 这个值是"她会不会立刻睡着"的关键：设了 19:40 入睡、19:39 还在聊，
+      // 她就得等到 19:45 才睡。界面上必须能看到它，否则会以为功能坏了。
       stayUpMs: 1800000,            // 每"再撑一会"延长多久（30 分钟）
       maxStayUp: 2,                 // 一晚最多再撑几次
       wakeOnBacklog: true           // 醒来时把积压消息当成一批处理

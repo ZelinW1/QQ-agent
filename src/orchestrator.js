@@ -79,6 +79,8 @@ export class Orchestrator {
     // 睡眠期间 onIncoming 直接 return —— 消息只入库，她看不见。
     this.asleep = false;
     this.sleepWindow = null;           // 今晚的入睡窗口（用于日志/UI 展示）
+    this.sleepReason = '';             // 最近一次作息判定的原因（UI 要能解释"为什么还醒着"）
+    this.sleepNextEligibleAt = 0;      // 若因"刚聊过"而没睡，安静到此刻就会睡
     this.lastActivityAt = 0;           // 最近一次收到消息的时间（用于"安静宽限"）
     this.runningChats = new Set();     // 正在运行的 chatKey
     this.activeRuns = new Map();       // chatKey -> sessionId
@@ -1887,7 +1889,34 @@ export class Orchestrator {
 
     this.asleep = d.asleep;
     this.sleepWindow = window;
+    this.sleepReason = d.reason;
+    // 因为"刚聊过"而没睡时，算出安静到几点就会睡 —— UI 必须能解释"为什么还醒着"，
+    // 否则用户改了入睡时间却看到"醒着"，只会以为功能坏了（真实踩过）。
+    const graceMs = Math.max(0, Number(sleepCfg.graceMs) || 0);
+    this.sleepNextEligibleAt = (!d.asleep && d.inWindow && this.lastActivityAt > 0 && graceMs > 0)
+      ? this.lastActivityAt + graceMs
+      : 0;
     return { asleep: d.asleep, window, reason: d.reason, changed, inWindow: d.inWindow };
+  }
+
+  /**
+   * 立刻刷新一次作息状态（配置保存后调用）。
+   * 不刷新的话，用户改完入睡时间要等下一次心跳（最多 60 秒）才看到效果，
+   * 期间胶囊一直显示旧状态。
+   */
+  syncSleep(now = Date.now()) {
+    if (!this.mind) return { asleep: false, reason: '无心智' };
+    try {
+      const r = this.#refreshSleep(now);
+      return {
+        asleep: r.asleep,
+        reason: r.reason,
+        inWindow: r.inWindow,
+        nextEligibleAt: this.sleepNextEligibleAt
+      };
+    } catch (error) {
+      return { asleep: false, reason: String(error?.message ?? error) };
+    }
   }
 
   /** 启动心跳主循环。心智未启用时什么都不做（与没有这个子系统时一致）。 */
