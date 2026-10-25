@@ -61,11 +61,20 @@ function renderMemoryList() {
   const files = state.memoryFiles || [];
   const names = {};
   for (const c of state.chats || []) names[c.key] = formatChatTitle(c.key, chatNameOf(c.key));
+  // 心智开启后，"对某个人的印象"以关系档案为准。这一页保留旧数据供查阅，
+  // 但必须**明确说出来**，否则用户会分不清哪一份是真的。
+  const mindOn = state.config?.mind?.enabled === true;
+  const mindHint = mindOn
+    ? `<div class="list-head muted" style="flex-direction:column;align-items:flex-start;gap:6px;line-height:1.5">
+         群友印象已并入「心智 → 关系」，这里仅供查阅
+         <button class="list-head-btn" id="memory-go-mind">去看关系</button>
+       </div>`
+    : '';
   if (!files.length) {
-    box.innerHTML = '<div class="list-head muted">还没有任何记忆（等机器人使用记忆工具后才会出现）</div>';
+    box.innerHTML = `${mindHint}<div class="list-head muted">还没有任何记忆（等机器人使用记忆工具后才会出现）</div>`;
     return;
   }
-  box.innerHTML = files.map((f) => {
+  box.innerHTML = mindHint + files.map((f) => {
     const key = f.chatKey;
     const busy = !!state.consolidating[key];
     // 整理中：在列表项上直接标出，切页签回来也能一眼看到
@@ -98,6 +107,8 @@ function renderMemoryList() {
       loadMemoryDetail(state.currentMemoryChatKey);
     });
   });
+  // 心智开启时的提示条：跳去看关系档案
+  $('#memory-go-mind')?.addEventListener('click', () => switchTab('mind'));
   // 删除本会话的全部记忆（stopPropagation：别触发选中详情）
   $$('.mem-del-chat', box).forEach((btn) => {
     btn.addEventListener('click', async (e) => {

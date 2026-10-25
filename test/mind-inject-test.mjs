@@ -197,14 +197,19 @@ console.log('\n=== 6. 关闭时提示词逐字节不变 ===');
   const on = strip(buildUserPrompt({ ...base, mind: MIND }));
   check(on.includes('【最近想起的事】'), '启用时 user 里有回忆段');
   check(!on.includes('【关于我自己】'), '自我段不再出现在 user 里');
+  // 旧印象（memberImpression）由关系档案接管：心智开启时不再渲染，
+  // 否则同一件事会有两份互相矛盾的说法；关闭时保持原样。
+  check(!on.includes('【对群友的印象】'), '心智开启时不渲染旧印象');
+  check(a.includes('【对群友的印象】'), '心智关闭时旧印象照旧');
+  check(!on.includes('【记忆】\n'), '心智开启时不再有旧【记忆】段');
+  check(a.includes('【记忆】\n'), '心智关闭时仍有【记忆】段');
 
   // 用"段头 + 紧随其后的正文"定位，避免命中【引导说明】里对段名的引用
   const at = (marker) => on.indexOf(marker);
-  const iMem = at('【记忆】\n');
   const iRead = at('【已读信息】以下');
   const iRecent = at('【最近想起的事】');
   const iUnread = at('【未读信息】以下');
-  check(iMem > 0 && iRead > 0, '夹具确实产生了【记忆】与【已读信息】');
+  check(iRead > 0, '夹具确实产生了【已读信息】');
   check(iRead < iRecent && iRecent < iUnread, '最近想起的事在已读之后、未读之前（易变区）');
 }
 

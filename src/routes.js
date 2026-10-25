@@ -1274,6 +1274,11 @@ export function createRoutes(deps) {
         store.setMaxPerChat(next.store?.maxMessagesPerChat ?? 0);
         sessions?.setKeepFiles?.(next.store?.keepSessionFiles ?? 0);
         if (next.proactive?.enabled) orchestrator.startProactiveLoop(); else orchestrator.stopProactiveLoop();
+        // 心智节律：运行期开关也要生效（否则改完必须重启才跑心跳）。
+        // 与 app 启动时同一条互斥规则：心智节律开启时，旧的概率式 proactive 让位。
+        const mindTickOn = next.mind?.enabled === true && next.mind?.tick?.enabled !== false;
+        if (mindTickOn) { orchestrator.startTickLoop(); orchestrator.stopProactiveLoop(); }
+        else orchestrator.stopTickLoop();
         initPriceFeed(FIXED_PRICE_FEED_URL);
         emit('status', { configUpdated: true });
         // ⚠️ 必须脱敏：updateConfig 返回的是内存里的活配置对象，含明文 apiKey /

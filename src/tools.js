@@ -651,6 +651,8 @@ function registerAllTools() {
     name: '记录印象',
     description: '记一条对群友的长期印象（下次运行会自动看到）。只记"以后和这个人打交道时用得上"的稳定印象：他的身份/关系、说话风格、爱玩的梗、雷点、常聊话题、别踩的坑。太临时的事情不要记。userId 必须填对方的 QQ 号（不知道就先调 get_active_members / get_recent_messages 查）；target 填备注名/群名片/昵称，用于展示。',
     category: 'memory',
+    // 心智开启后由 update_relation 接管（关系档案有证据、有阶段、有把握度）
+    hideWithMind: true,
     icon: '🧠',
     parameters: {
       type: 'object',
@@ -680,6 +682,7 @@ function registerAllTools() {
     name: '查询印象',
     description: '查看当前会话里你对群友的长期印象。不传 userId 返回全部；传 userId 只看某一个人。',
     category: 'memory',
+    hideWithMind: true,
     icon: '🔍',
     parameters: {
       type: 'object',
@@ -702,6 +705,7 @@ function registerAllTools() {
     name: '删除印象',
     description: '删除一条过时/不再准确的对群友印象。userId 优先按 QQ 号删；target 按名字删；两者都不传则删全部印象。',
     category: 'memory',
+    hideWithMind: true,
     icon: '🗑️',
     parameters: {
       type: 'object',

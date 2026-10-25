@@ -1016,7 +1016,10 @@ export function buildUserPrompt(ctx) {
       if (m.senderId && !m.self) relevantUserIds.add(String(m.senderId));
     }
   }
-  const memText = ctx.memory.formatForPrompt(ctx.chatKey, { userIds: [...relevantUserIds] });
+  // 旧印象（memberImpression）已由心智的关系档案接管：
+  // mind 生效时不再渲染，避免同一件事出现两份互相矛盾的说法。
+  // mind 关闭时保持原样（逐字节回归）。
+  const memText = mind ? '' : ctx.memory.formatForPrompt(ctx.chatKey, { userIds: [...relevantUserIds] });
 
   // 记忆段（锚定模式的字节前缀从这段开始跨轮不变）
   if (memText) parts.push(`【记忆】\n${memText}`);

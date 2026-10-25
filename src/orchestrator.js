@@ -1796,6 +1796,50 @@ export class Orchestrator {
   // 才调决策模型。多数时间她什么都没想（见 doc/m1-mind-plan.md §6.2）。
 
   /**
+   * 把旧的 memberImpression 一次性并入关系档案。
+   *
+   * 为什么必须做：两套"对某个人的印象"同时存在，会让她看到两份互相矛盾的说法
+   * （真实提示词样本里出现过："说话很直、不用客套" vs "做后端、爱喝美式"）。
+   * 关系档案有证据、有阶段、有把握度，是应该活下来的那一套。
+   *
+   * 幂等：tick.migratedImpressions 记一笔，重复调用直接跳过。
+   * 只做合并、不删除旧数据 —— 旧印象仍留在记忆文件里可查，只是不再进提示词。
+   *
+   * @returns {{ok:boolean, skipped?:boolean, users?:number, merged?:number, reason?:string}}
+   */
+  migrateImpressionsToRelations() {
+    if (!this.mind) return { ok: false, reason: '无心智' };
+    const tick = this.mind.getTick();
+    if (tick.migratedImpressions) return { ok: true, skipped: true };
+
+    let users = 0;
+    let merged = 0;
+    for (const chatKey of this.store.listChats()) {
+      let members = [];
+      try { members = this.memory.members?.(chatKey) || []; } catch { continue; }
+      for (const m of members) {
+        const userId = String(m?.userId || '');
+        if (!/^\d{1,15}$/.test(userId)) continue;
+        const texts = (m.impressions || [])
+          .map((e) => String(e?.content ?? '').trim())
+          .filter(Boolean);
+        if (!texts.length) continue;
+
+        const rel = this.mind.getRelation(userId);
+        const knownFor = [...new Set([...(rel.knownFor || []), ...texts])];
+        const patch = { knownFor };
+        if (!rel.nickname && m.name) patch.nickname = String(m.name);
+        const r = this.mind.patchRelation(userId, patch, { evidence: ['migrated:memberImpression'] });
+        if (r.ok) { users += 1; merged += texts.length; }
+      }
+    }
+
+    this.mind.updateTick({ migratedImpressions: true, migratedImpressionsAt: Date.now() });
+    if (merged > 0) console.log(`[mind] 旧群友印象已并入关系档案：${users} 人 / ${merged} 条`);
+    return { ok: true, users, merged };
+  }
+
+  /**
    * 刷新作息状态（醒来/睡着）。
    *
    * 睡着的三个后果，缺一不可：
@@ -1853,6 +1897,10 @@ export class Orchestrator {
     const cfg = getConfig();
     const m = cfg.mind || {};
     if (m.enabled !== true || m.tick?.enabled !== true) return;
+
+    // 顺手做一次旧印象迁移（幂等，已迁过就跳过）。
+    // 放在这里而不是启动流程里：运行期开心智时也能补上。
+    try { this.migrateImpressionsToRelations(); } catch { /* 迁移失败不影响心跳 */ }
 
     this.tickTimer = setInterval(() => {
       this.tickOnce().catch((error) => console.error('[mind] 心跳失败:', error?.message ?? error));

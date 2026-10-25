@@ -72,6 +72,13 @@ console.log('\n=== 1. 注册与门控 ===');
 
   const other = getToolAvailability('send_message', { mindEnabled: false });
   check(other.enabled === true, '心智关闭不影响普通工具');
+
+  // 反向门控：心智开启后，旧的 memberImpression 工具退场
+  const memOn = getToolAvailability('memory_append', { mindEnabled: true });
+  check(memOn.enabled === false && memOn.code === 'superseded-by-mind',
+    `心智开启时旧印象工具退场（${memOn.code}）`);
+  const memOff = getToolAvailability('memory_append', { mindEnabled: false });
+  check(memOff.enabled === true, '心智关闭时旧印象工具照旧可用');
 }
 
 // ── 2. remember_event ───────────────────────────────────────────────────

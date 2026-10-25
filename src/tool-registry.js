@@ -50,6 +50,10 @@ export function registerTool(def) {
     // 用途：mind 关闭时，remember_event/update_relation/self_revise/recall
     // 从模型可见的工具表里**整体消失**，而不是"看得见但一调就报错"。
     requiresMind: false,
+    // hideWithMind：心智开启时**隐藏**这个工具（与 requiresMind 相反）。
+    // 用途：旧的 memberImpression 工具已被心智的关系档案取代；
+    // 两套"记对人的印象"同时留着，她只会写出两份互相矛盾的说法。
+    hideWithMind: false,
     // skillId：该工具属于哪个 Skill（内置工具为 null）。
     // 用途：Skill 被禁用时，它注册的工具自动不可用；卸载时按 skillId 批量清理。
     skillId: null,
@@ -207,6 +211,10 @@ export function getToolAvailability(toolId, context = {}) {
   // 运行有没有这个条件"，不是配置层的开关。
   if (def.requiresMind && mindEnabled !== true) {
     return deny('mind-disabled', '心智功能未启用（设置 → 心智）');
+  }
+  // 反向：心智开启后，旧印象工具退场（由 update_relation 接管）
+  if (def.hideWithMind && mindEnabled === true) {
+    return deny('superseded-by-mind', '已被心智的关系档案取代（用 update_relation）');
   }
 
   // 7) Skill 附加否决（tool.guard）
