@@ -135,6 +135,9 @@ await sandbox.loadMindPage();
   check(html.includes('作息未启用'), '未开启作息时胶囊显示"未启用"');
   check(html.includes('mind-edit-self'), '自我描述可手动修改（有伦理提示）');
   check(html.includes('data-rel-edit="777"'), '关系可手动编辑');
+  check(html.includes('mind-backup-her') && html.includes('mind-backup-full'), '两种备份导出入口');
+  check(html.includes('mind-backup-import'), '导入入口');
+  check(html.includes('不含设置与 API Key'), '写明备份不含密钥');
   check(!html.includes('开关与作息'), '状态页不混入设定（开关在「身份」页）');
 }
 
@@ -221,7 +224,7 @@ console.log('\n=== 1c. 记忆流 / 会话配置 ===');
   check(b1c.innerHTML.includes('他说组里在裁人'), '展示事件正文');
   check(b1c.innerHTML.includes('小王'), '展示当事人');
   check(b1c.innerHTML.includes('mind-stream-actor') && b1c.innerHTML.includes('mind-stream-chat'), '有按人 / 按会话筛选');
-  check(b1c.innerHTML.includes('她自己'), '筛选项包含"她自己"');
+  check(b1c.innerHTML.includes('>自己<'), '筛选项包含"自己"');
   check(b1c.innerHTML.includes('所有会话'), '筛选项包含"所有会话"');
 
   const { sandbox: s1d, box: b1d } = makeSandbox(STATE, (p) => (

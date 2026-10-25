@@ -770,7 +770,10 @@ async function resumePause({ skipBacklog = false } = {}) {
 // 用户得记住"改名字去心智、看印象去记忆、改人设去设置"——这不是用户的错。
 const NAV_GROUPS = {
   her: {
-    label: '她',
+    // 顶层叫「心智」而不是「她」：后者预设了性别，而 Agent/机器人又把它变成
+    // "一个被使用的工具"，与"成为而非扮演"相反。心智（mind）是中性词，
+    // 也正好是这个子系统的名字。
+    label: '心智',
     items: [
       { id: 'state', label: '状态', view: 'mind', mode: 'state' },
       { id: 'rhythm', label: '节律', view: 'mind', mode: 'rhythm' },

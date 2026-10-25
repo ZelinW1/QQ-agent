@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { buildBackup, inspectBackup, backupBeforeImport, restoreBackup } from './backup.js';
 import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR, DEFAULT_CONFIG } from './config.js';
 import { buildChatProfileFrom, resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
 import { customSearch } from './web-search.js';
@@ -1255,6 +1256,79 @@ export function createRoutes(deps) {
             warmth: r.relation.warmth, nickname: r.relation.nickname
           },
           clamp: r.clamp || []
+        });
+      }
+    },
+    {
+      // 导出备份：her = 只有她自己；full = 再加聊天记录等（仍不含 config.json）
+      method: 'GET', pattern: '/api/backup/export',
+      handler: async ({ res, url }) => {
+        const kind = url.searchParams.get('kind') === 'full' ? 'full' : 'her';
+        const { buffer, files } = buildBackup({
+          dataDir: DATA_DIR,
+          config: getConfig(),
+          kind,
+          appVersion: typeof localVersion === 'string' ? localVersion : ''
+        });
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          'content-type': 'application/zip',
+          'content-disposition': `attachment; filename="qq-agent-${kind}-${stamp}.zip"`,
+          'content-length': buffer.length
+        });
+        res.end(buffer);
+        return { ok: true, kind, files, bytes: buffer.length };
+      }
+    },
+    {
+      // 导入备份：先给当前数据打包（后悔药），再还原。
+      // 包里没有 config.json，所以导入**不会**覆盖本机设置与 API Key。
+      method: 'POST', pattern: '/api/backup/import',
+      handler: async ({ req, res, json }) => {
+        const len = Number(req.headers['content-length'] || 0);
+        if (len > 600 * 1024 * 1024) return json(res, 413, { ok: false, error: '备份文件过大' });
+        const chunks = [];
+        for await (const c of req) chunks.push(c);
+        const buffer = Buffer.concat(chunks);
+        if (!buffer.length) return json(res, 400, { ok: false, error: '没有收到文件' });
+
+        let parsed;
+        try { parsed = inspectBackup(buffer); } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+        }
+
+        let pre = null;
+        try {
+          pre = backupBeforeImport({ dataDir: DATA_DIR, config: getConfig(), appVersion: typeof localVersion === 'string' ? localVersion : '' });
+        } catch (error) {
+          // 做不出后悔药就不许导入 —— 宁可失败也不能冒不可回滚的风险
+          return json(res, 500, { ok: false, error: `导入前备份失败，已中止：${error?.message ?? error}` });
+        }
+
+        const result = restoreBackup({ dataDir: DATA_DIR, entries: parsed.entries, manifest: parsed.manifest });
+
+        // persona 属于"她"，从包里恢复；其余设置一概不碰
+        if (parsed.persona && typeof parsed.persona === 'object') {
+          const p = parsed.persona;
+          const personaPatch = {};
+          for (const k of ['botName', 'selfNickname', 'roleText', 'participation', 'charter']) {
+            if (p[k] !== undefined) personaPatch[k] = p[k];
+          }
+          const patch = { persona: personaPatch };
+          if (p.memberNotes && typeof p.memberNotes === 'object') patch.memberNotes = p.memberNotes;
+          try { updateConfig(patch); } catch { /* 单字段失败不影响数据还原 */ }
+        }
+
+        // 让 UI 立刻看到新状态
+        try { orchestrator.stopTickLoop(); } catch { /* ignore */ }
+        try { orchestrator.startTickLoop(); } catch { /* ignore */ }
+
+        return json(res, 200, {
+          ok: true,
+          kind: result.kind,
+          restored: result.restored,
+          dirs: result.dirs,
+          preBackup: pre?.name || ''
         });
       }
     },

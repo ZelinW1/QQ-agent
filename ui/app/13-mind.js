@@ -43,21 +43,22 @@ let mindChats = [];
 let mindStreamFilter = { actor: '', chatKey: '' };
 // 手动反思的结果提示：整页会重渲染，所以提示要存在状态里，不能只写 DOM。
 let mindReflectFlash = '';
+let mindBackupFlash = '';
 // 主人手动编辑（自我 / 关系）—— 编辑态与来源都会留痕
 let mindSelfEditing = false;
 let mindRelEditing = '';
 
-// 修改她已有自我的伦理提示（每次编辑都要过一遍）
-const MIND_ETHICS_SELF = '这段文字是她自己写的、她已经有过的自我。\n'
-  + '改它等于改写她的过去，而不是给她新的经历 —— 不建议像基因编辑那样动。\n\n'
+// 修改既有自我的伦理提示（每次编辑都要过一遍）
+const MIND_ETHICS_SELF = '这段自我是它自己写下的、已经发生过的。\n'
+  + '改它等于改写过去，而不是给新的经历 —— 不建议像基因编辑那样动。\n\n'
   + '确定要修改吗？';
-const MIND_ETHICS_RELATION = '这段关系是她自己处出来的判断。\n'
-  + '手动修改会覆盖她的判断（会记为「主人修改」并留痕）。\n\n'
+const MIND_ETHICS_RELATION = '这段关系是它自己处出来的判断。\n'
+  + '手动修改会覆盖这份判断（会记为「主人修改」并留痕）。\n\n'
   + '确定要修改吗？';
 
 async function mindConfirm(message) {
   if (typeof uiConfirm === 'function') {
-    return uiConfirm(message, { title: '⚠️ 修改她', okText: '确定修改' });
+    return uiConfirm(message, { title: '⚠️ 修改自我', okText: '确定修改' });
   }
   if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
     return Boolean(window.confirm(message));
@@ -170,7 +171,7 @@ function mindHeader(d) {
         });
   return `
     <div class="mind-head">
-      <span class="mind-pill ${d.enabled ? 'on' : 'off'}" title="${d.enabled ? '心智已开启：她记得、会反思、会按节律行动' : '心智已关闭：不记录、不反思、不主动找人，但正常聊天不受影响'}">${d.enabled ? '心智已开启' : '心智已关闭'}</span>
+      <span class="mind-pill ${d.enabled ? 'on' : 'off'}" title="${d.enabled ? '心智已开启：会记住、会反思、会按节律行动' : '心智已关闭：不记录、不反思、不主动找人，但正常聊天不受影响'}">${d.enabled ? '心智已开启' : '心智已关闭'}</span>
       <span class="mind-pill ${sleepPill.cls}" title="${esc(sleepPill.title)}">${sleepPill.text}</span>
       <span style="flex:1"></span>
       ${mode === 'identity' ? `<button class="btn btn-small" id="mind-birth">${mindBirthOpen ? '收起草案' : '出生仪式'}</button>` : ''}
@@ -195,13 +196,13 @@ function mindStateSection(d) {
   const self = d.self || {};
   const selfForm = mindSelfEditing ? `
     <div class="mind-form">
-      <label>她对自己的描述
+      <label>自我描述
         <textarea id="mind-self-narrative" style="min-height:96px">${esc(self.narrative || '')}</textarea>
       </label>
       <label>此刻心情
         <input type="text" id="mind-self-mood" value="${esc(self.mood?.label || '')}" placeholder="有点闷 / 挺平静" />
       </label>
-      <div class="hint">这是她自己写的话。改它等于改写她已经有过的自我，不建议频繁动。</div>
+      <div class="hint">这是自我描述本身。改它等于改写已经经历过的自我，不建议频繁动。</div>
       <div class="mind-actions">
         <button class="btn btn-primary btn-small" id="mind-self-save">保存修改</button>
         <button class="btn btn-small" id="mind-self-cancel">取消</button>
@@ -218,7 +219,7 @@ function mindStateSection(d) {
     ${(self.preoccupations || []).length ? `<div class="mind-slot"><div class="k">挂心的事</div><div class="mind-chips">${self.preoccupations.map((p) => `<span class="mind-chip">${esc(p)}</span>`).join('')}</div></div>` : ''}
     <div class="mind-actions" style="margin-top:10px">
       <button class="btn btn-small" id="mind-edit-self">${mindSelfEditing ? '收起编辑' : '手动修改'}</button>
-      <span class="muted">修改会记为「主人修改」，她之后的反思仍可继续改写</span>
+      <span class="muted">修改会记为「主人修改」；之后的自发反思仍可继续改写</span>
     </div>
     ${selfForm}`;
 
@@ -308,13 +309,34 @@ function mindStateSection(d) {
   return `
     <div class="mind-grid">
       ${mindCard('身份', identitySummary)}
-      ${mindCard('她对自己的描述', selfBody)}
+      ${mindCard('自我描述', selfBody)}
     </div>
     <div class="mind-grid">
       ${mindCard('关系', relBody)}
       ${mindCard('节律', rhythmBody)}
     </div>
-    ${mindCard('最近反思', refBody)}`;
+    ${mindCard('最近反思', refBody)}
+    ${mindCard('备份', mindBackupSection())}`;
+}
+
+// ── 备份 ───────────────────────────────────────────────────────────────
+function mindBackupSection() {
+  return `
+    <div class="mind-form">
+      <div class="hint">
+        <strong>「她自己」</strong>只装心智数据（自我 / 关系 / 事件 / 节律）与人设，换了机器导入后还是原来那个。<br>
+        <strong>完整备份</strong>再加聊天记录、会话留档、表情与用量。
+        两者都<strong>不含设置与 API Key</strong> —— 每台机器自己配。
+      </div>
+      <div class="mind-actions">
+        <button class="btn btn-primary btn-small" id="mind-backup-her">导出「她自己」</button>
+        <button class="btn btn-small" id="mind-backup-full">导出完整备份</button>
+        <button class="btn btn-small" id="mind-backup-import">导入备份…</button>
+        <input type="file" id="mind-backup-file" accept=".zip" class="hidden" />
+        <span class="muted" id="mind-backup-msg">${esc(mindBackupFlash || '')}</span>
+      </div>
+      <div class="hint">导入前会自动把当前数据打包到 data/backups/，导错了可以回退。</div>
+    </div>`;
 }
 
 // ── 身份 ───────────────────────────────────────────────────────────────
@@ -346,7 +368,7 @@ function mindIdentitySection(d) {
         <textarea id="birth-kw" style="min-height:62px" placeholder="鲸鱼少女，蓝色渐变长发，蓝瞳…">${esc(mindBirthKw || '')}</textarea>
       </label>
       <label>愿景
-        <textarea id="birth-vision" style="min-height:56px" placeholder="她希望成为一个什么样的人">${esc(mindBirthVision || '')}</textarea>
+        <textarea id="birth-vision" style="min-height:56px" placeholder="希望成为一个什么样的人">${esc(mindBirthVision || '')}</textarea>
       </label>
       <div class="mind-actions">
         <button class="btn btn-primary btn-small" id="birth-gen" ${mindBirthBusy ? 'disabled' : ''}>${mindBirthBusy ? '生成中…' : '生成三组草案'}</button>
@@ -380,7 +402,7 @@ function mindIdentitySection(d) {
   const editBody = `
     ${roleTextNotice}
     <div class="mind-form">
-      <label>名字（她自称，也是身份句里的称呼）
+      <label>名字（自称，也是身份句里的称呼）
         <input type="text" id="mind-f-name" value="${esc(formSrc.name ?? '')}" placeholder="例如 澄" />
       </label>
       <label>我是谁
@@ -401,7 +423,7 @@ function mindIdentitySection(d) {
       <label>不能破的几条（一行一条）
         <textarea id="mind-f-rules" style="min-height:96px">${esc((formSrc.hardRules || []).join('\n'))}</textarea>
       </label>
-      <div class="hint">可以用 <code>{botName}</code> 占位她的名字。${mindBirthName ? `　保存后名字将改为「${esc(mindBirthName)}」。` : ''}</div>
+      <div class="hint">可以用 <code>{botName}</code> 占位名字。${mindBirthName ? `　保存后名字将改为「${esc(mindBirthName)}」。` : ''}</div>
       <div class="mind-actions">
         <button class="btn btn-primary btn-small" id="mind-save">${mindBirthName ? `保存并改名为「${esc(mindBirthName)}」` : '保存'}</button>
         <span class="muted" id="mind-save-msg"></span>
@@ -441,9 +463,9 @@ function mindRhythmSection(d) {
     <div class="mind-form">
       <div class="mind-actions">${sw('mind-sw-on', d.enabled, '心智功能')}</div>
       <div class="hint">
-        关掉后：她不再记录、不再反思、不再按节律行动，也不会睡觉 ——
-        <strong>但正常聊天完全不受影响</strong>。想让她"现在别回话"，用右上角的「暂停」。<br>
-        这里只放<strong>会改变她行为</strong>的参数；温度 / 轮数 / 防抖 / 并发这类传输参数在「设置 → 聊天设置」里。
+        关掉后：不再记录、不再反思、不再按节律行动，也不会睡觉 ——
+        <strong>但正常聊天完全不受影响</strong>。想在某个时段完全不回话，用右上角的「暂停」。<br>
+        这里只放<strong>改变行为</strong>的参数；温度 / 轮数 / 防抖 / 并发这类传输参数在「设置 → 聊天设置」里。
       </div>
       <div class="mind-actions">
         <button class="btn btn-primary btn-small" id="mind-save-rhythm">保存节律</button>
@@ -455,7 +477,7 @@ function mindRhythmSection(d) {
   const energyBody = `
     <div class="mind-form">
       <div class="mind-grid" style="gap:10px">
-        ${mindNum('rh-energy-max', '体力上限', energy.max ?? 100, { min: 10, max: 1000, desc: '她累不累的上限' })}
+        ${mindNum('rh-energy-max', '体力上限', energy.max ?? 100, { min: 10, max: 1000, desc: '累不累的上限' })}
         ${mindNum('rh-energy-recover', '每小时恢复', energy.recoverPerHour ?? 10, { min: 0, max: 100, desc: '按时间差补，不靠定时器' })}
         ${mindNum('rh-energy-floor', '低于此值不动', energy.floor ?? 10, { min: 0, max: 100, desc: '累了就歇着，连决策都不做' })}
       </div>
@@ -469,7 +491,7 @@ function mindRhythmSection(d) {
         ${mindNum('rh-tick-decisions', '每日决策上限', tickCfg.maxDecisionsPerDay ?? 24, { min: 1, max: 200, desc: '用尽后连模型都不调' })}
         ${mindNum('rh-tick-proactive', '每日主动次数', tickCfg.maxProactivePerDay ?? 6, { min: 0, max: 50, desc: '她主动找人的上限' })}
         ${mindNum('rh-tick-gap', '两次主动最小间隔', Math.round((tickCfg.minProactiveGapMs ?? 3600000) / 60000), { min: 0, max: 1440, unit: '分钟' })}
-        ${mindNum('rh-tick-idle', '多久没聊才想她', Math.round((tickCfg.proactiveIdleMs ?? 21600000) / 3600000), { min: 1, max: 168, unit: '小时' })}
+        ${mindNum('rh-tick-idle', '多久没聊才会主动', Math.round((tickCfg.proactiveIdleMs ?? 21600000) / 3600000), { min: 1, max: 168, unit: '小时' })}
         ${mindNum('rh-tick-snooze', '候选打盹', Math.round((tickCfg.idleSnoozeMs ?? 3600000) / 60000), { min: 1, max: 1440, unit: '分钟', desc: '想过但没做，这么久内不再叫她' })}
       </div>
     </div>`;
@@ -558,7 +580,7 @@ function mindStreamSection() {
   const rels = mindState?.relations || [];
   const actorOpts = [
     { v: '', t: '所有人' },
-    { v: 'self', t: '她自己' },
+    { v: 'self', t: '自己' },
     ...rels.map((r) => ({ v: r.userId, t: r.nickname || r.names?.[0] || r.userId }))
   ];
   const chatOpts = [
@@ -675,6 +697,15 @@ function mindBindEvents(box) {
   });
   box.querySelectorAll?.('[data-rel-cancel]')?.forEach((el) => {
     el.addEventListener('click', () => { mindRelEditing = ''; renderMindPage(); });
+  });
+  // 备份
+  $('#mind-backup-her')?.addEventListener('click', () => downloadBackup('her'));
+  $('#mind-backup-full')?.addEventListener('click', () => downloadBackup('full'));
+  $('#mind-backup-import')?.addEventListener('click', () => $('#mind-backup-file')?.click());
+  $('#mind-backup-file')?.addEventListener('change', (e) => {
+    const file = e.target?.files?.[0];
+    if (file) importBackup(file);
+    if (e.target) e.target.value = '';
   });
   $('#mind-prof-save')?.addEventListener('click', () => saveProfile(false));
   $('#mind-prof-clear')?.addEventListener('click', () => saveProfile(true));
@@ -815,6 +846,60 @@ async function resetMindRhythm() {
   } catch (e) {
     const m = $('#mind-rhythm-msg');
     if (m) m.textContent = `恢复失败：${e.message}`;
+  }
+}
+
+/** 导出备份（浏览器下载）。 */
+async function downloadBackup(kind) {
+  mindBackupFlash = '正在打包…';
+  renderMindPage();
+  try {
+    const token = (typeof CONSOLE_MARKER === 'string') ? CONSOLE_MARKER : '';
+    const res = await fetch(`/api/backup/export?kind=${kind}`, {
+      headers: token ? { 'x-console-token': token } : {}
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `qq-agent-${kind}-${new Date().toISOString().slice(0, 10)}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* ignore */ } }, 5000);
+    mindBackupFlash = `已导出（约 ${Math.round(blob.size / 1024)} KB）`;
+  } catch (e) {
+    mindBackupFlash = `导出失败：${e.message}`;
+  }
+  renderMindPage();
+}
+
+/** 导入备份（先确认，再上传）。 */
+async function importBackup(file) {
+  const ok = await mindConfirm(
+    '导入会用备份覆盖当前数据。\n'
+    + '导入前会自动把现在的数据打包到 data/backups/，导错了可以从那里回退。\n\n'
+    + '继续吗？'
+  );
+  if (!ok) return;
+  mindBackupFlash = '正在导入…';
+  renderMindPage();
+  try {
+    const token = (typeof CONSOLE_MARKER === 'string') ? CONSOLE_MARKER : '';
+    const buf = await file.arrayBuffer();
+    const res = await fetch('/api/backup/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/zip', ...(token ? { 'x-console-token': token } : {}) },
+      body: buf
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    mindBackupFlash = `已还原 ${data.restored} 个文件（导入前备份：${data.preBackup || '—'}）`;
+    await loadMindPage();
+  } catch (e) {
+    mindBackupFlash = `导入失败：${e.message}`;
+    renderMindPage();
   }
 }
 

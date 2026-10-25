@@ -196,8 +196,9 @@ for (const groupBtn of [...window.document.querySelectorAll('.tab[data-nav]')]) 
 await c.check('「她」的二级项真的切换了内容（不是只刷新当前页）', () => {
   if (!herModes.length) throw new Error('没有访问到「她」的二级项');
   const expect = {
-    state: (h) => h.includes('她对自己的描述') && !h.includes('出生仪式'),
+    state: (h) => h.includes('自我描述') && h.includes('最近反思') && !h.includes('出生仪式'),
     identity: (h) => h.includes('出生仪式'),
+    rhythm: (h) => h.includes('体力上限') && h.includes('恢复默认'),
     stream: (h) => h.includes('记忆流'),
     profiles: (h) => h.includes('会话配置')
   };

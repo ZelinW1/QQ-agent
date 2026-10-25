@@ -54,7 +54,7 @@ function renderSettingsSidebar() {
       <div class="rs-title">机器人运行状态</div>
       <div class="rs-row"><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
       <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${esc(s.orchestrator.model)}` : '模型：未设置')}</div>
-      <div class="rs-row muted" style="line-height:1.5;margin-top:6px">这里只放运行参数。她的身份、记忆、作息在左侧「她」里。</div>
+      <div class="rs-row muted" style="line-height:1.5;margin-top:6px">这里只放运行参数。身份、记忆、作息在左侧「心智」里。</div>
     </div>
     <div class="settings-menu">
       ${menu.map(([id, label]) => `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}">${label}${id === 'desktop' && (typeof updateAvailable !== 'undefined' && updateAvailable) ? '<span class="update-dot" title="发现新版本"></span>' : ''}</button>`).join('')}
