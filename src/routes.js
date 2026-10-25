@@ -1006,6 +1006,7 @@ export function createRoutes(deps) {
             private: String(charter.scenario?.private || ''),
             group: String(charter.scenario?.group || '')
           },
+          voice: Array.isArray(charter.voice) ? charter.voice.map(String) : [],
           hardRules: Array.isArray(charter.hardRules) ? charter.hardRules.map(String) : []
         };
 
@@ -1020,9 +1021,12 @@ export function createRoutes(deps) {
             selfImage: fill(charterRaw.selfImage),
             baseline: fill(charterRaw.baseline),
             scenario: { private: fill(charterRaw.scenario.private), group: fill(charterRaw.scenario.group) },
+            voice: charterRaw.voice.map(fill),
             hardRules: charterRaw.hardRules.map(fill)
           },
           roleTextChars: String(persona.roleText || '').length,
+          // 她的名字（botName）：编辑身份时可以直接改，不必走出生仪式
+          botName: String(persona.botName || ''),
           self: {
             version: Number(self.version) || 0,
             narrative: String(self.narrative || ''),
@@ -1067,7 +1071,17 @@ export function createRoutes(deps) {
                   startAt: orchestrator.sleepWindow.startAt,
                   endAt: orchestrator.sleepWindow.endAt
                 }
-              : null
+              : null,
+            // 配置本身也回传：UI 要能就地改作息，而不是让用户去翻 config.json
+            config: {
+              startHour: Number(cfg.mind?.sleep?.startHour ?? 23),
+              startMinute: Number(cfg.mind?.sleep?.startMinute ?? 30),
+              endHour: Number(cfg.mind?.sleep?.endHour ?? 8),
+              endMinute: Number(cfg.mind?.sleep?.endMinute ?? 0),
+              jitterMin: Number(cfg.mind?.sleep?.jitterMin ?? 40),
+              maxStayUp: Number(cfg.mind?.sleep?.maxStayUp ?? 2),
+              graceMs: Number(cfg.mind?.sleep?.graceMs ?? 900000)
+            }
           },
           counts: {
             events: events.length,

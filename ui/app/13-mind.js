@@ -98,6 +98,11 @@ function renderMindPage() {
         <div class="k">我最初的样子</div>
         <div class="v">${esc(shown.baseline || '（空）')}</div>
       </div>
+      ${(shown.voice || []).length ? `
+        <div class="mind-slot">
+          <div class="k">我说话的样子</div>
+          <ul class="mind-rules">${shown.voice.map((v) => `<li>${esc(v)}</li>`).join('')}</ul>
+        </div>` : ''}
       <div class="mind-slot">
         <div class="k">一对一的场合</div>
         <div class="v">${esc(shown.scenario?.private || '（空）')}</div>
@@ -186,6 +191,43 @@ function renderMindPage() {
       }).join('')
     : '<div class="mind-empty">还没反思过。</div>';
 
+  // ── 开关与作息 ──
+  const sc = sleep.config || {};
+  const two = (n) => String(n).padStart(2, '0');
+  const hhmm = (h, m) => `${two(h)}:${two(m)}`;
+  // switchHtml 来自 06-settings-render.js。这里做兜底：万一那个文件改了名，
+  // 心智页不该整页崩掉（它比一个开关重要得多）。
+  const sw = (id, checked, label) => (typeof switchHtml === 'function'
+    ? switchHtml(id, checked, label)
+    : `<label class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} /><span>${esc(label)}</span></label>`);
+
+  const switchBody = `
+    <div class="mind-form">
+      <div class="mind-actions">
+        ${sw('mind-sw-on', d.enabled, '心智功能')}
+        ${sw('mind-sw-sleep', sleep.enabled, '夜里会睡着')}
+      </div>
+      <div class="mind-grid" style="gap:10px">
+        <label>入睡时间
+          <input type="time" id="mind-sleep-start" value="${hhmm(sc.startHour ?? 23, sc.startMinute ?? 30)}" />
+        </label>
+        <label>醒来时间
+          <input type="time" id="mind-sleep-end" value="${hhmm(sc.endHour ?? 8, sc.endMinute ?? 0)}" />
+        </label>
+        <label>每晚抖动（± 分钟）
+          <input type="number" id="mind-sleep-jitter" min="0" max="180" value="${Number(sc.jitterMin ?? 40)}" />
+        </label>
+        <label>一晚最多再撑几次
+          <input type="number" id="mind-sleep-stay" min="0" max="5" value="${Number(sc.maxStayUp ?? 2)}" />
+        </label>
+      </div>
+      <div class="hint">睡着时她不看消息、不做决策；醒来后把积压当成一批读。时段每晚有随机抖动，不是固定开关。</div>
+      <div class="mind-actions">
+        <button class="btn btn-primary btn-small" id="mind-save-switches">保存开关</button>
+        <span class="muted" id="mind-sw-msg"></span>
+      </div>
+    </div>`;
+
   // ── 出生仪式 ──
   const birthPanel = mindBirthOpen ? (() => {
     const draftsHtml = mindBirthDrafts.length
@@ -226,19 +268,27 @@ function renderMindPage() {
 
   // ── 编辑表单 ──
   const formSrc = mindForm || {
+    name: mindState?.botName || '',
     selfImage: raw.selfImage || '',
     baseline: raw.baseline || '',
     scenarioPrivate: raw.scenario?.private || '',
     scenarioGroup: raw.scenario?.group || '',
+    voice: raw.voice || [],
     hardRules: raw.hardRules || []
   };
   const editBody = mindEditing ? `
     <div class="mind-form">
+      <label>名字（她自称，也是身份句里的称呼）
+        <input type="text" id="mind-f-name" value="${esc(formSrc.name ?? '')}" placeholder="例如 澄" />
+      </label>
       <label>我是谁
         <textarea id="mind-f-self" placeholder="名字、形象、来历…">${esc(formSrc.selfImage)}</textarea>
       </label>
       <label>我最初的样子
         <textarea id="mind-f-base" placeholder="还没经历这些事时，是个什么样的人…">${esc(formSrc.baseline)}</textarea>
+      </label>
+      <label>我说话的样子（一行一条，是习惯不是规矩）
+        <textarea id="mind-f-voice" style="min-height:64px" placeholder="句尾很少用句号&#10;被夸会先否认一句">${esc((formSrc.voice || []).join('\n'))}</textarea>
       </label>
       <label>一对一的场合
         <textarea id="mind-f-priv" placeholder="私聊时的分寸：长度、语气、节奏…">${esc(formSrc.scenarioPrivate)}</textarea>
@@ -260,6 +310,7 @@ function renderMindPage() {
   box.innerHTML = `
     <div class="mind-wrap">
       ${head}
+      ${mindCard('开关与作息', switchBody)}
       ${mindBirthOpen ? mindCard('出生仪式', birthPanel) : ''}
       ${mindEditing ? mindCard('编辑身份', editBody) : ''}
       <div class="mind-grid">
@@ -287,12 +338,50 @@ function renderMindPage() {
     renderMindPage();
   });
   $('#birth-gen')?.addEventListener('click', generateBirthDrafts);
+  $('#mind-save-switches')?.addEventListener('click', saveMindSwitches);
   box.querySelectorAll?.('[data-pick-name]')?.forEach((el) => {
     el.addEventListener('click', () => { mindBirthName = el.dataset.pickName; renderMindPage(); });
   });
   box.querySelectorAll?.('[data-apply]')?.forEach((el) => {
     el.addEventListener('click', () => applyBirthDraft(Number(el.dataset.apply)));
   });
+}
+
+/** 保存开关与作息（就地改配置，不用去翻 config.json）。 */
+async function saveMindSwitches() {
+  const on = Boolean($('#mind-sw-on')?.checked);
+  const sleepOn = Boolean($('#mind-sw-sleep')?.checked);
+  const parseTime = (v, dh, dm) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? ''));
+    return m ? [Math.min(23, Number(m[1])), Math.min(59, Number(m[2]))] : [dh, dm];
+  };
+  const [sh, sm] = parseTime($('#mind-sleep-start')?.value, 23, 30);
+  const [eh, em] = parseTime($('#mind-sleep-end')?.value, 8, 0);
+  const jitter = Math.max(0, Math.min(180, Number($('#mind-sleep-jitter')?.value) || 0));
+  const maxStayUp = Math.max(0, Math.min(5, Number($('#mind-sleep-stay')?.value) || 0));
+
+  const msg = $('#mind-sw-msg');
+  if (msg) msg.textContent = '保存中…';
+  try {
+    await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({
+        mind: {
+          enabled: on,
+          sleep: {
+            enabled: sleepOn,
+            startHour: sh, startMinute: sm,
+            endHour: eh, endMinute: em,
+            jitterMin: jitter, maxStayUp
+          }
+        }
+      })
+    });
+    await loadMindPage();
+  } catch (e) {
+    const m = $('#mind-sw-msg');
+    if (m) m.textContent = `保存失败：${e.message}`;
+  }
 }
 
 /** 生成草案（只请求，不写盘）。 */
@@ -340,10 +429,12 @@ function applyBirthDraft(index) {
   const base = mindState?.charter || {};
   mindBirthPick = index;
   mindForm = {
+    name: mindBirthName || (mindState?.botName || ''),
     selfImage: d.selfImage,
     baseline: d.baseline,
     scenarioPrivate: base.scenario?.private || '',
     scenarioGroup: base.scenario?.group || '',
+    voice: Array.isArray(d.voice) ? d.voice : [],
     hardRules: base.hardRules || []
   };
   mindEditing = true;
@@ -356,14 +447,16 @@ async function saveMindCharter() {
     selfImage: val('mind-f-self'),
     baseline: val('mind-f-base'),
     scenario: { private: val('mind-f-priv'), group: val('mind-f-group') },
+    voice: val('mind-f-voice').split('\n').map((s) => s.trim()).filter(Boolean),
     hardRules: val('mind-f-rules').split('\n').map((s) => s.trim()).filter(Boolean)
   };
   const msg = $('#mind-save-msg');
   if (msg) msg.textContent = '保存中…';
   // 采用草案时选定的名字一并写入。只在这里改 botName：
-  // 名字是社交标识，不该被"生成"顺手换掉，必须经过"采用这组"这一步。
+  // 名字是社交标识，不该被"生成"顺手换掉，必须经过确认这一步。
   const payload = { persona: { charter } };
-  if (mindBirthName) payload.persona.botName = mindBirthName;
+  const name = val('mind-f-name') || mindBirthName;
+  if (name) payload.persona.botName = name;
   try {
     await api('/api/config', { method: 'POST', body: JSON.stringify(payload) });
     mindEditing = false;

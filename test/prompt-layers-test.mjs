@@ -93,6 +93,7 @@ console.log('\n=== 3. 系统提示的实际顺序 ===');
   check(iSecurity === 0 && iProtocol > iSecurity, '安全规则在最前，工具协议紧随');
   check(iIdentity > iProtocol, '身份句在安全规则之后');
   check(iAntiAi > iIdentity, '行为规范在身份之后');
+  check(sys.includes('【我说话的样子】'), '说话习惯渲染（不是规矩，是习惯）');
   check(iSelf > iAntiAi && iRelations > iSelf, '自我与关系在宪法层之后');
   check(iSkills > iRelations, '技能片段殿后（不打断前面的字节）');
 

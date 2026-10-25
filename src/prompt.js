@@ -305,6 +305,7 @@ function charterOf(cfg) {
   const selfImage = String(c.selfImage ?? '').trim();
   const baseline = String(c.baseline ?? '').trim();
   const scenario = (c.scenario && typeof c.scenario === 'object') ? c.scenario : {};
+  const voice = Array.isArray(c.voice) ? c.voice.map((v) => String(v ?? '').trim()).filter(Boolean) : [];
   const hardRules = Array.isArray(c.hardRules)
     ? c.hardRules.map((x) => String(x ?? '').trim()).filter(Boolean)
     : [];
@@ -315,8 +316,9 @@ function charterOf(cfg) {
     selfImage,
     baseline,
     scenario,
+    voice,
     hardRules,
-    hasAny: Boolean(selfImage || baseline || hardRules.length || scenarioAny)
+    hasAny: Boolean(selfImage || baseline || voice.length || hardRules.length || scenarioAny)
   };
 }
 
@@ -410,6 +412,14 @@ export function buildSystemPrompt({ persona, profile = null, skillContext, extra
   }
   if (useCharter && charter.baseline) {
     push('charter', 'baseline', `【我最初的样子】\n${fillPersonaPlaceholders(charter.baseline, cfg)}`);
+  }
+  // 说话习惯：不是规矩，是"我平时就这样"。放在自我描述之后、场合之前 ——
+  // 先"我是谁"，再"我怎么说"，最后"此刻该有什么分寸"。
+  if (useCharter && charter.voice.length) {
+    push('charter', 'voice', [
+      '【我说话的样子】',
+      ...charter.voice.map((v) => `- ${fillPersonaPlaceholders(v, cfg)}`)
+    ].join('\n'));
   }
   const scenarioText = useCharter
     ? fillPersonaPlaceholders(charter.scenario[chatKind] || charter.scenario.group || '', cfg).trim()

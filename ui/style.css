@@ -1840,6 +1840,14 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
   background: var(--bg0); color: var(--tx); font: inherit; font-size: 13px; line-height: 1.6;
 }
 .mind-form textarea:focus { outline: none; border-color: var(--ac); }
+.mind-form input[type="time"], .mind-form input[type="number"] {
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--bd);
+  background: var(--bg0); color: var(--tx); font: inherit; font-size: 13px;
+  box-sizing: border-box; width: 100%;
+}
+.mind-form input[type="time"]:focus, .mind-form input[type="number"]:focus {
+  outline: none; border-color: var(--ac);
+}
 .mind-form .hint { font-size: 11px; color: var(--tx3); }
 .mind-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .mind-empty { color: var(--tx3); font-size: 13px; }

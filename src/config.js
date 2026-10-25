@@ -199,6 +199,7 @@ export const DEFAULT_CONFIG = {
       selfImage: DEFAULT_CHARTER.selfImage,   // 我是谁：名字、形象、来历
       baseline: DEFAULT_CHARTER.baseline,     // 最初的我：还没经历这些事时是个什么样的人
       scenario: { ...DEFAULT_CHARTER.scenario },  // 场合：一对一 / 群里，分寸不同
+      voice: [...DEFAULT_CHARTER.voice],       // 说话习惯（不是规矩）
       hardRules: [...DEFAULT_CHARTER.hardRules]   // 不能破的几条（可枚举 → 可测试、可审计）
     }
   },

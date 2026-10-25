@@ -70,10 +70,10 @@
   </div>
 
   <nav id="tabs">
-    <button class="tab active" data-tab="sessions">会话</button>
+    <button class="tab active" data-tab="mind">心智</button>
+    <button class="tab" data-tab="sessions">会话</button>
     <button class="tab" data-tab="chats">存档</button>
     <button class="tab" data-tab="memory">记忆</button>
-    <button class="tab" data-tab="mind">心智</button>
     <button class="tab" data-tab="usage">用量</button>
     <button class="tab" data-tab="skills">技能</button>
     <button class="tab" data-tab="plugins">插件</button>
@@ -92,7 +92,7 @@
 
   <main id="layout">
     <!-- 会话视图 -->
-    <section id="view-sessions" class="view active">
+    <section id="view-sessions" class="view">
       <aside id="session-list" class="list-pane">
         <div class="list-head muted"><span id="session-count"></span><button class="list-head-btn" id="session-broadcast-btn" title="给选中的群/私聊批量发送一条消息">群发</button><button class="list-head-btn" id="session-clear-btn" title="清空全部已结束的会话记录（保留运行中/等待中的）">清空</button></div>
         <div id="session-items"></div>
@@ -135,7 +135,7 @@
 
     <!-- 心智视图：她现在的样子（自我/关系/节律）+ 身份槽位编辑。
          与「记忆」分开：记忆页是查聊天记录与群友印象，心智页是看她自己。 -->
-    <section id="view-mind" class="view">
+    <section id="view-mind" class="view active">
       <div id="mind-page" class="usage-pane"></div>
     </section>
 

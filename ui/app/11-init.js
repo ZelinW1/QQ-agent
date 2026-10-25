@@ -44,6 +44,8 @@ $$('.tab').forEach((tab) => {
     refreshStatus();
     startStatusPoller();
     connectSSE();
+    // 默认落在「心智」：这个产品的主体是她，而不是会话列表。
+    loadMindPage();
     loadSessions();
     loadMemoryView();
     initSessionScrollLoader();

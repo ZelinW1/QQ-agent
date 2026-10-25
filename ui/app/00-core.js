@@ -453,7 +453,7 @@ function createVSlider({ mount, dual = false, low = 100, high = 10, onChange = n
 }
 
 const state = {
-  tab: 'sessions',
+  tab: 'mind',
   sessions: [],          // 摘要列表
   currentSessionId: null,
   sessionDetail: null,   // 完整记录

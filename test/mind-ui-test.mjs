@@ -70,15 +70,18 @@ const STATE = {
     selfImage: '我叫{botName}，蓝头发。',
     baseline: '我一开始话少。',
     scenario: { private: '一对一，两条以内。', group: '群里一句话。' },
+    voice: ['句尾很少用句号', '被夸会先否认一句'],
     hardRules: ['不当客服', '不用 markdown']
   },
   charterResolved: {
     selfImage: '我叫小鲸鱼，蓝头发。',
     baseline: '我一开始话少。',
     scenario: { private: '一对一，两条以内。', group: '群里一句话。' },
+    voice: ['句尾很少用句号', '被夸会先否认一句'],
     hardRules: ['不当客服', '不用 markdown']
   },
   roleTextChars: 0,
+  botName: '小鲸鱼',
   self: { version: 3, narrative: '我是小鲸鱼。最近对熟人话多。', mood: { label: '有点闷', valence: -0.3 }, preoccupations: ['想问裁员的事'], updatedAt: Date.now() },
   relations: [{
     userId: '777', names: ['小王'], nickname: '王哥', stage: 'familiar',
@@ -90,7 +93,10 @@ const STATE = {
     todayReflections: 1, lastReflectAt: Date.now(), lastReflectAttemptAt: Date.now(),
     sleep: { state: 'awake', stayUps: 0, nightKey: '' }
   },
-  sleep: { enabled: false, asleep: false, window: null },
+  sleep: {
+    enabled: false, asleep: false, window: null,
+    config: { startHour: 23, startMinute: 30, endHour: 8, endMinute: 0, jitterMin: 40, maxStayUp: 2, graceMs: 900000 }
+  },
   counts: { events: 5, uncompacted: 4, relations: 1, reflections: 1 },
   recentReflections: [{ at: Date.now(), ok: true, empty: false, produced: { self: true, relations: [{ userId: '777' }], compacted: 2 }, rejected: 0 }],
   recentActions: []
@@ -105,6 +111,7 @@ await sandbox.loadMindPage();
   check(html.length > 500, '渲染出内容');
   check(calls.some((c) => c.path === '/api/mind/state'), '请求了状态接口');
   check(html.includes('我是谁') && html.includes('我叫小鲸鱼'), '身份槽位');
+  check(html.includes('我说话的样子') && html.includes('句尾很少用句号'), '说话习惯');
   check(html.includes('不当客服'), '硬规矩');
   check(html.includes('王哥'), '关系：nickname');
   check(html.includes('做后端'), '关系：已有认知');
@@ -113,6 +120,8 @@ await sandbox.loadMindPage();
   check(html.includes('77'), '节律：体力数值');
   check(html.includes('最近反思'), '反思卡');
   check(html.includes('压缩 2 条'), '反思产出摘要');
+  check(html.includes('开关与作息') && html.includes('mind-sleep-start'), '开关与作息卡');
+  check(html.includes('23:30'), '入睡时间用配置值填充');
 }
 
 // ── 2. 转义（防注入）───────────────────────────────────────────────────
@@ -217,7 +226,9 @@ console.log('\n=== 7. 出生仪式 ===');
 
   s7.applyBirthDraft(0);
   check(b7.innerHTML.includes('mind-f-self'), '采用后进入编辑表单');
+  check(b7.innerHTML.includes('mind-f-name'), '编辑表单可以直接改名字');
   check(b7.innerHTML.includes('我叫{botName}'), '编辑框填入草案文本且保留占位符');
+  check(b7.innerHTML.includes('mind-f-voice'), '草案的说话习惯也进了编辑表单');
   check(b7.innerHTML.includes('保存并改名为'), '保存按钮提示会改名（名字必须经确认才换）');
 }
 

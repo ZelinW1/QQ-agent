@@ -68,6 +68,7 @@ await check('GET /api/mind/state 返回完整状态', async () => {
   assert.equal(d.available, true);
   assert.equal(d.enabled, true);
   assert.equal(d.scope, 'private');
+  assert.ok(String(d.botName || '').length > 0, '带上她的名字（编辑身份时可直接改）');
 });
 
 await check('身份来源模式：默认 charter（roleText 为空）', async () => {
@@ -79,6 +80,7 @@ await check('身份来源模式：默认 charter（roleText 为空）', async ()
   assert.ok(!d.charterResolved.selfImage.includes('{botName}'), '渲染后不应残留占位符');
   assert.ok(d.charterResolved.selfImage.includes('覆盖Bot'), '名字来自 botName');
   assert.ok(d.charter.hardRules.length >= 3, 'charter 带硬规矩');
+  assert.ok(Array.isArray(d.charter.voice) && d.charter.voice.length >= 1, 'charter 带说话习惯');
   assert.ok(d.charter.scenario.private.length > 0, 'charter 带私聊场合');
   assert.equal(d.roleTextChars, 0);
 });
@@ -112,10 +114,12 @@ await check('节律：体力与当日计数', async () => {
   assert.equal(d.tick.sleep.state, 'awake');
 });
 
-await check('作息：开关关闭时 asleep=false，窗口为空', async () => {
+await check('作息：开关关闭时 asleep=false，窗口为空，但配置仍回传', async () => {
   const d = (await env.request('GET', '/api/mind/state')).data;
   assert.equal(d.sleep.enabled, false);
   assert.equal(d.sleep.asleep, false);
+  assert.equal(d.sleep.config.startHour, 23, '回传入睡时刻（UI 才能就地改）');
+  assert.ok(d.sleep.config.jitterMin >= 0, '回传抖动');
 });
 
 await check('计数：事件与关系', async () => {

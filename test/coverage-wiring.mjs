@@ -104,9 +104,14 @@ function wired(el) {
  * 与"真的没人管"区分开（后者才是 bug）。
  */
 function batchRead(el) {
+  const tag = el.tagName.toLowerCase();
   const type = (el.getAttribute('type') || '').toLowerCase();
-  if (type !== 'checkbox' && type !== 'radio') return false;
-  const box = el.closest('.model-modal, .modal');
+  const isFormCtl = tag === 'textarea'
+    || (tag === 'input' && ['checkbox', 'radio', 'text', 'number', 'time', 'date', 'range'].includes(type));
+  if (!isFormCtl) return false;
+  // 心智页的表单：开关/时间/数字都在「保存」按钮里被整体读走（saveMindSwitches /
+  // saveMindCharter），和弹窗里那批白名单复选框是同一种模式。
+  const box = el.closest('.model-modal, .modal, .mind-form');
   if (!box) return false;
   return [...box.querySelectorAll('button')].some((b) => wired(b));
 }
