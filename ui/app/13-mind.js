@@ -41,6 +41,8 @@ let mindProfileKeys = [];
 let mindChats = [];
 // 记忆流筛选（按人 / 按会话）。空串 = 全部。
 let mindStreamFilter = { actor: '', chatKey: '' };
+// 手动反思的结果提示：整页会重渲染，所以提示要存在状态里，不能只写 DOM。
+let mindReflectFlash = '';
 // 节律页：心跳日志（内存最近心跳 + 已落盘的行动/反思 + 文件体积）
 let mindTickLog = { recentTicks: [], actions: [], reflections: [], sizes: null };
 
@@ -79,7 +81,7 @@ async function loadMindPage() {
       jobs.push(api('/api/chat-profiles').catch(() => ({ profiles: {}, chatKeys: [] })));
       jobs.push(api('/api/chats').catch(() => ({ chats: [] })));
     }
-    if (mode === 'rhythm') {
+    if (mode === 'rhythm' || mode === 'log') {
       jobs.push(api('/api/mind/tick-log?limit=50').catch(() => ({ recentTicks: [], actions: [], reflections: [], sizes: null })));
     }
     const [st, a, b] = await Promise.all(jobs);
@@ -88,7 +90,7 @@ async function loadMindPage() {
       mindEvents = a?.events || [];
       mindChats = b?.chats || [];
     }
-    if (mode === 'rhythm') {
+    if (mode === 'rhythm' || mode === 'log') {
       mindTickLog = a || { recentTicks: [], actions: [], reflections: [], sizes: null };
     }
     if (mode === 'profiles') {
@@ -118,6 +120,7 @@ function renderMindPage() {
   const parts = [mindHeader(d)];
   if (mode === 'identity') parts.push(mindIdentitySection(d));
   else if (mode === 'rhythm') parts.push(mindRhythmSection(d));
+  else if (mode === 'log') parts.push(mindLogSection());
   else if (mode === 'stream') parts.push(mindStreamSection());
   else if (mode === 'profiles') parts.push(mindProfilesSection());
   else parts.push(mindStateSection(d));
@@ -130,11 +133,11 @@ function renderMindPage() {
 function mindHeader(d) {
   const sleep = d.sleep || {};
   const mode = mindMode();
-  // 三个胶囊的形状固定：心智开关 / 身份来源 / 作息。
+  // 三个胶囊：心智开关 / 作息 / 身份来源（身份放最后，它是"说明"不是"状态"）。
   // 颜色规则按语义分：开启=绿；到点睡着=正常；未启用=暗灰。
   // 作息这一枚不能"睡着才绿"——睡着是正常状态，不是告警。
   const sleepPill = !sleep.enabled
-    ? { cls: 'off', text: '作息未启用', title: '在「身份」里打开"夜里会睡着"才会生效' }
+    ? { cls: 'off', text: '作息未启用', title: '在「节律」里打开"夜里会睡着"才会生效' }
     : (sleep.asleep
       ? { cls: '', text: '睡着', title: '睡着时不看消息、不做决策；醒来会把积压一起读' }
       : {
@@ -147,8 +150,8 @@ function mindHeader(d) {
   return `
     <div class="mind-head">
       <span class="mind-pill ${d.enabled ? 'on' : 'off'}" title="${d.enabled ? '心智已开启：她记得、会反思、会按节律行动' : '心智已关闭：不记录、不反思、不主动找人，但正常聊天不受影响'}">${d.enabled ? '心智已开启' : '心智已关闭'}</span>
-      <span class="mind-pill" title="${d.mode === 'roleText' ? '当前用整段角色卡（roleText），分槽身份不生效' : '当前用分槽身份：名字 / 形象 / 说话习惯 / 场合 / 硬规矩'}">${d.mode === 'roleText' ? '身份：整段角色卡' : '身份：分槽'}</span>
       <span class="mind-pill ${sleepPill.cls}" title="${esc(sleepPill.title)}">${sleepPill.text}</span>
+      <span class="mind-pill" title="${d.mode === 'roleText' ? '当前用整段角色卡（persona.roleText），分槽身份不生效。到「身份」页可以改回分槽。' : '当前用分槽身份：名字 / 形象 / 说话习惯 / 场合 / 硬规矩。'}">${d.mode === 'roleText' ? '身份：整段角色卡' : '身份：分槽'}</span>
       <span style="flex:1"></span>
       ${mode === 'identity' ? `<button class="btn btn-small" id="mind-birth">${mindBirthOpen ? '收起草案' : '出生仪式'}</button>` : ''}
       <button class="btn btn-small" id="mind-refresh">刷新</button>
@@ -213,7 +216,7 @@ function mindStateSection(d) {
       } · 今日 ${ref.usedToday ?? 0}/${ref.dailyCap ?? 8} 次</div>
       <div class="mind-actions" style="margin-top:8px">
         <button class="btn btn-primary btn-small" id="mind-reflect-now">${ref.canReflect ? '立即反思' : '现在试一次'}</button>
-        <span class="muted" id="mind-reflect-msg">${ref.canReflect ? '' : '未到阈值或仍在冷却，手动触发会直接跑一次'}</span>
+        <span class="muted" id="mind-reflect-msg">${esc(mindReflectFlash || (ref.canReflect ? '' : '未到阈值或仍在冷却，手动触发会直接跑一次'))}</span>
       </div>
     </div>`;
 
@@ -297,7 +300,13 @@ function mindIdentitySection(d) {
     hardRules: raw.hardRules || []
   };
   const roleTextNotice = d.mode === 'roleText'
-    ? `<div class="mind-empty">当前生效的是整段角色卡（${d.roleTextChars} 字符），下面的分槽不会进提示词。把「设置 → 人设」里的角色卡清空即可切换。</div>`
+    ? `<div class="mind-empty">
+         当前生效的是<strong>整段角色卡</strong>（${d.roleTextChars} 字符），下面的分槽不会进提示词。
+         <div class="mind-actions" style="margin-top:8px">
+           <button class="btn btn-small" id="mind-to-charter">改用分槽身份</button>
+           <span class="muted">会清空整段角色卡（不可撤销，建议先复制备份）</span>
+         </div>
+       </div>`
     : '';
 
   const editBody = `
@@ -425,41 +434,7 @@ function mindRhythmSection(d) {
       </div>
     </div>`;
 
-  // ── 日志 ──
-  const sizes = mindTickLog.sizes;
-  const kb = (n) => (Number(n) >= 1024 ? `${(Number(n) / 1024).toFixed(1)} KB` : `${Number(n) || 0} B`);
-  const ticks = mindTickLog.recentTicks || [];
-  const tickRows = ticks.length
-    ? ticks.slice().reverse().map((t) => {
-        const what = t.skipped
-          ? `跳过（${esc(t.skipped)}）`
-          : (t.results || []).map((r) => `${esc(r.action)}${r.reason ? `·${esc(r.reason)}` : ''}`).join(' / ') || '无事';
-        return `<div class="mind-rel-line"><span class="mind-rel-meta">${fmtTime(t.at)}</span>　${what}</div>`;
-      }).join('')
-    : '<div class="mind-empty">还没有心跳记录（内存里只保留最近 40 次，重启即清空）。</div>';
-
-  const actRows = (mindTickLog.actions || []).length
-    ? mindTickLog.actions.slice().reverse().map((a) => (
-      `<div class="mind-rel-line"><span class="mind-rel-meta">${fmtTime(a.at)}</span>　${esc(a.action)}${a.reason ? ` · ${esc(String(a.reason).slice(0, 40))}` : ''}${a.energySpent ? `（-${a.energySpent} 体力）` : ''}</div>`
-    )).join('')
-    : '<div class="mind-empty">没有落盘的行动记录。只有真正发生的事才会写进来（跳过的心跳不写盘）。</div>';
-
-  const logBody = `
-    <div class="mind-slot">
-      <div class="k">最近心跳（内存，含跳过）</div>
-      ${tickRows}
-    </div>
-    <div class="mind-slot">
-      <div class="k">已落盘的行动（actions.jsonl）</div>
-      ${actRows}
-    </div>
-    <div class="mind-actions" style="margin-top:10px">
-      <button class="btn btn-small" id="mind-clear-logs">清空日志文件</button>
-      <span class="muted">${sizes ? `当前占用 ${kb(sizes.total)}（行动 ${kb(sizes.actions)} · 反思 ${kb(sizes.reflections)}）` : ''}</span>
-      <span class="muted" id="mind-log-msg"></span>
-    </div>
-    <div class="hint">只清 actions/reflections 两个日志文件；事件、关系、自我一个字都不动。</div>`;
-
+  // ── 日志已搬到「记录 → 心跳日志」──
   return `
     ${mindCard('总开关', switchBody)}
     ${mindCard('作息', sleepBody)}
@@ -467,8 +442,47 @@ function mindRhythmSection(d) {
       ${mindCard('体力', energyBody)}
       ${mindCard('心跳', tickBody)}
     </div>
-    ${mindCard('反思', reflectBody)}
-    ${mindCard('日志', logBody)}`;
+    ${mindCard('反思', reflectBody)}`;
+}
+
+// ── 心跳日志（「记录」组）──────────────────────────────────────────────
+// 从节律页搬出来的：日志是"记录"，不是"设置"，放在参数面板里会让人以为它能调。
+function mindLogSection() {
+  const sizes = mindTickLog.sizes;
+  const kb = (n) => (Number(n) >= 1024 ? `${(Number(n) / 1024).toFixed(1)} KB` : `${Number(n) || 0} B`);
+  const ticks = mindTickLog.recentTicks || [];
+
+  const describe = (t) => {
+    if (t.skipped) {
+      const label = { asleep: '睡着中', paused: '已暂停', 'no-model': '未配置模型', 'tick-disabled': '心跳已关', 'no-mind': '心智未接入' }[t.skipped] || t.skipped;
+      return `跳过（${esc(label)}）`;
+    }
+    const rs = t.results || [];
+    if (!rs.length) return '无事';
+    return rs.map((r) => `${esc(r.action)}${r.reason ? `·${esc(r.reason)}` : ''}`).join(' / ');
+  };
+
+  const tickRows = ticks.length
+    ? ticks.slice().reverse().map((t) => (
+      `<div class="mind-rel-line"><span class="mind-rel-meta">${fmtTime(t.at)}</span>　${describe(t)}</div>`
+    )).join('')
+    : '<div class="mind-empty">还没有心跳记录。这里只显示"真的做了什么"的轮次；每 60 秒的空扫描与连续相同的状态不会刷屏。</div>';
+
+  const actRows = (mindTickLog.actions || []).length
+    ? mindTickLog.actions.slice().reverse().map((a) => (
+      `<div class="mind-rel-line"><span class="mind-rel-meta">${fmtTime(a.at)}</span>　${esc(a.action)}${a.reason ? ` · ${esc(String(a.reason).slice(0, 40))}` : ''}${a.energySpent ? `（-${a.energySpent} 体力）` : ''}</div>`
+    )).join('')
+    : '<div class="mind-empty">没有落盘的行动记录。只有真正发生的事才会写进来（跳过的心跳不写盘）。</div>';
+
+  return `
+    ${mindCard('最近心跳（内存，重启即清空）', tickRows)}
+    ${mindCard('已落盘的行动（actions.jsonl）', actRows + `
+      <div class="mind-actions" style="margin-top:10px">
+        <button class="btn btn-small" id="mind-clear-logs">清空日志文件</button>
+        <span class="muted">${sizes ? `当前占用 ${kb(sizes.total)}（行动 ${kb(sizes.actions)} · 反思 ${kb(sizes.reflections)}）` : ''}</span>
+        <span class="muted" id="mind-log-msg"></span>
+      </div>
+      <div class="hint">只清 actions/reflections 两个日志文件；事件、关系、自我一个字都不动。</div>`)}`;
 }
 
 // ── 记忆流 ─────────────────────────────────────────────────────────────
@@ -576,6 +590,7 @@ function mindBindEvents(box) {
   $('#mind-save-rhythm')?.addEventListener('click', saveMindRhythm);
   $('#mind-reset-rhythm')?.addEventListener('click', resetMindRhythm);
   $('#mind-clear-logs')?.addEventListener('click', clearMindLogs);
+  $('#mind-to-charter')?.addEventListener('click', switchToCharter);
   $('#mind-prof-save')?.addEventListener('click', () => saveProfile(false));
   $('#mind-prof-clear')?.addEventListener('click', () => saveProfile(true));
   $('#mind-prof-key')?.addEventListener('change', fillProfileForm);
@@ -609,10 +624,10 @@ function fillProfileForm() {
 
 // ── 手动触发反思（调试/验证用）─────────────────────────────────────────
 async function runReflectNow() {
-  const msg = $('#mind-reflect-msg');
   const btn = $('#mind-reflect-now');
   if (btn) btn.disabled = true;
-  if (msg) msg.textContent = '正在反思（一次模型调用）…';
+  mindReflectFlash = '正在反思（一次模型调用）…';
+  renderMindPage();
   try {
     const r = await api('/api/mind/reflect', { method: 'POST', body: JSON.stringify({}) });
     if (r?.ok) {
@@ -621,14 +636,14 @@ async function runReflectNow() {
       if (applied.self) bits.push('改写自我');
       if ((applied.relations || []).length) bits.push(`关系 ×${applied.relations.length}`);
       if (applied.compacted) bits.push(`压缩 ${applied.compacted} 条`);
-      if (msg) msg.textContent = r.empty ? '想不出什么（也算成功）' : `完成：${bits.join(' · ') || '无改动'}`;
-    } else if (msg) {
-      msg.textContent = `未完成：${r?.reason || r?.error || '未知原因'}`;
+      mindReflectFlash = r.empty ? '想不出什么（也算成功）' : `完成：${bits.join(' · ') || '无改动'}`;
+    } else {
+      mindReflectFlash = `没跑成：${r?.reason || r?.error || '未知原因'}`;
     }
     await loadMindPage();
   } catch (e) {
-    if (msg) msg.textContent = `失败：${e.message}`;
-    if (btn) btn.disabled = false;
+    mindReflectFlash = `失败：${e.message}`;
+    renderMindPage();
   }
 }
 
@@ -715,6 +730,19 @@ async function resetMindRhythm() {
   } catch (e) {
     const m = $('#mind-rhythm-msg');
     if (m) m.textContent = `恢复失败：${e.message}`;
+  }
+}
+
+/** 从"整段角色卡"切回"分槽身份"（清空 persona.roleText）。 */
+async function switchToCharter() {
+  if (typeof window !== 'undefined' && typeof window.confirm === 'function'
+    && !window.confirm('清空整段角色卡，改用分槽身份？此操作不可撤销。')) return;
+  try {
+    await api('/api/config', { method: 'POST', body: JSON.stringify({ persona: { roleText: '' } }) });
+    await loadMindPage();
+  } catch (e) {
+    mindReflectFlash = `切换失败：${e.message}`;
+    renderMindPage();
   }
 }
 

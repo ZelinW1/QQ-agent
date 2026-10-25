@@ -784,7 +784,9 @@ const NAV_GROUPS = {
     items: [
       { id: 'sessions', label: '会话过程', view: 'sessions' },
       { id: 'chats', label: '消息存档', view: 'chats' },
-      { id: 'usage', label: '用量', view: 'usage' }
+      { id: 'usage', label: '用量', view: 'usage' },
+      // 心跳日志是"记录"，不是设置 —— 放在节律页里会让人以为它可调
+      { id: 'ticklog', label: '心跳日志', view: 'mind', mode: 'log' }
       // 「旧印象」（memberImpression）不再作为入口：它已被心智的关系档案取代，
       // 历史数据已在开启心智时并入关系（可在「她 → 状态 → 关系」里看到换算后的结果）。
       // 视图与接口保留，需要查阅原始数据时用 /api/memory-files。

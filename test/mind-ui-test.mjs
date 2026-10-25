@@ -172,9 +172,37 @@ console.log('\n=== 1b2. 节律页 ===');
   check(html.includes('反思') && html.includes('rh-reflect-after'), '反思参数');
   check(html.includes('作息') && html.includes('mind-sleep-start'), '作息参数');
   check(html.includes('安静多久才睡'), '安静宽限可设置');
-  check(html.includes('mind-clear-logs') && html.includes('2.0 KB'), '日志卡（含体积与清空按钮）');
+  check(!html.includes('mind-clear-logs'), '日志不在节律页（已搬到「记录」）');
   check(html.includes('mind-reset-rhythm'), '有恢复默认');
   check(html.includes('正常聊天完全不受影响'), '写明心智开关的作用范围');
+  check(html.includes('设置 → 聊天设置'), '写明与设置页的分界');
+}
+
+// ── 1b3. 心跳日志（记录组）────────────────────────────────────────────
+console.log('\n=== 1b3. 心跳日志 ===');
+{
+  const { sandbox: s1b3, box: b1b3 } = makeSandbox(STATE, (p) => (
+    p.startsWith('/api/mind/tick-log')
+      ? {
+          ok: true,
+          recentTicks: [
+            { at: Date.now(), skipped: 'asleep', results: [] },
+            { at: Date.now(), skipped: '', results: [{ chatKey: 'private:777', action: 'send_proactive', reason: '有点想她' }] }
+          ],
+          actions: [{ at: Date.now(), action: 'send_proactive', reason: '有点想她', energySpent: 25 }],
+          reflections: [],
+          sizes: { actions: 2048, reflections: 0, total: 2048 }
+        }
+      : null
+  ));
+  s1b3.state = { mindMode: 'log' };
+  await s1b3.loadMindPage();
+  const html = b1b3.innerHTML;
+  check(html.includes('最近心跳'), '最近心跳列表');
+  check(html.includes('睡着中'), '跳过原因用人话（asleep → 睡着中）');
+  check(html.includes('send_proactive'), '展示真正发生的决策');
+  check(html.includes('已落盘的行动'), '落盘行动列表');
+  check(html.includes('mind-clear-logs') && html.includes('2.0 KB'), '清空按钮与体积');
 }
 
 // ── 1c. 记忆流与会话配置 ───────────────────────────────────────────────

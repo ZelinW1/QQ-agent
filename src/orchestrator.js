@@ -1983,7 +1983,18 @@ export class Orchestrator {
         reason: String(x?.reason || ''),
         error: x?.error ? String(x.error) : ''
       }));
-      this.recentTicks.push({ at: Number(now) || Date.now(), skipped: String(r.skipped || ''), error: String(r.error || ''), results });
+      const skipped = String(r.skipped || '');
+      // ① 空转不记：没有到期会话、也没有特殊状态 —— 这只是一次"扫描"，
+      //    主循环每 60 秒就会扫一次，记下来只会把真正的决策淹掉。
+      if (!results.length && !skipped) return;
+      // ② 连续相同的"状态型跳过"（睡着/暂停）合并成一条，只更新时间。
+      //    否则整夜会留下上百行"跳过（asleep）"。
+      const last = this.recentTicks[this.recentTicks.length - 1];
+      if (last && !results.length && !(last.results || []).length && last.skipped === skipped) {
+        last.at = Number(now) || Date.now();
+        return;
+      }
+      this.recentTicks.push({ at: Number(now) || Date.now(), skipped, error: String(r.error || ''), results });
       const max = 40;
       if (this.recentTicks.length > max) this.recentTicks.splice(0, this.recentTicks.length - max);
     } catch { /* 记录失败不影响心跳本身 */ }

@@ -296,6 +296,36 @@ console.log('\n=== 7. 一轮心跳 ===');
   }
 }
 
+// ── 7j. 心跳日志：空扫描不记，连续相同状态合并 ─────────────────────────
+console.log('\n=== 7j. 心跳日志的取舍 ===');
+{
+  updateConfig({ api: { model: 'test-model', baseUrl: 'http://127.0.0.1:1/v1' }, mind: { enabled: true, tick: { enabled: true } } });
+
+  // 没有任何会话 → 这一轮什么也没发生，不该记
+  {
+    const mind = new MindStore({ root: fs.mkdtempSync(path.join(dataDir, 'log-')), getOptions: () => ({}) });
+    const store = { listChats: () => [], unreadCount: () => 0, getChatMeta: () => ({ lastTs: 0 }), recent: () => [] };
+    const orch = new Orchestrator({ store, memory: {}, stickers: {}, sender: {}, sessions: {}, onebot: {}, mind });
+    orch.paused = false; orch.aborted = false;
+    await orch.tickOnce({ now: now0, chat: async () => ({ message: { content: '{}' } }) });
+    check(orch.recentTicks.length === 0, '空扫描（没有到期会话）不记日志');
+  }
+
+  // 暂停状态连续两次 → 合并成一条（跳过原因为 paused，判定在作息之前，稳定可测）
+  {
+    const mind = new MindStore({ root: fs.mkdtempSync(path.join(dataDir, 'log2-')), getOptions: () => ({}) });
+    const store = { listChats: () => ['private:456'], unreadCount: () => 0, getChatMeta: () => ({ lastTs: 0 }), recent: () => [] };
+    const orch = new Orchestrator({ store, memory: {}, stickers: {}, sender: {}, sessions: {}, onebot: {}, mind });
+    orch.paused = true;
+    orch.aborted = false;
+    await orch.tickOnce({ now: now0 });
+    await orch.tickOnce({ now: now0 + 60000 });
+    check(orch.recentTicks.length === 1, '连续相同的"跳过"合并为一条');
+    check(orch.recentTicks[0].skipped === 'paused', '保留原因');
+    check(orch.recentTicks[0].at === now0 + 60000, '时间更新到最近一次');
+  }
+}
+
 // ── 8. 行动注册表完整性 ─────────────────────────────────────────────────
 console.log('\n=== 8. 行动注册表 ===');
 {
