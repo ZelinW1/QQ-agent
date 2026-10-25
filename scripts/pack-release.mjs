@@ -19,6 +19,16 @@ if (!fs.existsSync(path.join(appDir, 'QQ Agent Hui.exe'))) {
   process.exit(1);
 }
 
+// 冒烟测试会在 win-unpacked 里生成 data/（含 config.json 与 API Key）。
+// 一旦混进发布包就是密钥泄露 —— 直接中止，让人自己决定删掉还是换目录。
+const leaked = ['data', 'snowluma', 'runtime'].filter((d) => fs.existsSync(path.join(appDir, d)));
+if (leaked.length) {
+  console.error(`拒绝打包：win-unpacked 里存在 ${leaked.join(' / ')}（可能是本机测试残留或数据目录）。`);
+  console.error('请先删掉它们再打包，例如：');
+  console.error(`  rmdir /s /q "${path.join(appDir, leaked[0])}"`);
+  process.exit(1);
+}
+
 const outName = `QQ-Agent-Hui-V${version}-win64-portable.zip`;
 const outFile = path.join(ROOT, 'dist', outName);
 fs.rmSync(outFile, { force: true });
