@@ -230,6 +230,10 @@ console.log('\n=== 5. 接线 ===');
   const css = fs.readFileSync(path.join(ROOT, 'ui/style.css'), 'utf8');
   check(css.includes('.mind-wrap') && css.includes('.mind-rel'), '样式已定义');
   check(css.includes('.subnav-item'), '二级导航样式已定义');
+  // 回归：侧栏是 fixed 定位，任何"整行宽"的条都要自己让位。
+  // 橙色状态横幅（SnowLuma 未连接提示）曾经就被侧栏压住左端。
+  check(/\.banner\s*\{[^}]*margin-left:\s*var\(--rail-w\)/.test(css), '横幅让出侧栏宽度（不再被压）');
+  check(/\.tab-ico\s*\{[^}]*width:\s*16px/.test(css), '图标有固定尺寸');
 
   // 社区/市场入口整组收起（本机自用场景不需要），但 DOM 保留 ——
   // 09/10 两个脚本仍按 id 绑定它们，删掉会抛错。

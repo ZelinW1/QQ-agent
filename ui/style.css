@@ -294,6 +294,10 @@ a, button, input, textarea, select, summary,
   background: var(--warn-soft); color: var(--warn);
   border-bottom: 1px solid var(--warn-line);
   animation: pageIn var(--dur-base) var(--ease-out-quart);
+  /* 侧栏是 fixed 定位，不参与文档流 —— 横幅要让出同样宽度，
+     否则左端（恰好是"⚠"和第一句话）会被侧栏压住。 */
+  margin-left: var(--rail-w);
+  transition: margin-left .16s var(--ease-out-quart, ease);
 }
 .banner.hidden { display: block !important; opacity: 0; height: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; border-bottom-width: 0; animation: none; }
 .banner a { color: var(--ac); }
@@ -1868,7 +1872,7 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
    竖向副栏把"去哪"固定住，横向二级条回答"具体哪一件"，两者分工清楚。
    侧栏**从标题栏下方开始**，不覆盖顶部：品牌与状态条需要整行宽度，
    被侧栏压住一角比"顶部被占"更难看，也更难读。 */
-body { --rail-w: 92px; --topbar-h: 52px; }
+body { --rail-w: 104px; --topbar-h: 52px; }
 #tabs {
   position: fixed; left: 0; top: var(--topbar-h); bottom: 0; width: var(--rail-w);
   height: auto; flex-direction: column; align-items: stretch;
@@ -1893,12 +1897,16 @@ body { --rail-w: 92px; --topbar-h: 52px; }
 #subnav, #layout { margin-left: var(--rail-w); transition: margin-left .16s var(--ease-out-quart, ease); }
 #subnav { padding: 12px 18px 8px; }
 
-/* 收起态：只留单字图标，内容区让出宽度。
-   单字取自分组名首字（她/记/设），不引入图标库 —— 三个字足够辨认。 */
-.tab-ico { display: none; }
-body.rail-collapsed { --rail-w: 56px; }
+/* 收起态：只留图标，内容区让出宽度。
+   图标是内联 SVG（stroke: currentColor）—— 工程里没有可复用的图标资产，
+   内联 SVG 不依赖网络、不受 CSP 限制、也不额外增加请求。 */
+.tab-ico {
+  width: 16px; height: 16px; flex: 0 0 auto;
+  opacity: .9;
+}
+#tabs .tab { gap: 10px; }
+body.rail-collapsed { --rail-w: 52px; }
 body.rail-collapsed .tab-label { display: none; }
-body.rail-collapsed .tab-ico { display: inline; }
 body.rail-collapsed #tabs .tab { justify-content: center; padding: 0; }
 .rail-toggle {
   appearance: none; border: 1px solid var(--bd); background: transparent;
