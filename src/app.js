@@ -1602,6 +1602,11 @@ export function createApp({ log = console.log } = {}) {
     // 主动开口的两条路径互斥：心智节律开启时用它（她会自己决定何时开口），
     // 否则回落到旧的概率式 proactive。同时开会造成双路径重复搭话。
     const mindCfg = getConfig().mind || {};
+    // 旧印象迁移不依赖心跳：只开心智、关掉节律时也必须把历史印象并进关系，
+    // 否则提示词里不再渲染旧【记忆】，那批数据就等于凭空消失了。
+    if (mindCfg.enabled === true) {
+      try { orchestrator.migrateImpressionsToRelations(); } catch { /* 失败不阻塞启动 */ }
+    }
     const mindTickOn = mindCfg.enabled === true && mindCfg.tick?.enabled !== false;
     if (mindTickOn) orchestrator.startTickLoop();
     else if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();

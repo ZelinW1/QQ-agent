@@ -1279,6 +1279,10 @@ export function createRoutes(deps) {
         const mindTickOn = next.mind?.enabled === true && next.mind?.tick?.enabled !== false;
         if (mindTickOn) { orchestrator.startTickLoop(); orchestrator.stopProactiveLoop(); }
         else orchestrator.stopTickLoop();
+        // 运行期切开心智时也补一次迁移（不依赖心跳开关）。
+        if (next.mind?.enabled === true) {
+          try { orchestrator.migrateImpressionsToRelations(); } catch { /* 迁移失败不影响配置保存 */ }
+        }
         initPriceFeed(FIXED_PRICE_FEED_URL);
         emit('status', { configUpdated: true });
         // ⚠️ 必须脱敏：updateConfig 返回的是内存里的活配置对象，含明文 apiKey /
