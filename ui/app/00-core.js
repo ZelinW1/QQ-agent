@@ -787,17 +787,12 @@ const NAV_GROUPS = {
       { id: 'legacy-memory', label: '旧印象', view: 'memory' }
     ]
   },
-  ext: {
-    label: '扩展',
-    items: [
-      { id: 'skills', label: '技能', view: 'skills' },
-      { id: 'plugins', label: '插件', view: 'plugins' }
-    ]
-  },
   settings: {
     label: '设置',
     items: [
       { id: 'config', label: '运行配置', view: 'settings' },
+      { id: 'skills', label: '技能', view: 'skills' },
+      { id: 'plugins', label: '插件', view: 'plugins' },
       { id: 'snowluma', label: 'SnowLuma', view: 'snowluma' }
     ]
   }
@@ -855,13 +850,22 @@ function switchTab(name) {
   if (state.tab === 'settings' && name !== 'settings') flushSettingsSaves();
   // 直接调 switchTab 时（测试/引导跳转）也要让顶层分组与二级项跟着走，
   // 否则会出现"视图是设置页、顶栏却高亮着她"的分裂状态。
-  const nav = navForView(name);
-  if (nav && (state.nav !== nav.groupId || state.navItem !== nav.item.id)) {
-    state.nav = nav.groupId;
-    state.navItem = nav.item.id;
-    if (nav.item.mode) state.mindMode = nav.item.mode;
-    $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.nav === state.nav));
-    renderSubnav();
+  //
+  // ⚠️ 但**不能无条件同步**：她的四个二级项（状态/身份/记忆流/会话配置）
+  //    共用同一个 view-mind。switchNav 刚把 mindMode 设成「记忆流」，
+  //    这里再用 navForView('mind') 反查会拿到第一项（状态）并把它改回去 ——
+  //    表现就是"点二级项没反应，只是刷新了当前页"。所以：当前选中项本来就
+  //    指向这个视图时，跳过同步。
+  const currentItem = NAV_GROUPS[state.nav]?.items.find((it) => it.id === state.navItem);
+  if (!currentItem || currentItem.view !== name) {
+    const nav = navForView(name);
+    if (nav && (state.nav !== nav.groupId || state.navItem !== nav.item.id)) {
+      state.nav = nav.groupId;
+      state.navItem = nav.item.id;
+      if (nav.item.mode) state.mindMode = nav.item.mode;
+      $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.nav === state.nav));
+      renderSubnav();
+    }
   }
   const prevView = $('.view.active');
   $$('.view').forEach((v) => {

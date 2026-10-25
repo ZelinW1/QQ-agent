@@ -1863,7 +1863,32 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 .mind-chip[data-pick-name]:hover { color: var(--tx); }
 .mind-chip.picked { outline: 1px solid var(--ac); color: var(--tx); }
 
-/* ── 二级导航（她 / 记录 / 扩展 / 设置 之下）────────────────────────────
+/* ── 一级竖向导航 + 二级横向 ────────────────────────────────────────────
+   一级只有三项（她 / 记录 / 设置），做成顶栏会显得空，而且挤压内容高度；
+   竖向副栏把"去哪"固定住，横向二级条回答"具体哪一件"，两者分工清楚。 */
+body { --rail-w: 92px; }
+#tabs {
+  position: fixed; left: 0; top: 0; bottom: 0; width: var(--rail-w);
+  height: auto; flex-direction: column; align-items: stretch;
+  justify-content: flex-start; gap: 4px;
+  padding: 16px 10px;
+  border-bottom: none; border-right: 1px solid var(--bd);
+  overflow: visible; z-index: 40;
+}
+#tabs .tab {
+  height: 40px; padding: 0 12px; border-radius: 10px;
+  text-align: left; font-size: 13.5px;
+}
+#tabs .tab::after { display: none; }
+#tabs .tab.active {
+  color: var(--tx);
+  background: color-mix(in srgb, var(--ac) 15%, transparent);
+}
+#tabs .nav-spacer, #tabs .nav-extra { display: none; }
+#subnav, #layout { margin-left: var(--rail-w); }
+#subnav { padding: 12px 18px 8px; }
+
+/* ── 二级导航（她 / 记录 / 设置 之下）────────────────────────────
    顶层是"来干什么"，这里是"具体哪一件"。样式刻意比顶层轻：
    一级用 tab（重），二级用小号胶囊（轻），层级一眼能分出来。 */
 .subnav {

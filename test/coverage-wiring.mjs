@@ -163,6 +163,7 @@ cov['首屏'] = scan('首屏');
 // 这里统计"访问过多少个二级项"，目的是**确保每一页都真的被打开过**。
 const visitedTabs = [];
 const visitedGroups = [];
+const herModes = [];
 for (const groupBtn of [...window.document.querySelectorAll('.tab[data-nav]')]) {
   const gid = groupBtn.dataset.nav;
   groupBtn.click();
@@ -177,9 +178,33 @@ for (const groupBtn of [...window.document.querySelectorAll('.tab[data-nav]')]) 
     await sleep(700);
     const key = `${gid}/${itemId}`;
     visitedTabs.push(key);
+    // 回归：她的四个二级项共用一个视图，点完后**页面内容**必须真的换了
+    // （曾经被 switchTab 的分组同步改回 state，表现是"点二级项只刷新当前页"）。
+    // 注意不能用 window.state.mindMode 断言：app 里的 state 是脚本级 let，
+    // 不会挂到 window 上。看渲染结果才是用户能观察到的行为。
+    if (gid === 'her') {
+      const box = window.document.getElementById('mind-page');
+      herModes.push({ itemId, html: String(box?.innerHTML || '') });
+    }
     cov[`页签/${key}`] = scan(`页签/${key}`);
   }
 }
+
+await c.check('「她」的二级项真的切换了内容（不是只刷新当前页）', () => {
+  if (!herModes.length) throw new Error('没有访问到「她」的二级项');
+  const expect = {
+    state: (h) => h.includes('她对自己的描述') && !h.includes('出生仪式'),
+    identity: (h) => h.includes('出生仪式'),
+    stream: (h) => h.includes('记忆流'),
+    profiles: (h) => h.includes('会话配置')
+  };
+  const bad = herModes.filter((x) => {
+    const fn = expect[x.itemId];
+    return fn ? !fn(x.html) : false;
+  });
+  if (bad.length) throw new Error(`这些二级项渲染的内容不对：${bad.map((b) => b.itemId).join(', ')}`);
+  return `${herModes.length} 个二级项都渲染了各自的内容`;
+});
 
 // 顶层分组必须全覆盖；每个组至少有一个二级项被访问。
 await c.check('分组遍历覆盖了 index.html 声明的全部顶层分组', () => {

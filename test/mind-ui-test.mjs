@@ -220,6 +220,9 @@ console.log('\n=== 5. 接线 ===');
   check(/if \(name === 'mind'\) loadMindPage\(\);/.test(core), 'switchTab 会加载心智页');
   check(core.includes('const NAV_GROUPS = {'), '00-core 定义了信息架构表');
   check(core.includes("id: 'stream'") && core.includes("id: 'profiles'"), '二级项包含 记忆流 / 会话配置');
+  // 回归守卫：她的四个二级项共用一个视图，switchTab 的同步逻辑不能把 mindMode
+  // 改回去（否则点二级项 = 刷新当前页）。
+  check(core.includes('currentItem.view !== name'), 'switchTab 会跳过"同一个视图"的分组同步');
 
   const css = fs.readFileSync(path.join(ROOT, 'ui/style.css'), 'utf8');
   check(css.includes('.mind-wrap') && css.includes('.mind-rel'), '样式已定义');
@@ -229,9 +232,9 @@ console.log('\n=== 5. 接线 ===');
   // 09/10 两个脚本仍按 id 绑定它们，删掉会抛错。
   const navExtra = /<span class="nav-extra hidden">[\s\S]*?open-site-btn[\s\S]*?<\/span>/.test(html);
   check(navExtra, '社区/市场入口被整组收起且 DOM 仍在');
-  // 顶层只有四个分组，且顺序是 她 → 记录 → 扩展 → 设置
+  // 顶层只有三个分组，且顺序是 她 → 记录 → 设置
   const groups = [...html.matchAll(/data-nav="(\w+)"/g)].map((m) => m[1]);
-  check(groups.join(',') === 'her,records,ext,settings', `顶层分组顺序（${groups.join(',')}）`);
+  check(groups.join(',') === 'her,records,settings', `顶层分组顺序（${groups.join(',')}）`);
 }
 
 // ── 6. 真实服务：脚本能被浏览器取到 ────────────────────────────────────
