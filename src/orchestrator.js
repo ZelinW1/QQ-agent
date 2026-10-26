@@ -41,6 +41,26 @@ import { skillManager } from './skills/manager.js';
 import { getToolAvailability } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
 
+/**
+ * 正文像不像"本来就该发出去的话"。
+ *
+ * 只用来决定"要不要提醒模型一次"，**不会替它发送**：判错的代价是多花一次
+ * 很小的调用，而不是把内心戏发进群。
+ *
+ * 为什么需要它：模型有时把要说的回复写在 content 里（正文按设计不发 QQ），
+ * 于是这一轮静默结束 —— 用户侧表现就是"聊着聊着突然不回了"。
+ * 但也有很多情况正文本来就是思考（"（看看再说）"），那些不该被打扰。
+ */
+function looksLikeUnsentReply(text) {
+  const t = String(text || '').trim();
+  if (t.length < 2 || t.length > 300) return false;       // 太短/太长都不像成稿
+  if (!/[\u4e00-\u9fa5]/.test(t)) return false;           // 只处理中文正文（避免把 "ok" 这类收尾词当回复）
+  if (/^[（(【\[「]/.test(t)) return false;                 // 括号开头 = 旁白/内心戏
+  if (/不回复|不用回|无需回复|不说了|假装没看见|沉默|想了想|内心/i.test(t)) return false;
+  if (!/[\u4e00-\u9fa5a-zA-Z0-9]/.test(t)) return false;  // 纯标点/表情
+  return true;
+}
+
 export class Orchestrator {
   constructor({ store, memory, stickers, sender, sessions, onebot, emit = null, reminders = null, videoReader = null, mind = null }) {
     this.store = store;
@@ -1090,6 +1110,10 @@ export class Orchestrator {
       this.sessions.update(session.id);
       this.emit('session-update', session.id);
     };
+    // 只写正文、没调用任何工具的"静默丢话"最多纠正一次。
+    // 真实出现过：模型把本该发的话写在 content 里，正文按设计不发 QQ，
+    // 于是这一轮直接 break —— 用户侧表现就是"聊着聊着突然不回了"。
+    let textOnlyNudged = false;
     for (let round = 0; round < maxRounds && !finish; round++) {
       // 会话级中止（会话页「中止」按钮）：与全局 abort 同一条收尾路径。
       // 两个入口都会到这里：abortController 中断了在途请求（异常上抛后被
@@ -1251,7 +1275,29 @@ export class Orchestrator {
         const rescued = await this.#rescueUnsentReply({
           rawContent, triggerEntries, session, skillContext
         });
-        if (!rescued.length) break;
+        if (!rescued.length) {
+          // 抢救也没捞到。这里再补一道**协议纠正**（只一次）：
+          // 如果这一整轮还一条都没发出去，而正文又不为空，那多半是模型把
+          // 要说的话写在了正文里 —— 默认行为是直接 break，用户只会看到
+          // "思考 / 不发送"，聊天就此中断。纠正一次不会替它发言，
+          // 只是明确告诉它"正文不会送达，要么调 send_message，要么 finish"。
+          const hasSent = (session.sent || []).some((s) => s?.type === 'text' && String(s.text || '').trim());
+          if (!hasSent && looksLikeUnsentReply(rawContent) && !textOnlyNudged && round + 1 < maxRounds) {
+            textOnlyNudged = true;
+            session.unsentText = String(rawContent || '');
+            messages.push({
+              role: 'system',
+              content: '【系统提醒】你上一轮只写了正文，没有调用任何工具，所以对方什么都没有收到。\n'
+                + '如果那些话是要说给对方听的，请现在调用 send_message 把它原样发出去；\n'
+                + '如果你只是在心里想，请调用 finish 结束这次处理。不要把要说的话只写在正文里。'
+            });
+            markActivity('提醒它把话发出去…');
+            this.sessions.update(session.id);
+            this.emit('session-update', session.id);
+            continue;
+          }
+          break;
+        }
 
         toolCalls = rescued;
         // 与上面的 inline 分支同理：把 assistant 条目改成 tool_calls 形态。
