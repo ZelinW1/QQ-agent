@@ -754,7 +754,7 @@ c.section('10. 进程管理（安全分支）');
     const r = await hit('POST', '/api/qq-portable/launch');
     assert.equal(r.status, 400, `未安装应 400，实际 ${r.status}`);
     assert.equal(r.data.ok, false);
-    assert.ok(/未安装|setup/i.test(r.data.error || ''), `错误信息应说明原因，实际：${r.data.error}`);
+    assert.ok(/QQ\.exe|未安装|目录/i.test(r.data.error || ''), `错误信息应说明原因，实际：${r.data.error}`);
   });
 }
 

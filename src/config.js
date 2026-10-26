@@ -172,6 +172,14 @@ export const DEFAULT_CONFIG = {
     accessToken: '',           // WebSocket 令牌
     httpAccessToken: ''        // HTTP API 令牌（SnowLuma 可与 WS 不同；留空沿用 accessToken）
   },
+  // 便携 QQ（供应用内「快速启动」使用）
+  qqPortable: {
+    // 留空 = <应用根目录>/runtime/qq-portable
+    // 可以填本机已安装 QQ 的目录（例如 C:\Program Files\Tencent\QQNT），
+    // 填了就直接从那里启动，不必复制 1.5GB 文件；
+    // 登录态仍然写在本应用的 runtime/qq-portable-data，不会污染你日常用的 QQ。
+    dir: ''
+  },
   // 人设与行为
   persona: {
     botName: '小鲸鱼',

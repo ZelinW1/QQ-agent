@@ -39,7 +39,9 @@ const outName = `QQ-Agent-Hui-V${version}-win64-portable.zip`;
 const outFile = path.join(ROOT, 'dist', outName);
 // 直接删旧文件偶尔会 EPERM（资源管理器预览、杀毒扫描会持有句柄）。
 // 先写到 .tmp，再尝试替换；替换失败就把旧文件改名让路。
-const tmpFile = `${outFile}.tmp`;
+// 注意：临时文件也必须以 .zip 结尾 —— tar -a 按扩展名选格式，
+// 写成 xxx.zip.tmp 会得到一个**未压缩的 tar**（体积翻倍，而且根本不是 zip）。
+const tmpFile = `${outFile.replace(/\.zip$/, '')}.tmp.zip`;
 fs.rmSync(tmpFile, { force: true });
 
 // Windows 10+ 自带 bsdtar：tar -a 会按扩展名自动选 zip 格式。

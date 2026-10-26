@@ -1485,6 +1485,12 @@ async function saveConfig({ quiet = false } = {}) {
       ...(enteredWsToken && enteredWsToken !== '******' ? { accessToken: enteredWsToken } : {}),
       ...(enteredHttpToken && enteredHttpToken !== '******' ? { httpAccessToken: enteredHttpToken } : {})
     };
+    // 便携 QQ 目录：留空 = 用应用内 runtime/qq-portable；
+    // 填了就从本机已安装的 QQ 直接启动（登录态仍写在本应用的 data 目录里）。
+    patch.qqPortable = {
+      ...(c.qqPortable || {}),
+      dir: val('#cfg-qqportabledir', c.qqPortable?.dir || '').trim()
+    };
   }
 
   if (sec === 'tools') {

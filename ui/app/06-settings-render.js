@@ -1025,6 +1025,13 @@ function renderOnebotSection(c) {
         <button class="btn btn-small" id="open-snowluma-btn">打开文件夹</button>
       </div>
       <div class="hint" id="snowluma-hint"></div></div>
+    <div class="field"><label>便携 QQ 目录（留空 = 应用内 runtime\qq-portable）</label>
+      <input type="text" id="cfg-qqportabledir" value="${esc(c.qqPortable?.dir || '')}" placeholder="例如 C:\Program Files\Tencent\QQNT" />
+      <div class="hint">
+        填本机已安装 QQ 的目录，就能直接用应用内「快速启动」拉起它，不必再复制一份便携包。
+        登录态写在本应用的 <code>runtime\qq-portable-data</code>，不会影响你日常用的 QQ。
+        该目录下必须能直接看到 <code>QQ.exe</code>。
+      </div></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-snowlumalaunch" ${c.snowluma.autoLaunch ? 'checked' : ''} />
       <label for="cfg-snowlumalaunch">QQ Agent 启动时自动拉起本机协议端（未运行时）</label></div>
     <div class="field-row">

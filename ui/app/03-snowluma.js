@@ -117,7 +117,7 @@ async function loadSnowlumaPage({ quiet = false } = {}) {
         <div class="quick-start-section" style="background:var(--bg);border:none;border-radius:14px;padding:16px;margin-bottom:16px;box-shadow:var(--raise-sm)">
           <div style="font-size:15px;font-weight:600;margin-bottom:8px">🚀 快速启动</div>
           <div class="muted" style="font-size:13px;margin-bottom:12px;line-height:1.6">
-            ${!qqReady ? '便携 QQ 未就绪：本分支不代为安装。可从上游项目作者的分发页获取后放到 <code>runtime/qq-portable/</code>（或连接外部 OneBot）' :
+            ${!qqReady ? '便携 QQ 未就绪：在「设置 → OneBot 连接」里填本机已安装 QQ 的目录即可（该目录下要能直接看到 QQ.exe），或把便携 QQ 放到 <code>runtime/qq-portable/</code>' :
               !qqRunning ? '点击下面按钮，自动完成：启动 QQ → 启动本机协议端 → 连接 OneBot' :
               !running ? 'QQ 已运行，点击启动本机协议端并连接' :
               '协议端已运行，等待 OneBot 连接…'}

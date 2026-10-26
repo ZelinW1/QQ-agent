@@ -286,6 +286,10 @@ export function createApp({ log = console.log } = {}) {
   let qqPortableLaunching = false;   // 便携 QQ 启动互斥标记（防连点「启动 QQ」并发拉起）
 
   function qqPortableDir() {
+    // 允许手动映射到本机已安装的 QQ（设置里填目录），
+    // 省掉为了"快速启动"再复制一份 1.5GB 的便携包。
+    const configured = String(getConfig().qqPortable?.dir || '').trim();
+    if (configured) return configured;
     return path.join(ROOT, 'runtime', 'qq-portable');
   }
 
@@ -388,7 +392,7 @@ export function createApp({ log = console.log } = {}) {
   /** 启动便携 QQ（如已在运行则跳过） */
   async function launchPortableQQ() {
     if (!qqPortableReady()) {
-      return { ok: false, error: '便携 QQ 未安装：请先运行 npm run setup' };
+      return { ok: false, error: `没有找到 QQ.exe：${qqPortableExe()}（可在设置里指定本机已安装的 QQ 目录）` };
     }
     // 启动互斥：连点「启动 QQ」时，第一次还在 spawn，第二次直接拒绝
     if (qqPortableLaunching) {
