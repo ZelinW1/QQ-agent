@@ -100,11 +100,14 @@ if (crossesMidnight && d.getHours() < end.h) d.setDate(d.getDate() - 1);
 
 ---
 
-## P4 · "记一笔"分叉（验证第 4 点）
+## P4 · "记一笔"分叉（验证第 4 点）—— ✅ 动作已就位，待实机观察
 
-- 新增自愿行动 `remember`：args `{ chatKey, text }`
-  - 允许先 `recall`（5 体力）补充素材，再 `remember_event`
-  - 素材来自 roster 的 `lastLine`，不是强制流程
+- 新增自愿行动 `remember`（内置，5 体力）：args `{ chatKey, text }`
+  - 写入一条 `kind: 'observation'`、`source: 'free-action'` 的事件
+  - 复用 appendEvent 的 24h 去重（她容易在几轮里重复记同一件事）
+  - 工具 schema 里 `text` 必填；`chatKey` 可省（默认用当前目标会话）
+  - 允许先 `recall`（5 体力）补充素材，再 `remember`
+- 测试：动作单测 + 编排器集成（记一笔后 `queryEvents` 能查到、行动落盘）
 - 观察指标：事件数是否自然增长、`organize` 是否终于可达
 - **若仍不增长**，再考虑在聊天运行末尾加一个"轻量分叉"（一次判断：
   这次有值得留的吗），仍然不是强制写入

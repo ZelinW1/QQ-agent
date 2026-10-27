@@ -69,6 +69,15 @@ export const ACTIONS = [
     }
   },
   {
+    id: 'remember',
+    label: '记一笔',
+    description: '把刚才那次对话里值得留的，写进自己的记忆',
+    energy: 5,
+    async run(ctx, args) {
+      return ctx.remember(args || {});
+    }
+  },
+  {
     id: 'stay_up',
     label: '再撑一会儿',
     description: '还不想睡，再待一会儿再睡',

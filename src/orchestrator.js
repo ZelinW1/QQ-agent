@@ -2621,8 +2621,15 @@ export class Orchestrator {
             reason: { type: 'string', description: '一句给自己看的理由' },
             ...(a.id === 'send_proactive'
               ? { chatKey: { type: 'string', description: '找谁：用上面列出的 chatKey，不填则由系统挑最该找的人' } }
+              : {}),
+            ...(a.id === 'remember'
+              ? {
+                  text: { type: 'string', description: '要记住的那句话或那件事（用她自己的话）' },
+                  chatKey: { type: 'string', description: '这条记忆属于谁 / 哪个会话' }
+                }
               : {})
           },
+          ...(a.id === 'remember' ? { required: ['text'] } : {}),
           additionalProperties: true
         }
       }
@@ -2643,8 +2650,7 @@ export class Orchestrator {
   }
 
   /** 执行一个动作。ctx 里只给能力，不给她直接碰编排器内部。 */
-  async #runMindAction(action, chatKey, decision, { now }) {
-    if (!action) return { done: false, reason: '未知动作' };
+  async #runMindAction(action, chatKey, decision, { now }) {    if (!action) return { done: false, reason: '未知动作' };
     const ctx = {
       chatKey,
       now,
@@ -2652,6 +2658,9 @@ export class Orchestrator {
       proactive: () => this.wake(chatKey, { proactive: true }),
       reflect: () => this.reflectForChat(chatKey),
       recall: () => this.#recallForChat(chatKey, decision.args, now),
+      // "记一笔"：把刚才的事写进她自己的记忆（事件），不是强制流程，
+      // 只是自由时间里一个可选动作。
+      remember: (args) => this.#rememberForChat(chatKey, args || {}, now),
       // "再撑一会儿"：只延长入睡时间，不产生消息。次数由 maxStayUp 封顶。
       stayUp: () => {
         const t = this.mind.getTick();
@@ -2687,6 +2696,30 @@ export class Orchestrator {
     const r = await executeTool(listTools(), toolCtx, toolId, JSON.stringify(args || {}));
     if (r?.isError) throw new Error(String(r.content || `工具 ${toolId} 执行失败`));
     return { ok: true, content: r?.content ?? null };
+  }
+
+  /**
+   * "记一笔"动作：把一句话写成一个事件。
+   *
+   * 这是"写 / 不写"的分叉点 —— 以前她只在聊天里顺手调用 remember_event，
+   * 而聊天时的目标是"怎么回"，几乎不会切到"归档"。自由时间里把它做成
+   * 一个普通可选动作之后，她才真的站在这个路口上（也可以选择不写）。
+   */
+  #rememberForChat(chatKey, args = {}, now = Date.now()) {
+    const text = String(args.text || '').trim();
+    if (!text) return { ok: false, reason: '没有要记的内容' };
+    const target = String(chatKey || args.chatKey || '').trim();
+    if (!target) return { ok: false, reason: '不知道这条记忆属于哪个会话' };
+    const r = this.mind.appendEvent({
+      chatKey: target,
+      kind: 'observation',
+      actorId: 'self',
+      text: text.slice(0, 500),
+      ts: now,
+      source: 'free-action'
+    });
+    if (!r?.ok) return { ok: false, reason: r?.reason || '写入失败' };
+    return { ok: true, eventId: r.event?.id || '', text, duplicate: r.duplicate === true };
   }
 
   /**

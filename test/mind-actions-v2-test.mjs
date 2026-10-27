@@ -16,7 +16,7 @@ const check = (cond, msg, detail = '') => {
   else { fail++; console.log('  ✗ ' + msg); if (detail) console.log('      ' + detail); }
 };
 
-const { actionsWithCosts, availableActions, blockedActions } = await import(src('src/mind/actions.js'));
+const { actionsWithCosts, availableActions, blockedActions, getAction } = await import(src('src/mind/actions.js'));
 const { extensionActions } = await import(src('src/mind/extensions.js'));
 const { buildGlobalDecisionPrompt } = await import(src('src/mind/tick.js'));
 const { registerTool, unregisterTool } = await import(src('src/tool-registry.js'));
@@ -39,9 +39,19 @@ console.log('\n=== 1. 体力成本读配置 ===');
     '默认成本 25 时同样体力做不了');
 }
 
-// ── 2. 被拦下的动作带原因 ───────────────────────────────────────────────
-console.log('\n=== 2. 被拦动作 ===');
+// ── 1b. 「记一笔」是一个内置自愿行动 ──────────────────────────────────
+console.log('\n=== 1b. 记一笔 ===');
 {
+  const remember = getAction('remember');
+  check(Boolean(remember), '存在 remember 动作');
+  check(remember.energy === 5, `成本 5 体力（${remember.energy}）`);
+  let got = null;
+  const r = await remember.run({ remember: (args) => { got = args; return { ok: true }; } }, { text: '王哥说项目要上线' });
+  check(got?.text === '王哥说项目要上线' && r.ok === true, '动作把内容交给 ctx.remember');
+}
+
+// ── 2. 被拦下的动作带原因 ───────────────────────────────────────────────
+console.log('\n=== 2. 被拦动作 ===');{
   const state = { energy: 0, todayProactive: 0, maxProactive: 8, minProactiveGapMs: 0, lastProactiveAt: 0 };
   const blocked = blockedActions(state, actionsWithCosts({}));
   check(blocked.length >= 3, `低体力时能看到多条被拦（${blocked.length}）`);

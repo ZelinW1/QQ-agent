@@ -215,6 +215,27 @@ console.log('\n=== 2d. 只写正文 ===');
   check(mind.listActions({ limit: 3 }).some((a) => a.action === 'idle'), 'idle 有落盘记录');
 }
 
+// ── 2e. 「记一笔」把对话写进事件 ───────────────────────────────────────
+console.log('\n=== 2e. 记一笔 ===');
+{
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 4 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  const replies = [
+    { tool_calls: [{ id: 'r1', function: { name: 'remember', arguments: '{"text":"王哥说项目要上线，压力很大","chatKey":"private:111","reason":"值得留"}' } }] },
+    { tool_calls: [{ id: 'r2', function: { name: 'finish', arguments: '{"reason":"记下了"}' } }] }
+  ];
+  const r = await orch.tickOnce({ now: now0, chat: async () => ({ message: replies.shift() }) });
+
+  const events = mind.queryEvents({ chatKey: 'private:111', limit: 10 }) || [];
+  check(events.some((e) => String(e.text || '').includes('项目要上线')), '记一笔真的写进了事件');
+  check(r.results?.some((x) => x.action === 'remember'), '结果里记录了 remember');
+  check(mind.listActions({ limit: 3 }).some((a) => a.action === 'remember'), '行动也落了盘');
+}
+
 // ── 3. 同一次唤醒不会重复决策 ───────────────────────────────────────────
 console.log('\n=== 3. 节拍 ===');
 {
