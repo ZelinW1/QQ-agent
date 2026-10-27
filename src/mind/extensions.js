@@ -29,31 +29,34 @@ export function extensionActions({ tools = [], cfg = {} } = {}) {
   const out = [];
 
   for (const tool of Array.isArray(tools) ? tools : []) {
-    const meta = tool?.mindAction;
-    if (!meta || typeof meta !== 'object') continue;   // 没声明 = 永远只是辅助工具
-
-    const id = String(tool.id || '');
+    const meta = (tool?.mindAction && typeof tool.mindAction === 'object') ? tool.mindAction : null;
+    const id = String(tool?.id || '');
     if (!id) continue;
     const o = (overrides[id] && typeof overrides[id] === 'object') ? overrides[id] : {};
+    const hasOverride = Object.keys(o).length > 0;
+
+    // 没声明 mindAction 的工具：只有用户在配置里显式打开才成为行动。
+    // （这正是"手动配置"的入口：装了个扩展，它自己没声明，也能由用户挑出来用。）
+    if (!meta && !(hasOverride && o.enabled === true)) continue;
 
     // 开关：配置 > 清单默认 > 关闭
-    const enabled = o.enabled !== undefined ? o.enabled === true : meta.defaultEnabled === true;
+    const enabled = o.enabled !== undefined ? o.enabled === true : (meta?.defaultEnabled === true);
     if (!enabled) continue;
 
-    const energyRaw = o.energy !== undefined ? o.energy : meta.energy;
+    const energyRaw = o.energy !== undefined ? o.energy : meta?.energy;
     const energy = Number.isFinite(Number(energyRaw)) && Number(energyRaw) >= 0
       ? Number(energyRaw)
       : 10;
 
     out.push({
       id,
-      label: String(o.label || meta.label || tool.name || id).slice(0, 40),
-      description: String(meta.description || tool.description || '').slice(0, 80),
+      label: String(o.label || meta?.label || tool.name || id).slice(0, 40),
+      description: String(meta?.description || tool.description || '').slice(0, 80),
       energy,
       external: true,
       toolId: id,
       // 扩展动作的前置条件由清单提供；没有就永远可用（体力仍会拦）
-      when: typeof meta.when === 'function' ? meta.when : undefined
+      when: typeof meta?.when === 'function' ? meta.when : undefined
     });
   }
   return out;

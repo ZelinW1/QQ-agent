@@ -189,8 +189,7 @@ function bindSettingsEvents(c) {
   });
 
   // 单个工具开关
-  $$('.tool-checkbox').forEach((cb) => {
-    cb.addEventListener('change', () => {
+  $$('.tool-checkbox').forEach((cb) => {    cb.addEventListener('change', () => {
       const toolId = cb.dataset.toolId;
       state.config.tools = state.config.tools || {};
       // send_to 的勾选 = 「跨会话发送」开关本身（收编进消息发送分类）
@@ -209,6 +208,46 @@ function bindSettingsEvents(c) {
       // 标脏走表单链（自动保存 'tools' 分支读 state.config.tools 整体提交）
       const form = $('#settings-form');
       if (form && form.__settingsBound) form.__settingsBound.markDirty(card || cb);
+    });
+  });
+
+  // 「作为自愿行动」：扩展工具可以被手动挑成心跳菜单里的一项。
+  // 配置存在 mind.actions.overrides[工具id]，与"工具是否启用"是两件事：
+  // 工具可以只作为辅助能力启用，也可以额外成为一次自愿行动。
+  const saveActionOverride = async (toolId, patch) => {
+    const mind = state.config.mind || {};
+    const actions = mind.actions || {};
+    const overrides = { ...(actions.overrides || {}) };
+    overrides[toolId] = { ...(overrides[toolId] || {}), ...patch };
+    state.config.mind = { ...mind, actions: { ...actions, overrides } };
+    try {
+      await api('/api/config', { method: 'POST', body: JSON.stringify({ mind: { actions: { overrides } } }) });
+    } catch (e) {
+      console.warn('[行动配置] 保存失败', e);
+    }
+  };
+  $$('.tool-action-check').forEach((cb) => {
+    cb.addEventListener('change', async () => {
+      const id = cb.dataset.toolId;
+      if (!id) return;
+      await saveActionOverride(id, { enabled: cb.checked });
+      renderSettings();
+    });
+  });
+  $$('.tool-action-label').forEach((input) => {
+    input.addEventListener('change', () => {
+      const id = input.dataset.toolId;
+      if (!id) return;
+      saveActionOverride(id, { label: String(input.value || '').trim().slice(0, 40) });
+    });
+  });
+  $$('.tool-action-energy-input').forEach((input) => {
+    input.addEventListener('change', () => {
+      const id = input.dataset.toolId;
+      if (!id) return;
+      const energy = Math.max(0, Math.min(100, Number(input.value) || 0));
+      input.value = energy;
+      saveActionOverride(id, { energy });
     });
   });
 

@@ -438,7 +438,7 @@ export const DEFAULT_CONFIG = {
       max: 100,
       recoverPerHour: 10,
       floor: 10,                    // 低于此只能 idle
-      cost: { send_proactive: 25, organize: 15, recall: 5, idle: 0 }
+      cost: { send_proactive: 25, organize: 15, recall: 5, remember: 5, idle: 0 }
     },
     // —— 提示词预算 ——
     recallLimit: 4,                 // 每轮自动注入几条"想起的事"

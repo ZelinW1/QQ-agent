@@ -1201,6 +1201,28 @@ td b, .tbl td b { color: var(--tx); font-weight: 600; }
 }
 .tool-card.enabled { border-left-color: var(--ok); background: var(--ok-soft); }
 .tool-meta { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+
+/* 自愿行动配置行：只出现在扩展工具（或有 mindAction 声明的工具）上。
+   放在工具卡内部，避免"技能开关在这页、工具开关在那页"的二次跳转。 */
+.tool-action-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--bd);
+  font-size: 12px; color: var(--tx3);
+}
+.tool-action-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.tool-action-toggle input { margin: 0; }
+.tool-action-label {
+  flex: 1 1 140px; min-width: 110px; height: 26px; padding: 0 8px;
+  font-size: 12px; border: 1px solid var(--bd); border-radius: var(--r-sm);
+  background: var(--bg2); color: var(--tx);
+}
+.tool-action-label:disabled, .tool-action-energy-input:disabled { opacity: .45; }
+.tool-action-energy { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.tool-action-energy-input {
+  width: 56px; height: 26px; padding: 0 6px; font-size: 12px;
+  border: 1px solid var(--bd); border-radius: var(--r-sm);
+  background: var(--bg2); color: var(--tx);
+}
 .tool-dep-warn {
   font-size: 10px; padding: 1px 6px; border-radius: var(--r-full);
   border: 1px solid var(--err-line); color: var(--err); background: var(--err-soft);

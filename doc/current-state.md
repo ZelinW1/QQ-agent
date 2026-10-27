@@ -65,8 +65,30 @@
 ⑨ 后台（不阻塞回复）
    #maybeConsolidateMemory  旧的印象整理（已基本退场）
    #maybeReflect            攒够 8 条未反思事件且过冷却 → 反思
-   tickOnce                 每 5 分钟：结算体力 → 预判 →（有候选才）决策模型
+   tickOnce                 全局唤醒（默认）：结算体力 → roster → 一次菜单 → 工具循环
+                            （旧的 per-chat 路径保留，mind.tick.mode='per-chat' 可回滚）
 ```
+
+### 2.1 一次全局唤醒做什么
+
+```
+tickOnce
+└─ 睡着？ → 不决策（只入库存消息，醒来再一起读）
+   结算体力 + 跨天清零
+   全局节拍到了？
+   ├─ roster：所有私聊，按 未读 > 到期 openLoop > 沉默时长 > 亲近度 排序取前 3
+   │          每条带 昵称/多久没联系/未读数/最后一句线索/最近事件时间
+   ├─ 候选：miss_you / open_loop / reflect_pending / unprocessed（刚聊过但没记）
+   ├─ 菜单：内置动作（成本读 config.mind.energy.cost）+ 已启用的扩展行动
+   │        附 showBlocked 条"现在做不了 + 原因"
+   └─ 自由行动会话：一次上下文里连续做 ≤ mind.actions.maxPerWake 件事
+        每步结果回灌；体力和次数不够会被明确拒绝；finish 收尾
+        一次都没做 → 记 idle 并给候选打盹
+```
+
+扩展行动：工具定义里可声明 `mindAction: { label, energy, defaultEnabled }`；
+也可以在「设置 → 运行配置 → 工具与技能 → 作为自愿行动」里手动把任意扩展工具
+设为行动（默认关闭，配置存 `mind.actions.overrides[工具id]`）。
 
 ### 2. 心智子系统在流程里的六个插入点
 

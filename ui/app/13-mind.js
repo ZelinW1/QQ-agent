@@ -480,6 +480,10 @@ function mindRhythmSection(d) {
         ${mindNum('rh-energy-max', '体力上限', energy.max ?? 100, { min: 10, max: 1000, desc: '累不累的上限' })}
         ${mindNum('rh-energy-recover', '每小时恢复', energy.recoverPerHour ?? 10, { min: 0, max: 100, desc: '按时间差补，不靠定时器' })}
         ${mindNum('rh-energy-floor', '低于此值不动', energy.floor ?? 10, { min: 0, max: 100, desc: '累了就歇着，连决策都不做' })}
+        ${mindNum('rh-cost-proactive', '主动说话成本', energy.cost?.send_proactive ?? 25, { min: 0, max: 100 })}
+        ${mindNum('rh-cost-organize', '整理记忆成本', energy.cost?.organize ?? 15, { min: 0, max: 100 })}
+        ${mindNum('rh-cost-recall', '回想成本', energy.cost?.recall ?? 5, { min: 0, max: 100 })}
+        ${mindNum('rh-cost-remember', '记一笔成本', energy.cost?.remember ?? 5, { min: 0, max: 100 })}
       </div>
     </div>`;
 
@@ -788,7 +792,13 @@ async function saveMindRhythm() {
           energy: {
             max: num('rh-energy-max', 10, 1000, 100),
             recoverPerHour: num('rh-energy-recover', 0, 100, 10),
-            floor: num('rh-energy-floor', 0, 100, 10)
+            floor: num('rh-energy-floor', 0, 100, 10),
+            cost: {
+              send_proactive: num('rh-cost-proactive', 0, 100, 25),
+              organize: num('rh-cost-organize', 0, 100, 15),
+              recall: num('rh-cost-recall', 0, 100, 5),
+              remember: num('rh-cost-remember', 0, 100, 5)
+            }
           },
           tick: {
             intervalMs: num('rh-tick-interval', 1, 120, 5) * 60000,

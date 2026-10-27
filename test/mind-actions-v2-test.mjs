@@ -69,9 +69,16 @@ console.log('\n=== 3. 扩展行动 ===');
   ];
 
   const off = extensionActions({ tools, cfg: {} });
-  check(!off.some((a) => a.id === 'plain_tool'), '没声明 mindAction 的工具永远不会成为行动');
+  check(!off.some((a) => a.id === 'plain_tool'), '没声明 mindAction 的工具默认不会成为行动');
   check(!off.some((a) => a.id === 'qzone_post'), '声明了但默认关 → 不出现');
   check(off.some((a) => a.id === 'profile' && a.energy === 8), '清单默认开 → 出现，成本取自清单');
+
+  // 手动挑选：扩展自己没声明，用户也能在配置里把它变成行动
+  const adopted = extensionActions({ tools, cfg: { overrides: { plain_tool: { enabled: true, label: '手动加的行动', energy: 7 } } } });
+  const p = adopted.find((a) => a.id === 'plain_tool');
+  check(Boolean(p), '未声明 mindAction 的工具可被手动开启为行动');
+  check(p?.label === '手动加的行动' && p?.energy === 7, '手动行动也支持 label/energy');
+  check(!extensionActions({ tools, cfg: { overrides: { plain_tool: { enabled: false } } } }).some((a) => a.id === 'plain_tool'), '手动关掉就不出现');
 
   const on = extensionActions({ tools, cfg: { overrides: { qzone_post: { enabled: true, label: '发条空间动态', energy: 12 } } } });
   const q = on.find((a) => a.id === 'qzone_post');

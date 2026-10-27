@@ -1320,6 +1320,7 @@ async function loadModulePage(kind, { rescan = false } = {}) {
 function renderModuleSkeleton(meta) {
   return `<div class="usage-wrap">
     <div class="usage-head"><h2>${esc(meta.title)}</h2></div>
+    <div class="hint" style="margin:0 0 12px">启用后，它注册的工具开关与「作为自愿行动」都在 设置 → 运行配置 → 工具与技能 里。</div>
     <div class="sk-block">${'<div class="sk-row"></div>'.repeat(5)}</div>
   </div>`;
 }
@@ -1599,6 +1600,16 @@ function renderToolsSection(c) {
       const isSendTo = t.id === 'send_to';
       const checked = isSendTo ? (toolsCfg.crossChatSend === true) : enabled;
       const chkId = `tool-chk-${t.id.replace(/[^\w-]/g, '_')}`;
+      // 「作为自愿行动」：扩展工具（skill/plugin）可以手动挑出来，
+      // 也能承接扩展清单里的 mindAction 声明。默认关，由用户显式打开。
+      const meta = t.mindAction || null;
+      const showAction = Boolean(t.skillId || meta);
+      const ao = ((c.mind && c.mind.actions && c.mind.actions.overrides) || {})[t.id] || {};
+      const actEnabled = ao.enabled !== undefined ? ao.enabled === true : (meta?.defaultEnabled === true);
+      const actLabel = ao.label !== undefined ? ao.label : (meta?.label || '');
+      const actEnergy = ao.energy !== undefined
+        ? Number(ao.energy)
+        : (Number.isFinite(Number(meta?.energy)) ? Number(meta.energy) : 10);
       return `
         <div class="tool-card ${checked ? 'enabled' : 'disabled'} ${disabledByDep ? 'dep-disabled' : ''}" data-tool-id="${t.id}">
           <div class="tool-header">
@@ -1618,6 +1629,19 @@ function renderToolsSection(c) {
             ${disabledByDep ? '<span class="tool-dep-warn">依赖未满足</span>' : ''}
             ${isSendTo ? '<span class="tool-dep">目标须在白名单内</span>' : ''}
           </div>
+          ${showAction ? `
+          <div class="tool-action-row">
+            <label class="tool-action-toggle">
+              <input type="checkbox" class="tool-action-check" data-tool-id="${t.id}" ${actEnabled ? 'checked' : ''} />
+              <span>作为自愿行动</span>
+            </label>
+            <input type="text" class="tool-action-label" data-tool-id="${t.id}" maxlength="40"
+              placeholder="${esc(meta?.label || t.name || '菜单里叫什么')}" value="${esc(actLabel)}" ${actEnabled ? '' : 'disabled'} />
+            <label class="tool-action-energy">体力
+              <input type="number" class="tool-action-energy-input" data-tool-id="${t.id}" min="0" max="100"
+                value="${actEnergy}" ${actEnabled ? '' : 'disabled'} />
+            </label>
+          </div>` : ''}
         </div>`;
     }).join('') : '';
 
@@ -1644,6 +1668,7 @@ function renderToolsSection(c) {
     <h3 id="settings-tools">工具与技能</h3>
     <div class="hint" style="margin-bottom:12px">
       打开开关启用机器人可调用的工具。关闭后模型将无法使用该功能。
+      扩展工具还可以打开「作为自愿行动」，让她在自由时间里自己决定要不要用它。
       ${toolsCfg.enabled === false ? '<span style="color:var(--red)">⚠️ 全局开关已关闭，所有工具均不可用</span>' : ''}
     </div>
     ${fold({

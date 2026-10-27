@@ -1609,7 +1609,14 @@ export function createRoutes(deps) {
           icon: t.icon, defaultEnabled: t.defaultEnabled, requiresVision: t.requiresVision, requiresSearch: t.requiresSearch,
           // 来源标记：属于哪个 Skill（内置工具为 null）—— UI 据此打「skill」标识，
           // 并在所属技能失活时把工具整组隐藏（与提示词口径一致）。
-          skillId: t.skillId ?? null
+          skillId: t.skillId ?? null,
+          // 可行动作的元数据（只回传可序列化字段；when 是函数，不传）。
+          mindAction: t.mindAction && typeof t.mindAction === 'object' ? {
+            label: String(t.mindAction.label || '').slice(0, 40),
+            description: String(t.mindAction.description || '').slice(0, 80),
+            energy: Number.isFinite(Number(t.mindAction.energy)) ? Number(t.mindAction.energy) : null,
+            defaultEnabled: t.mindAction.defaultEnabled === true
+          } : null
         }));
         return json(res, 200, { tools });
       }
