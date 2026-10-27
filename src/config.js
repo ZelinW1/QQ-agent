@@ -413,6 +413,8 @@ export const DEFAULT_CONFIG = {
       jitter: 0.1,                  // ±10% 抖动，避免所有会话同时醒
       idleLookbackMin: 2,           // 会话刚活跃过（2 分钟内）跳过心跳，别插嘴
       proactiveIdleMs: 21600000,    // 6 小时没说话才考虑"想她"
+      // 刚聊完多久内算"还没记下什么"（unprocessed 候选的窗口）
+      rememberWindowMs: 43200000,
       maxDecisionsPerDay: 24,       // 熔断：每日调用决策模型次数
       maxProactivePerDay: 6,        // 熔断：每日主动发消息次数
       minProactiveGapMs: 3600000,   // 两次主动消息最小间隔（60 分钟）

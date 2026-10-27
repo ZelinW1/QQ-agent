@@ -491,14 +491,14 @@ export class Orchestrator {
   // ── 核心循环 ───────────────────────────────────────────────────────────
 
   async wake(chatKey, { proactive = false, waitingSessionId = null, reuseSessionId = null } = {}) {
-    if (this.aborted) { if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted'); return; }
-    if (this.paused && !proactive) { if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted'); return; }
-    if (this.runningChats.has(chatKey)) return;
+    if (this.aborted) { if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted'); return { ok: false, reason: '已中止' }; }
+    if (this.paused && !proactive) { if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted'); return { ok: false, reason: '已暂停' }; }
+    if (this.runningChats.has(chatKey)) return { ok: false, reason: '这个会话正在聊' };
 
     // 模型未设置：不产生报错会话，消息保留为未读；设置模型后（下一条消息或手动唤醒）自动补处理
     if (!String(getConfig().api.model || '').trim()) {
       if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted', '模型未设置');
-      return;
+      return { ok: false, reason: '模型未设置' };
     }
 
     // ── 会话创建前检测禁言状态：机器人被禁言时不创建会话，消息标记已读 ──
@@ -511,7 +511,7 @@ export class Orchestrator {
         const marked = this.store.markAllRead(chatKey);
         if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted', '机器人被禁言');
         this.emit('chat-update', chatKey);
-        return;
+        return { ok: false, reason: '被禁言了，说不出去' };
       }
     }
 
@@ -540,7 +540,7 @@ export class Orchestrator {
       }, 3000);
       retryTimer.unref?.();
       this.wakeTimers.set(chatKey, retryTimer);
-      return;
+      return { ok: false, reason: '并发已满，稍后再试' };
     }
 
     // ── 取走触发批 ──
@@ -613,7 +613,7 @@ export class Orchestrator {
           this.emit('chat-update', chatKey);
         }
         if (waitingSessionId) this.#discardWaiting(waitingSessionId);
-        return;
+        return { ok: false, reason: '这些消息不需要回应' };
       }
 
       if (Number.isFinite(batchFloorTs)) {
@@ -624,7 +624,7 @@ export class Orchestrator {
           if (archived > 0) console.log(`[orchestrator] ${chatKey} ${archived} 条旧积压未读（触发消息已缺失）已标已读归档`);
           if (waitingSessionId) this.#discardWaiting(waitingSessionId);
           this.emit('chat-update', chatKey);
-          return;
+          return { ok: false, reason: '触发消息已不在，跳过' };
         }
         batchFloorTs = Math.min(...inWindow.map((m) => m.ts));
       }
@@ -643,7 +643,7 @@ export class Orchestrator {
       }
       if (triggerEntries.length === 0) {
         if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted');
-        return; // 没有未读就不空跑
+        return { ok: false, reason: '没有未读，不空跑' }; // 没有未读就不空跑
       }
     } else {
       // 主动机会：不打扰、无触发批，只带状态
@@ -797,6 +797,19 @@ export class Orchestrator {
     this.#maybeConsolidateMemory(chatKey);
     // 心智反思：把这段时间的事变成她自己的记忆与看法。同样在后台。
     this.#maybeReflect(chatKey);
+
+    // 返回本次运行的摘要：自由行动里的"主动说句话"要据此告诉她自己说了什么。
+    // 对方的回复不在本次上下文里（它是另一条消息触发的独立运行）。
+    return {
+      ok: true,
+      sessionId: session?.id || '',
+      status: session?.status || '',
+      rounds: Number(session?.rounds) || 0,
+      sent: (Array.isArray(session?.sent) ? session.sent : [])
+        .filter((x) => x?.type === 'text' && String(x.text || '').trim())
+        .map((x) => String(x.text).slice(0, 300))
+        .slice(0, 6)
+    };
   }
 
   /**
@@ -2118,10 +2131,17 @@ export class Orchestrator {
       const relation = this.mind.getRelation(chatId);
       tick = this.mind.getTick();
       const unreflected = this.mind.countUnreflected(chatKey, Number(tick.lastReflectAt) || 0);
+      // 最近一条事件的时间：用来判断"刚聊过但还没记下什么"（unprocessed）
+      let lastEventAt = 0;
+      try {
+        const evs = this.mind.queryEvents({ chatKey, limit: 1 }) || [];
+        lastEventAt = Number(evs[evs.length - 1]?.ts) || 0;
+      } catch { lastEventAt = 0; }
       let candidates = collectCandidates({
         now,
         energy: Number(tick.energy) || 0,
         lastInteractionAt: Number(meta.lastTs) || 0,
+        lastEventAt,
         openLoops: relation.openLoops,
         unreflected,
         cfg: m
@@ -2213,6 +2233,9 @@ export class Orchestrator {
         execError = String(error?.message ?? error);
         console.error(`[mind] 行动 ${decision.action} 失败:`, execError);
       }
+      // 动作自己报告"没做成"（例如会话正在聊、被禁言）：不算执行成功，
+      // 也不扣体力 —— 否则她会以为自己说过话。
+      if (!execError && exec && exec.ok === false) execError = String(exec.reason || '没有做成');
 
       // 体力与计数：只要真的执行了（哪怕抛错）就记消耗 —— 她确实试过了
       if (!execError) {
@@ -2283,12 +2306,19 @@ export class Orchestrator {
       const hoursSince = lastTs > 0 ? Math.max(0, Math.round((now - lastTs) / 3600000)) : null;
       const openLoopsDue = (Array.isArray(relation.openLoops) ? relation.openLoops : [])
         .filter((l) => Number(l?.since) > 0 && now - Number(l.since) >= openLoopDueMs).length;
+      // 这条会话最近一条事件的时间：用于判断"刚聊过但还没记下什么"
+      let lastEventAt = 0;
+      try {
+        const evs = this.mind.queryEvents({ chatKey, limit: 1 }) || [];
+        lastEventAt = Number(evs[evs.length - 1]?.ts) || 0;
+      } catch { lastEventAt = 0; }
       const lastProactiveAt = Number(this.lastProactiveAt.get(chatKey)) || 0;
       const entry = {
         chatKey,
         name: String(relation.nickname || chatId),
         stage: String(relation.stage || ''),
         lastTs,
+        lastEventAt,
         hoursSince,
         unread,
         lastLine: truncateText(meta.lastText, 30),
@@ -2383,6 +2413,7 @@ export class Orchestrator {
         now,
         energy,
         lastInteractionAt: Number(r.lastTs) || 0,
+        lastEventAt: Number(r.lastEventAt) || 0,
         openLoops: r.relation?.openLoops || [],
         unreflected: this.mind.countUnreflected(r.chatKey, lastReflectAt),
         cfg: m
@@ -2521,6 +2552,8 @@ export class Orchestrator {
           error = String(e?.message ?? e);
           console.error(`[mind] 行动 ${name} 失败:`, error);
         }
+        // 动作自己报告"没做成"：不扣体力、如实回灌给她
+        if (!error && exec && exec.ok === false) error = String(exec.reason || '没有做成');
 
         if (!error) {
           tick = this.mind.getTick();

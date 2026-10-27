@@ -236,6 +236,76 @@ console.log('\n=== 2e. 记一笔 ===');
   check(mind.listActions({ limit: 3 }).some((a) => a.action === 'remember'), '行动也落了盘');
 }
 
+// ── 2f. 主动说话没做成时不扣体力 ────────────────────────────────────────
+console.log('\n=== 2f. 主动失败不扣体力 ===');
+{
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 4 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  // 会话正在聊：wake 会返回 ok:false
+  orch.wake = async () => ({ ok: false, reason: '这个会话正在聊' });
+  const replies = [
+    { tool_calls: [{ id: 'f1', function: { name: 'send_proactive', arguments: '{"chatKey":"private:111"}' } }] },
+    { tool_calls: [{ id: 'f2', function: { name: 'finish', arguments: '{}' } }] }
+  ];
+  const before = Number(mind.getTick().energy);
+  let toolPayload = '';
+  await orch.tickOnce({
+    now: now0,
+    chat: async (messages) => {
+      toolPayload = (messages || []).filter((m) => m.role === 'tool').map((m) => m.content).join('\n') || toolPayload;
+      return { message: replies.shift() };
+    }
+  });
+  check(Number(mind.getTick().energy) === before, `没做成不扣体力（${before} → ${mind.getTick().energy}）`);
+  check(toolPayload.includes('正在聊'), '把失败原因回灌给她');
+  check(mind.listActions({ limit: 2 }).some((a) => a.action === 'send_proactive' && a.energySpent === 0), '行动记录里体力消耗为 0');
+}
+
+// ── 2g. 刚聊过但没记 → unprocessed 候选 ─────────────────────────────────
+console.log('\n=== 2g. 聊过还没记 ===');
+{
+  const { orch } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 30 * 60000 },   // 半小时前聊过
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  let userPrompt = '';
+  await orch.tickOnce({
+    now: now0,
+    chat: async (messages) => {
+      userPrompt = messages?.[1]?.content || '';
+      return { message: { content: '算了' } };
+    }
+  });
+  check(userPrompt.includes('还没记下什么'), '出现了"还没记下什么"的候选');
+  check(userPrompt.includes('王哥'), '并且指明了是谁');
+}
+
+// ── 2h. 先 recall 再 remember ───────────────────────────────────────────
+console.log('\n=== 2h. recall → remember ===');
+{
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 4 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  const replies = [
+    { tool_calls: [{ id: 'h1', function: { name: 'recall', arguments: '{"reason":"先翻翻旧事"}' } }] },
+    { tool_calls: [{ id: 'h2', function: { name: 'remember', arguments: '{"text":"翻旧事之后记下的一句话","chatKey":"private:111"}' } }] },
+    { tool_calls: [{ id: 'h3', function: { name: 'finish', arguments: '{}' } }] }
+  ];
+  const r = await orch.tickOnce({ now: now0, chat: async () => ({ message: replies.shift() }) });
+  const events = mind.queryEvents({ chatKey: 'private:111', limit: 5 }) || [];
+  check(r.results.map((x) => x.action).join(',') === 'recall,remember', `顺序为 recall → remember（${r.results.map((x) => x.action).join(',')}）`);
+  check(events.some((e) => String(e.text || '').includes('翻旧事之后')), 'remember 在 recall 之后仍能写入');
+}
+
 // ── 3. 同一次唤醒不会重复决策 ───────────────────────────────────────────
 console.log('\n=== 3. 节拍 ===');
 {

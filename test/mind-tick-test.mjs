@@ -69,8 +69,12 @@ console.log('\n=== 3. 廉价预判（决定要不要调模型）===');
 {
   const cfg = { reflectAfterEvents: 8, tick: { proactiveIdleMs: 6 * H, openLoopDueMs: 24 * H }, energy: { floor: 10 } };
 
-  const none = collectCandidates({ now: now0, energy: 80, lastInteractionAt: now0 - 1 * H, openLoops: [], unreflected: 0, cfg });
-  check(none.length === 0, '刚聊过、没挂心的事、没攒事件 → 没有候选');
+  const none = collectCandidates({ now: now0, energy: 80, lastInteractionAt: now0 - 1 * H, lastEventAt: now0 - 30 * 60000, openLoops: [], unreflected: 0, cfg });
+  check(none.length === 0, '刚聊过、且已经记过 → 没有候选');
+
+  // 刚聊过但还没记：这是刻意存在的候选（"要不要记一笔"的分叉）
+  const unprocessed = collectCandidates({ now: now0, energy: 80, lastInteractionAt: now0 - 1 * H, lastEventAt: 0, openLoops: [], unreflected: 0, cfg });
+  check(unprocessed.some((c) => c.id === 'unprocessed'), '刚聊过但没记 → 出现 unprocessed 候选');
 
   const miss = collectCandidates({ now: now0, energy: 80, lastInteractionAt: now0 - 7 * H, openLoops: [], unreflected: 0, cfg });
   check(miss.some((c) => c.id === 'miss_you'), '久未联系 → 想她了');
@@ -194,8 +198,10 @@ console.log('\n=== 7. 一轮心跳 ===');
   }
 
   // 7b. 没有候选 → 不调模型
+  //（"刚聊过但没记"本身是候选，所以这里先记一条事件，模拟已经记过）
   {
-    const { orch } = mkOrch({ lastTs: now0 - 1 * H });
+    const { orch, mind } = mkOrch({ lastTs: now0 - 1 * H });
+    mind.appendEvent({ chatKey: 'private:456', text: '刚聊过的事，已经记下了', ts: now0 - 30 * 60000 });
     let called = false;
     const r = await orch.tickOnce({ now: now0, chat: async () => { called = true; return { message: { content: '{}' } }; } });
     check(!called, '没有候选时不调模型（0 token）');

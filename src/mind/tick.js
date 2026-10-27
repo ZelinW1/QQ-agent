@@ -76,6 +76,7 @@ export function collectCandidates({
   now = Date.now(),
   energy = 0,
   lastInteractionAt = 0,
+  lastEventAt = 0,
   openLoops = [],
   unreflected = 0,
   cfg = {}
@@ -111,6 +112,19 @@ export function collectCandidates({
   const need = Math.max(1, Number(cfg.reflectAfterEvents) || 8);
   if (unreflected >= need) {
     out.push({ id: 'reflect_pending', text: `攒了 ${unreflected} 件没整理的事` });
+  }
+
+  // 4) 刚聊过、但还没有任何事件：这是一个"要不要记下"的分叉点。
+  //    没有它的话，"记一笔"只能等到几小时后因为别的原因醒来才可能出现，
+  //    到那时对话细节早就只剩最后一句了。
+  const rememberWindowMs = Math.max(600000, Number(tickCfg.rememberWindowMs) || 12 * 3600000);
+  if (lastInteractionAt > 0) {
+    const sinceChat = now - lastInteractionAt;
+    const stillFresh = sinceChat <= rememberWindowMs;
+    const nothingRecorded = !(Number(lastEventAt) >= Number(lastInteractionAt));
+    if (stillFresh && nothingRecorded && sinceChat >= 120000) {
+      out.push({ id: 'unprocessed', text: '刚才聊了几句，还没记下什么' });
+    }
   }
 
   // 体力低于下限：什么都不想，直接歇着。

@@ -71,7 +71,7 @@ export const ACTIONS = [
   {
     id: 'remember',
     label: '记一笔',
-    description: '把刚才那次对话里值得留的，写进自己的记忆',
+    description: '把刚才聊到的、值得留下的写进记忆；拿不准可以先回想一下再写',
     energy: 5,
     async run(ctx, args) {
       return ctx.remember(args || {});
