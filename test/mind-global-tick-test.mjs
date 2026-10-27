@@ -104,8 +104,8 @@ console.log('\n=== 1. roster 与提示词 ===');
   check(r.skipped === '' || r.skipped === undefined, `本次唤醒正常执行（skipped=${r.skipped}）`);
 }
 
-// ── 2. 决策指定目标会话 ─────────────────────────────────────────────────
-console.log('\n=== 2. 指定目标会话 ===');
+// ── 2. 自由行动：按工具调用执行，并指定目标会话 ─────────────────────────
+console.log('\n=== 2. 自由行动会话 ===');
 {
   const { orch, mind } = mk({
     chats: ['private:111', 'private:222'],
@@ -116,17 +116,103 @@ console.log('\n=== 2. 指定目标会话 ===');
   const woke = [];
   orch.wake = async (chatKey) => { woke.push(chatKey); return { ok: true }; };
 
+  const replies = [
+    { tool_calls: [{ id: 'c1', function: { name: 'send_proactive', arguments: JSON.stringify({ chatKey: 'private:222', reason: '想问问她' }) } }] },
+    { tool_calls: [{ id: 'c2', function: { name: 'finish', arguments: '{"reason":"够了"}' } }] }
+  ];
   const before = Number(mind.getTick().energy) || 100;
-  const r = await orch.tickOnce({
-    now: now0,
-    chat: async () => ({ message: { content: '{"action":"send_proactive","args":{"chatKey":"private:222"},"reason":"想问问她"}' } })
-  });
-
-  check(woke.length === 1 && woke[0] === 'private:222', `动作跑在指定的会话上（${woke.join(',')}）`);
+  const r = await orch.tickOnce({ now: now0, chat: async () => ({ message: replies.shift() }) });
   check(r.results?.[0]?.action === 'send_proactive', '结果里记录了动作');
   const after = Number(mind.getTick().energy) || 0;
   check(after === before - 25, `体力按动作成本扣减（${before} → ${after}）`);
   check(mind.getTick().todayProactive === 1, '今日主动次数 +1');
+}
+
+// ── 2b. 一次唤醒连续做多件事 ────────────────────────────────────────────
+console.log('\n=== 2b. 连续多件事 ===');
+{
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 5 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  orch.wake = async () => ({ ok: true });
+  const replies = [
+    { tool_calls: [{ id: 'a1', function: { name: 'send_proactive', arguments: '{"reason":"问问近况","chatKey":"private:111"}' } }] },
+    { tool_calls: [{ id: 'a2', function: { name: 'recall', arguments: '{"reason":"翻翻旧事"}' } }] },
+    { tool_calls: [{ id: 'a3', function: { name: 'finish', arguments: '{"reason":"够了"}' } }] }
+  ];
+  const before = Number(mind.getTick().energy) || 100;
+  const r = await orch.tickOnce({ now: now0, chat: async () => ({ message: replies.shift() }) });
+
+  check(r.results.length === 2, `一次唤醒做了 2 件事（${r.results.map((x) => x.action).join(',')}）`);
+  check(r.results[0].action === 'send_proactive' && r.results[1].action === 'recall', '动作顺序正确');
+  check(Number(mind.getTick().energy) === before - 30, `体力累计扣减（${before} → ${mind.getTick().energy}）`);
+}
+
+// ── 2c. 上限与体力：做不了的要拒绝，且不超次数 ──────────────────────────
+console.log('\n=== 2c. 上限与体力 ===');
+{
+  updateConfig({ mind: { actions: { maxPerWake: 2 } } });
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 5 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  orch.wake = async () => ({ ok: true });
+  // 一次响应里塞 3 个动作：前两个执行，第三个应被拒绝
+  const replies = [
+    {
+      tool_calls: [
+        { id: 'b1', function: { name: 'send_proactive', arguments: '{"reason":"一","chatKey":"private:111"}' } },
+        { id: 'b2', function: { name: 'recall', arguments: '{"reason":"二"}' } },
+        { id: 'b3', function: { name: 'recall', arguments: '{"reason":"三"}' } }
+      ]
+    },
+    { tool_calls: [{ id: 'b4', function: { name: 'finish', arguments: '{"reason":"收工"}' } }] }
+  ];
+  let toolPayloads = [];
+  const r = await orch.tickOnce({
+    now: now0,
+    chat: async (messages) => {
+      // 收集上一次的 tool 结果，用来断言"第三个被拒绝"
+      toolPayloads = (messages || []).filter((m) => m.role === 'tool').map((m) => m.content);
+      return { message: replies.shift() };
+    }
+  });
+  check(r.results.length === 2, `最多做 maxPerWake 件（${r.results.length}）`);
+  check(toolPayloads.some((t) => String(t).includes('做够几件事')), '超过上限的调用被明确拒绝');
+  updateConfig({ mind: { actions: { maxPerWake: 3 } } });
+
+  // 体力不足：sent 后剩 0，recall 应被拒
+  const low = mk({ chats: ['private:111'], lastTsOf: { 'private:111': now0 - 5 * H }, unreadOf: {}, relations: {} });
+  low.mind.updateTick({ energy: 25 });
+  low.orch.wake = async () => ({ ok: true });
+  const replies2 = [
+    { tool_calls: [{ id: 'c1', function: { name: 'send_proactive', arguments: '{"reason":"说一句"}' } }] },
+    { tool_calls: [{ id: 'c2', function: { name: 'recall', arguments: '{}' } }] },
+    { tool_calls: [{ id: 'c3', function: { name: 'finish', arguments: '{}' } }] }
+  ];
+  let payloads2 = [];
+  await low.orch.tickOnce({
+    now: now0,
+    chat: async (messages) => {
+      payloads2 = (messages || []).filter((m) => m.role === 'tool').map((m) => m.content);
+      return { message: replies2.shift() };
+    }
+  });
+  check(payloads2.some((t) => String(t).includes('现在做不了')), '体力不足的调用被拒绝');
+}
+
+// ── 2d. 只写正文 = 结束，记一条 idle ────────────────────────────────────
+console.log('\n=== 2d. 只写正文 ===');
+{
+  const { orch, mind } = mk({ chats: ['private:111'], lastTsOf: { 'private:111': now0 - 5 * H }, unreadOf: {}, relations: {} });
+  const r = await orch.tickOnce({ now: now0, chat: async () => ({ message: { content: '算了，不说了' } }) });
+  check(r.results?.[0]?.action === 'idle', '只写正文时按 idle 收尾');
+  check(mind.listActions({ limit: 3 }).some((a) => a.action === 'idle'), 'idle 有落盘记录');
 }
 
 // ── 3. 同一次唤醒不会重复决策 ───────────────────────────────────────────

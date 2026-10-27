@@ -66,16 +66,19 @@ if (crossesMidnight && d.getHours() < end.h) d.setDate(d.getDate() - 1);
 
 ---
 
-## P2 · 自由行动工具循环
+## P2 · 自由行动工具循环 —— ✅ 已实现（随 mode='global' 生效）
 
-- `#runFreeTime()`：一次上下文里连续做 ≤N 个动作
-  - system 稳定（可缓存）；user = roster + 自身状态 + 菜单
-  - 每个可用行动注册为独立工具（参数 schema 明确）+ `finish`
-  - 每步执行后把 `{ok, summary, deltas}` 回灌，由她决定继续或结束
-  - 上限 `maxActionsPerWake`（默认 3）、体力下限、单行动失败默认允许继续
-  - 没有 tool_calls → 视作 finish（可复用聊天那套"一次纠正"）
-- 收尾：每次行动写 `actions.jsonl`（summary + deltas），供下次唤醒当"上次行动"
-- 测试：连续 2~3 个动作、超限即停、体力不足即停、失败后继续、finish 正常结束
+- 一次上下文里连续做 ≤ `mind.actions.maxPerWake`（默认 3）件事
+- system 复用 `buildDecisionSystem`（与单会话版逐字相同，共享缓存前缀）
+- 每个动作注册成独立工具（参数含 `reason`；`send_proactive` 额外含 `chatKey`）+ `finish`
+- 每步执行后把结果作为 tool 消息回灌；`idle` 不进工具表（结束就是 `finish`）
+- 到达上限后不立刻 break：超出的调用被明确拒绝（"做够几件事了"），让她自己收尾；
+  step 上限 `maxActions+2` 兜底
+- 体力按当前值判定：不足的调用返回"现在做不了：体力不够"，可继续做别的事
+- 只写正文 = 结束；一条都没做 → 记 idle（带她写的理由），并给候选打盹
+- 测试：`mind-global-tick-test` 扩到 24 项（连续两件事 / 上限 / 体力不足 / 只写正文）
+
+**仍未做**：默认值仍是 `per-chat` —— 等 P3（动作注册表）一起翻。
 
 ---
 

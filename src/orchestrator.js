@@ -25,6 +25,7 @@ import {
   parseDecision,
   nextTickAt,
   getAction,
+  actionBlocked,
   availableActions,
   resolveSleepWindow,
   classifySleep,
@@ -2426,7 +2427,8 @@ export class Orchestrator {
       return { results, skipped: '' };
     }
 
-    // ⑤ 一次决策
+    // ⑤ 自由行动会话（工具循环）
+    // 一次上下文里连续做 ≤maxActions 件事：每个结果回灌，她自己决定继续还是收手。
     const messages = buildGlobalDecisionPrompt({
       botName: cfg.persona?.botName,
       state,
@@ -2437,13 +2439,133 @@ export class Orchestrator {
       restCount: roster.restCount,
       lastAction: this.#lastActionText()
     });
-    const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
-    const decision = parseDecision(String(res?.message?.content ?? ''), actions.map((a) => a.id));
+    const maxActions = Math.max(1, Math.min(6, Number(m.actions?.maxPerWake) || 3));
+    const tools = this.#freeActionTools(actions);
+    const convo = messages.slice();
+    const executed = [];
+    let idleReason = '';
+    let sessionUsage = null;
+    const callModel = typeof chat === 'function'
+      ? (msgs, tls) => chat(msgs, tls)
+      : (msgs, tls) => chatCompletion({ messages: msgs, tools: tls, toolChoice: 'auto', temperature: 0.2 });
 
+    for (let step = 0; step < maxActions + 2; step++) {
+      const res = await callModel(convo, tools);
+      sessionUsage = res?.usage || sessionUsage;
+      const msg = res?.message || {};
+      const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+      const content = typeof msg.content === 'string' ? msg.content.trim() : '';
+
+      // 没有工具调用 = 结束（只写正文时也照这里收尾）
+      if (!calls.length) {
+        idleReason = content || (executed.length ? '' : '没有调用任何动作');
+        break;
+      }
+
+      convo.push({
+        role: 'assistant',
+        content: msg.content ?? null,
+        tool_calls: calls.map((c) => ({
+          id: c.id,
+          type: 'function',
+          function: { name: c.function?.name, arguments: c.function?.arguments ?? '{}' }
+        }))
+      });
+
+      const finishCall = calls.find((c) => c.function?.name === 'finish');
+      for (const call of calls) {
+        const name = String(call.function?.name || '');
+        const callId = call.id;
+        if (name === 'finish') continue;
+
+        if (executed.length >= maxActions) {
+          convo.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ ok: false, error: '这次自由时间已经做够几件事了，先到这里' }) });
+          continue;
+        }
+        const action = actions.find((a) => a.id === name);
+        if (!action) {
+          convo.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ ok: false, error: `没有这个动作：${name}` }) });
+          continue;
+        }
+        // 体力以当前值为准（前一个动作可能刚花掉）
+        const blocked = actionBlocked(action, state);
+        if (blocked) {
+          convo.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ ok: false, error: `现在做不了：${blocked}` }) });
+          continue;
+        }
+
+        let args = {};
+        try { args = JSON.parse(String(call.function?.arguments || '{}')) || {}; } catch { args = {}; }
+        const target = this.#pickTargetChat({ args }, candidates, roster.top);
+        let exec = null;
+        let error = '';
+        try {
+          exec = await this.#runMindAction(action, target, { args }, { now });
+        } catch (e) {
+          error = String(e?.message ?? e);
+          console.error(`[mind] 行动 ${name} 失败:`, error);
+        }
+
+        if (!error) {
+          tick = this.mind.getTick();
+          const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(action.energy) || 0)) };
+          if (name === 'send_proactive') {
+            patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
+            if (target) this.lastProactiveAt.set(target, now);
+          }
+          const snoozeFor = Math.max(0, Number(action.snoozeMs) || 0);
+          const nextSnoozes = {};
+          for (const [k, v] of Object.entries(snoozes)) {
+            if (Number(v) > now) nextSnoozes[k] = v;
+          }
+          if (snoozeFor > 0) {
+            for (const c of candidates) {
+              if (c.chatKey === target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
+            }
+          }
+          patch.snoozes = nextSnoozes;
+          this.mind.updateTick(patch);
+          state.energy = patch.energy;
+        }
+
+        this.mind.appendAction({
+          chatKey: target,
+          at: now,
+          action: name,
+          reason: String(args.reason || '').slice(0, 120),
+          candidates: candidates.map((c) => c.id),
+          energySpent: error ? 0 : (Number(action.energy) || 0),
+          result: exec,
+          error: error || undefined,
+          usage: res?.usage || null
+        });
+        executed.push({ chatKey: target, action: name });
+        convo.push({
+          role: 'tool',
+          tool_call_id: callId,
+          content: JSON.stringify(error
+            ? { ok: false, error }
+            : { ok: true, result: exec ?? null }).slice(0, 1500)
+        });
+      }
+
+      if (finishCall) {
+        try {
+          const fa = JSON.parse(String(finishCall.function?.arguments || '{}')) || {};
+          idleReason = String(fa.reason || idleReason || '').slice(0, 120);
+        } catch { /* 忽略 */ }
+        convo.push({ role: 'tool', tool_call_id: finishCall.id, content: JSON.stringify({ ok: true }) });
+        break;
+      }
+      // 到达上限后不再 break：让模型知道"做够了"并自己收尾。
+      // 多出的轮次由 step 上限兜底（maxActions + 2），不会失控。
+    }
+
+    // 记账：无论做了几件事，这次唤醒都算一次决策
     tick = this.mind.getTick();
     this.mind.updateTick({ todayDecisions: (Number(tick.todayDecisions) || 0) + 1 });
 
-    if (!decision || decision.action === 'idle') {
+    if (!executed.length) {
       const snoozeMs = Math.max(60000, Number(tickCfg.idleSnoozeMs) || 3600000);
       const nextSnoozes = { ...snoozes };
       for (const c of candidates) {
@@ -2456,57 +2578,52 @@ export class Orchestrator {
       this.mind.updateTick({ snoozes: nextSnoozes });
       this.mind.appendAction({
         chatKey: '', at: now, action: 'idle',
-        reason: decision ? (decision.reason || '想不出要做什么') : '输出无法解析，按不行动处理',
+        reason: idleReason || '想不出要做什么',
         candidates: candidates.map((c) => c.id),
-        usage: res?.usage || null
+        usage: sessionUsage
       });
-      results.push({ chatKey: '', action: 'idle', reason: decision ? 'chose-idle' : 'unparsable' });
+      results.push({ chatKey: '', action: 'idle', reason: 'chose-idle' });
       return { results, skipped: '' };
     }
 
-    // ⑥ 执行（目标会话由决策指定，或挑候选里最该找的那个）
-    const action = getAction(decision.action);
-    const target = this.#pickTargetChat(decision, candidates, roster.top);
-    let exec = null;
-    let execError = '';
-    try {
-      exec = await this.#runMindAction(action, target, decision, { now });
-    } catch (error) {
-      execError = String(error?.message ?? error);
-      console.error(`[mind] 行动 ${decision.action} 失败:`, execError);
-    }
+    for (const item of executed) results.push({ chatKey: item.chatKey, action: item.action, reason: '' });
+    return { results, skipped: '' };
+  }
 
-    if (!execError) {
-      tick = this.mind.getTick();
-      const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(action.energy) || 0)) };
-      if (decision.action === 'send_proactive') {
-        patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
-        if (target) this.lastProactiveAt.set(target, now);
-      }
-      const snoozeFor = Math.max(0, Number(action.snoozeMs) || 0);
-      const nextSnoozes = {};
-      for (const [k, v] of Object.entries(snoozes)) {
-        if (Number(v) > now) nextSnoozes[k] = v;
-      }
-      if (snoozeFor > 0) {
-        for (const c of candidates) {
-          if (c.chatKey === target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
+  /** 自由行动会话的工具表：每个动作一个函数 + finish。 */
+  #freeActionTools(actions = []) {
+    // idle 不进工具表：自由时间里"什么都不做"就是 finish，
+    // 让她调用一个叫 idle 的工具只会白占一次行动次数。
+    const tools = actions.filter((a) => a.id !== 'idle').map((a) => ({
+      type: 'function',
+      function: {
+        name: a.id,
+        description: `${a.label}${a.description ? `：${a.description}` : ''}（消耗 ${Number(a.energy) || 0} 体力）`,
+        parameters: {
+          type: 'object',
+          properties: {
+            reason: { type: 'string', description: '一句给自己看的理由' },
+            ...(a.id === 'send_proactive'
+              ? { chatKey: { type: 'string', description: '找谁：用上面列出的 chatKey，不填则由系统挑最该找的人' } }
+              : {})
+          },
+          additionalProperties: true
         }
       }
-      patch.snoozes = nextSnoozes;
-      this.mind.updateTick(patch);
-    }
-
-    this.mind.appendAction({
-      chatKey: target, at: now, action: decision.action, reason: decision.reason,
-      candidates: candidates.map((c) => c.id),
-      energySpent: execError ? 0 : (Number(action.energy) || 0),
-      result: exec,
-      error: execError || undefined,
-      usage: res?.usage || null
+    }));
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'finish',
+        description: '结束这次自由时间（做完了，或者不想做）',
+        parameters: {
+          type: 'object',
+          properties: { reason: { type: 'string', description: '一句收尾的话' } },
+          additionalProperties: true
+        }
+      }
     });
-    results.push({ chatKey: target, action: decision.action, reason: decision.reason, error: execError || undefined });
-    return { results, skipped: '' };
+    return tools;
   }
 
   /** 执行一个动作。ctx 里只给能力，不给她直接碰编排器内部。 */

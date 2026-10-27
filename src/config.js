@@ -424,6 +424,15 @@ export const DEFAULT_CONFIG = {
       maxReflectPerDay: 8,          // 熔断：每日反思次数
       suppressAfterProactiveMs: 600000  // 主动发言后 10 分钟内不再行动
     },
+    // —— 自由行动菜单 ——
+    actions: {
+      // 一次唤醒最多做几件事（工具循环里连续调用，每步结果回灌）
+      maxPerWake: 3,
+      // 菜单里最多附带几条"现在做不了 + 原因"
+      showBlocked: 2,
+      // 扩展行动按工具 id 覆盖：{ enabled, label, energy }
+      overrides: {}
+    },
     // —— 能量（她的"体力"；既是限流阀也是拟人状态）——
     energy: {
       max: 100,
