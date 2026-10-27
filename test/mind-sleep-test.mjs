@@ -67,6 +67,39 @@ console.log('\n=== 1. 入睡窗口 ===');
   check(describeWindow(w1).includes('–'), `可读时间段（${describeWindow(w1)}）`);
 }
 
+// ── 1b. 同一天的窗口（回归：曾经被算到昨天，导致永不入睡）─────────────
+console.log('\n=== 1b. 同一天窗口 ===');
+{
+  // 00:30 → 07:30：开始和结束都在同一天，不属于"跨午夜"
+  const sameDay = { enabled: true, startHour: 0, startMinute: 30, endHour: 7, endMinute: 30, jitterMin: 40 };
+  const w = resolveSleepWindow(at(day, 1, 37), sameDay);
+  check(!w.invalid, '同日窗口不算无效');
+  check(new Date(w.startAt).getDate() === new Date(day).getDate(), '窗口落在今天（不是昨天）');
+
+  const d1 = classifySleep({ now: at(day, 1, 37), window: w, state: {}, quietForMs: Infinity, cfg: sameDay });
+  check(d1.inWindow === true, '凌晨 01:37 在窗口内');
+  check(d1.asleep === true, '凌晨 01:37 应睡着（修复前恒为「已经醒了」）');
+
+  const d2 = classifySleep({ now: at(day, 9, 0), window: w, state: {}, quietForMs: Infinity, cfg: sameDay });
+  check(d2.asleep === false && d2.reason === '已经醒了', '09:00 应已醒');
+
+  const d3 = classifySleep({ now: at(day, 0, 0), window: w, state: {}, quietForMs: Infinity, cfg: sameDay });
+  check(d3.asleep === false && d3.inWindow === false, '00:00（窗口开始前）不算睡着');
+
+  // 跨午夜的行为必须保持原样
+  const cross = { enabled: true, startHour: 23, startMinute: 30, endHour: 8, endMinute: 0, jitterMin: 40 };
+  const wc = resolveSleepWindow(at(day, 1, 0), cross);
+  const dc = classifySleep({ now: at(day, 1, 0), window: wc, state: {}, quietForMs: Infinity, cfg: cross });
+  check(dc.inWindow === true && dc.asleep === true, '跨午夜窗口在凌晨仍然睡着（回归）');
+
+  // 开始与结束相同 = 无效配置，明确报告而不是"碰运气"
+  const bad = { enabled: true, startHour: 8, startMinute: 0, endHour: 8, endMinute: 0, jitterMin: 0 };
+  const wb = resolveSleepWindow(at(day, 9, 0), bad);
+  const db = classifySleep({ now: at(day, 9, 0), window: wb, state: {}, quietForMs: Infinity, cfg: bad });
+  check(wb.invalid === true, '开始=结束 标记为无效');
+  check(db.asleep === false && db.reason.includes('无效'), `无效配置要说明原因（${db.reason}）`);
+}
+
 // ── 2. 状态判定 ─────────────────────────────────────────────────────────
 console.log('\n=== 2. 该不该睡 ===');
 {

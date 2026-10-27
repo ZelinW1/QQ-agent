@@ -58,9 +58,18 @@ export function resolveSleepWindow(now = Date.now(), cfg = {}) {
   const end = parseHHMM(cfg.endHour, cfg.endMinute, 8, 0);
   const jitterMin = Math.min(180, Math.max(0, Number(cfg.jitterMin) || 0));
 
+  // 开始与结束相同 = 无效配置（既不是跨午夜也不是同日窗口）。
+  // 早先会被当成"整整 24 小时"，结果是永远睡着/永远醒着，看哪边先命中。
+  const same = start.h === end.h && start.m === end.m;
+
+  // 只有"开始晚于结束"才是跨午夜（23:30 → 08:00）。
+  // 早先这里无条件判断 `now.getHours() < end.h` 就往前挪一天 ——
+  // 对同一天的窗口（如 00:30 → 07:30）会把整段算到昨天，
+  // 于是凌晨永远判定为"已经醒了"，作息看着正常却从不生效。
+  const crossesMidnight = (start.h * 60 + start.m) > (end.h * 60 + end.m);
+
   const d = new Date(now);
-  // 凌晨属于前一晚：以"结束时刻"为界
-  if (d.getHours() < end.h) d.setDate(d.getDate() - 1);
+  if (crossesMidnight && d.getHours() < end.h) d.setDate(d.getDate() - 1);
   const nightKey = dayKeyOf(d);
 
   const startBase = new Date(d.getFullYear(), d.getMonth(), d.getDate(), start.h, start.m, 0, 0).getTime();
@@ -76,7 +85,9 @@ export function resolveSleepWindow(now = Date.now(), cfg = {}) {
     startAt: startBase + startJitter,
     endAt: endBase + endJitter,
     startAtBase: startBase,
-    endAtBase: endBase
+    endAtBase: endBase,
+    // 无效窗口：调用方据此直接判"醒着"，不要靠 startAt/endAt 碰运气
+    invalid: same || undefined
   };
 }
 
@@ -110,6 +121,11 @@ export function classifySleep({
 
   if (!enabled) {
     return { asleep: false, inWindow: false, startAt: 0, endAt: 0, effectiveSleepAt: 0, nightKey: w.nightKey, reason: '未启用' };
+  }
+
+  // 开始与结束相同：没有可用的睡眠时段。明确说出来，不要假装"还没到点"。
+  if (w.invalid) {
+    return { asleep: false, inWindow: false, startAt: w.startAt, endAt: w.endAt, effectiveSleepAt: 0, nightKey: w.nightKey, reason: '作息时间段无效（开始与结束相同）' };
   }
 
   // 换夜了：她的"再撑一会"次数不该带到下一晚
