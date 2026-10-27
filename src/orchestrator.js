@@ -19,6 +19,9 @@ import {
   resetDaily,
   collectCandidates,
   buildDecisionPrompt,
+  buildGlobalDecisionPrompt,
+  scoreRosterEntry,
+  truncateText,
   parseDecision,
   nextTickAt,
   getAction,
@@ -94,6 +97,9 @@ export class Orchestrator {
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
     this.tickBootTimer = null;         // 启动后的一次性心跳
     this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
+    // 全局唤醒（mind.tick.mode='global'）的节拍：一次唤醒只排一次，
+    // 不再按会话各排一次 —— 否则同一时段会连着做多次决策。
+    this.globalNextWakeAt = 0;
     // 最近心跳（含"跳过"的那些）：只在内存里留 40 条，不写盘。
     // 写盘只记真正发生了的事（actions.jsonl），否则每 60 秒一条跳过日志会越积越多。
     this.recentTicks = [];
@@ -2057,6 +2063,12 @@ export class Orchestrator {
     const tickCfg = m.tick || {};
     if (tickCfg.enabled === false) return { results: [], skipped: 'tick-disabled' };
 
+    // 全局唤醒：一次 roster、一张菜单、一次模型调用。
+    // 旧路径保留（mode='per-chat'），便于出问题时一键回滚。
+    if (String(tickCfg.mode || 'per-chat') === 'global') {
+      return this.#runGlobalTick({ now, chat });
+    }
+
     // ⓪ 作息：睡着就不做决策（也不扫会话）。醒来由这里的状态机负责。
     const sleep = this.#refreshSleep(now);
     if (sleep.asleep) {
@@ -2238,6 +2250,263 @@ export class Orchestrator {
     }
 
     return { results, tick: this.mind.getTick() };
+  }
+
+  // ── 全局唤醒（mind.tick.mode = 'global'）─────────────────────────────
+  //
+  // 与旧的 per-chat 模式的区别只有两点：
+  //   1) 一次唤醒只调一次模型（而不是每个会话各调一次）
+  //   2) 她拿到的素材是一份 roster（几个人），因此可以跨会话做选择
+  // 睡眠、体力结算、预算与动作执行都沿用同一套规则。
+
+  #buildRoster(now = Date.now()) {
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+    const tickCfg = m.tick || {};
+    const idleLookbackMs = Math.max(0, Number(tickCfg.idleLookbackMin) || 2) * 60000;
+    const suppressMs = Math.max(0, Number(tickCfg.suppressAfterProactiveMs) || 600000);
+    const openLoopDueMs = Math.max(3600000, Number(tickCfg.openLoopDueMs) || 24 * 3600000);
+    const chats = (this.store?.listChats?.() || []).filter((k) => String(k).startsWith('private:'));
+
+    const all = [];
+    for (const chatKey of chats) {
+      const meta = this.store?.getChatMeta?.(chatKey) || {};
+      const chatId = String(chatKey).split(':')[1] || '';
+      const relation = this.mind.getRelation(chatId) || {};
+      const lastTs = Number(meta.lastTs) || 0;
+      const unread = Number(meta.unread) || 0;
+      const hoursSince = lastTs > 0 ? Math.max(0, Math.round((now - lastTs) / 3600000)) : null;
+      const openLoopsDue = (Array.isArray(relation.openLoops) ? relation.openLoops : [])
+        .filter((l) => Number(l?.since) > 0 && now - Number(l.since) >= openLoopDueMs).length;
+      const lastProactiveAt = Number(this.lastProactiveAt.get(chatKey)) || 0;
+      const entry = {
+        chatKey,
+        name: String(relation.nickname || chatId),
+        stage: String(relation.stage || ''),
+        lastTs,
+        hoursSince,
+        unread,
+        lastLine: truncateText(meta.lastText, 30),
+        lastSelf: meta.lastSelf === true,
+        relation,
+        openLoopsDue,
+        running: this.runningChats?.has?.(chatKey) === true,
+        recent: lastTs > 0 && now - lastTs < idleLookbackMs,
+        suppressed: lastProactiveAt > 0 && now - lastProactiveAt < suppressMs,
+        score: 0
+      };
+      entry.score = scoreRosterEntry({
+        unread,
+        openLoopsDue,
+        hoursSince: hoursSince ?? 0,
+        warmth: Number(relation.warmth) || 0
+      });
+      all.push(entry);
+    }
+    all.sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
+    const top = all.slice(0, 3);
+    return { top, restCount: Math.max(0, all.length - top.length), all };
+  }
+
+  /** 决策指定了目标会话就用它，否则挑候选里最该找的那个人。 */
+  #pickTargetChat(decision = {}, candidates = [], roster = []) {
+    const wanted = String(decision?.args?.chatKey || '').trim();
+    const valid = new Set(roster.map((r) => r.chatKey).filter(Boolean));
+    if (wanted && valid.has(wanted)) return wanted;
+    const fromCandidate = candidates.find((c) => c.chatKey)?.chatKey;
+    if (fromCandidate) return fromCandidate;
+    const eligible = roster.find((r) => !r.running && !r.recent && !r.suppressed);
+    return eligible?.chatKey || roster[0]?.chatKey || '';
+  }
+
+  /** 上次行动留成一句话，供决策提示词当"旧事"。 */
+  #lastActionText() {
+    try {
+      const list = this.mind.listActions({ limit: 2 }) || [];
+      const a = list[list.length - 1];
+      if (!a?.at) return '';
+      const hours = Math.max(0, Math.round((Date.now() - Number(a.at)) / 3600000));
+      const when = hours <= 0 ? '刚才' : `${hours} 小时前`;
+      const what = a.action === 'idle' ? '你选择什么都不做' : `你做了「${a.action}」`;
+      return `${when}：${what}${a.reason ? `（${String(a.reason).slice(0, 40)}）` : ''}`;
+    } catch { return ''; }
+  }
+
+  async #runGlobalTick({ now = Date.now(), chat = null } = {}) {
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+    const tickCfg = m.tick || {};
+
+    // ⓪ 作息
+    const sleep = this.#refreshSleep(now);
+    if (sleep.asleep) {
+      return { results: [{ chatKey: '', action: 'sleep', reason: sleep.reason }], skipped: 'asleep' };
+    }
+
+    // ① 结算
+    let tick = settleEnergy(this.mind.getTick(), now, m.energy || {});
+    tick = resetDaily(tick, todayKey(now));
+    this.mind.updateTick(tick);
+
+    // ② 全局唤醒自身的节拍（不再按会话各排一次）
+    if (this.globalNextWakeAt && now < this.globalNextWakeAt) {
+      return { results: [], skipped: 'not-due' };
+    }
+    this.globalNextWakeAt = nextTickAt(now, tickCfg.intervalMs, tickCfg.jitter);
+
+    const results = [];
+    const roster = this.#buildRoster(now);
+    if (!roster.top.length) {
+      results.push({ chatKey: '', action: 'idle', reason: 'no-chat' });
+      return { results, skipped: '' };
+    }
+
+    const energy = Number(this.mind.getTick().energy) || 0;
+    const floor = Number(m.energy?.floor) || 10;
+    if (energy < floor) {
+      results.push({ chatKey: '', action: 'idle', reason: 'tired' });
+      return { results, skipped: '' };
+    }
+
+    // ③ 候选：把每个人的候选汇总成一份
+    const snoozes = (tick.snoozes && typeof tick.snoozes === 'object') ? { ...tick.snoozes } : {};
+    const lastReflectAt = Number(tick.lastReflectAt) || 0;
+    let candidates = [];
+    for (const r of roster.top) {
+      if (r.running || r.recent || r.suppressed) continue;
+      const cs = collectCandidates({
+        now,
+        energy,
+        lastInteractionAt: Number(r.lastTs) || 0,
+        openLoops: r.relation?.openLoops || [],
+        unreflected: this.mind.countUnreflected(r.chatKey, lastReflectAt),
+        cfg: m
+      });
+      for (const c of cs) {
+        if (Number(snoozes[`${r.chatKey}|${c.id}`]) > now) continue;
+        candidates.push({ ...c, chatKey: r.chatKey, name: r.name });
+      }
+    }
+    if (sleep.inWindow && !sleep.asleep) {
+      candidates.push({ id: 'bedtime', text: '夜深了，该睡了，还是再待一会儿？', chatKey: '', name: '' });
+    }
+    if (!candidates.length) {
+      results.push({ chatKey: '', action: 'idle', reason: 'no-candidate' });
+      return { results, skipped: '' };
+    }
+
+    // ④ 预算
+    const maxDecisions = Math.max(1, Number(tickCfg.maxDecisionsPerDay) || 24);
+    if ((Number(tick.todayDecisions) || 0) >= maxDecisions) {
+      results.push({ chatKey: '', action: 'idle', reason: 'decision-cap' });
+      return { results, skipped: '' };
+    }
+
+    const state = {
+      now,
+      energy,
+      todayProactive: Number(tick.todayProactive) || 0,
+      maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
+      minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
+      lastProactiveAt: 0,
+      unreflected: candidates.filter((c) => c.id === 'reflect_pending').length,
+      organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
+      lastReflectAttemptAt: Number(tick.lastReflectAttemptAt) || 0,
+      reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000),
+      inSleepWindow: sleep.inWindow === true ? 1 : 0,
+      stayUps: Number((tick.sleep && tick.sleep.stayUps) || 0),
+      maxStayUp: Math.max(0, Number(m.sleep?.maxStayUp) || 2)
+    };
+    let actions = availableActions(state);
+    if (!actions.some((a) => a.id === 'organize')) {
+      candidates = candidates.filter((c) => c.id !== 'reflect_pending');
+    }
+    if (!actions.length) {
+      results.push({ chatKey: '', action: 'idle', reason: 'no-action' });
+      return { results, skipped: '' };
+    }
+
+    // ⑤ 一次决策
+    const messages = buildGlobalDecisionPrompt({
+      botName: cfg.persona?.botName,
+      state,
+      roster: roster.top,
+      candidates,
+      actions,
+      now,
+      restCount: roster.restCount,
+      lastAction: this.#lastActionText()
+    });
+    const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
+    const decision = parseDecision(String(res?.message?.content ?? ''), actions.map((a) => a.id));
+
+    tick = this.mind.getTick();
+    this.mind.updateTick({ todayDecisions: (Number(tick.todayDecisions) || 0) + 1 });
+
+    if (!decision || decision.action === 'idle') {
+      const snoozeMs = Math.max(60000, Number(tickCfg.idleSnoozeMs) || 3600000);
+      const nextSnoozes = { ...snoozes };
+      for (const c of candidates) {
+        if (!c.chatKey) continue;
+        nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeMs;
+      }
+      for (const [k, v] of Object.entries(nextSnoozes)) {
+        if (!(Number(v) > now)) delete nextSnoozes[k];
+      }
+      this.mind.updateTick({ snoozes: nextSnoozes });
+      this.mind.appendAction({
+        chatKey: '', at: now, action: 'idle',
+        reason: decision ? (decision.reason || '想不出要做什么') : '输出无法解析，按不行动处理',
+        candidates: candidates.map((c) => c.id),
+        usage: res?.usage || null
+      });
+      results.push({ chatKey: '', action: 'idle', reason: decision ? 'chose-idle' : 'unparsable' });
+      return { results, skipped: '' };
+    }
+
+    // ⑥ 执行（目标会话由决策指定，或挑候选里最该找的那个）
+    const action = getAction(decision.action);
+    const target = this.#pickTargetChat(decision, candidates, roster.top);
+    let exec = null;
+    let execError = '';
+    try {
+      exec = await this.#runMindAction(action, target, decision, { now });
+    } catch (error) {
+      execError = String(error?.message ?? error);
+      console.error(`[mind] 行动 ${decision.action} 失败:`, execError);
+    }
+
+    if (!execError) {
+      tick = this.mind.getTick();
+      const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(action.energy) || 0)) };
+      if (decision.action === 'send_proactive') {
+        patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
+        if (target) this.lastProactiveAt.set(target, now);
+      }
+      const snoozeFor = Math.max(0, Number(action.snoozeMs) || 0);
+      const nextSnoozes = {};
+      for (const [k, v] of Object.entries(snoozes)) {
+        if (Number(v) > now) nextSnoozes[k] = v;
+      }
+      if (snoozeFor > 0) {
+        for (const c of candidates) {
+          if (c.chatKey === target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
+        }
+      }
+      patch.snoozes = nextSnoozes;
+      this.mind.updateTick(patch);
+    }
+
+    this.mind.appendAction({
+      chatKey: target, at: now, action: decision.action, reason: decision.reason,
+      candidates: candidates.map((c) => c.id),
+      energySpent: execError ? 0 : (Number(action.energy) || 0),
+      result: exec,
+      error: execError || undefined,
+      usage: res?.usage || null
+    });
+    results.push({ chatKey: target, action: decision.action, reason: decision.reason, error: execError || undefined });
+    return { results, skipped: '' };
   }
 
   /** 执行一个动作。ctx 里只给能力，不给她直接碰编排器内部。 */

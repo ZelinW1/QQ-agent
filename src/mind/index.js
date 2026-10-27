@@ -40,6 +40,9 @@ export {
   resetDaily,
   collectCandidates,
   buildDecisionPrompt,
+  buildGlobalDecisionPrompt,
+  scoreRosterEntry,
+  truncateText,
   parseDecision,
   nextTickAt,
   actionBlocked

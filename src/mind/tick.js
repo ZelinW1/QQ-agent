@@ -120,6 +120,28 @@ export function collectCandidates({
 }
 
 /**
+ * 决策提示词的 system 段（逐字稳定，用于前缀缓存）。
+ *
+ * 单会话决策与全局唤醒共用同一段 —— 两者唯一的差别在 user（状态与素材）。
+ */
+export function buildDecisionSystem({ name = '她', actions = [] } = {}) {
+  const who = String(name || '她').trim() || '她';
+  return [
+    `你是${who}。`,
+    '现在没有人找你，你自己待着。根据下面的状态，决定要不要做点什么。',
+    '',
+    '原则：',
+    '- 优先什么都不做。没有真的想做的事，就选 idle。',
+    '- 主动找人说话要有理由：有话想说、有件挂心的事、或者真的很久没联系了。',
+    '- 不要因为"该做点什么"而做点什么。',
+    '- 只输出 JSON：{"action":"动作id","args":{},"reason":"一句给自己看的理由"}',
+    '',
+    '动作：',
+    ...actions.map((a) => `- ${a.id}：${a.label}${a.description ? `。${a.description}` : ''}（消耗 ${a.energy ?? 0} 体力）`)
+  ].join('\n');
+}
+
+/**
  * 决策提示词。
  *
  * system **固定不变**（含完整行动说明），所以可被前缀缓存；变的东西全塞进 user。
@@ -134,19 +156,7 @@ export function collectCandidates({
  */
 export function buildDecisionPrompt({ botName = '她', state = {}, candidates = [], actions = [], now = Date.now() } = {}) {
   const name = String(botName || '她').trim() || '她';
-  const system = [
-    `你是${name}。`,
-    '现在没有人找你，你自己待着。根据下面的状态，决定要不要做点什么。',
-    '',
-    '原则：',
-    '- 优先什么都不做。没有真的想做的事，就选 idle。',
-    '- 主动找人说话要有理由：有话想说、有件挂心的事、或者真的很久没联系了。',
-    '- 不要因为"该做点什么"而做点什么。',
-    '- 只输出 JSON：{"action":"动作id","args":{},"reason":"一句给自己看的理由"}',
-    '',
-    '动作：',
-    ...actions.map((a) => `- ${a.id}：${a.label}${a.description ? `。${a.description}` : ''}（消耗 ${a.energy ?? 0} 体力）`)
-  ].join('\n');
+  const system = buildDecisionSystem({ name, actions });
 
   const lines = [
     `现在：${new Date(now).toLocaleString('zh-CN', { hour12: false })}`,
@@ -232,3 +242,84 @@ export function actionBlocked(action, state) {
   }
   return null;
 }
+
+// ── 全局唤醒：roster 与提示词 ──────────────────────────────────────────
+
+/** 把一段可能很长的消息压成一行线索（roster 里每条只占一行）。 */
+export function truncateText(text, max = 30) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  return t.length <= max ? t : `${t.slice(0, max)}…`;
+}
+
+/**
+ * roster 排序分数。数值只为排序，不代表"重要性"承诺。
+ *   有未读 > 有到期未完结 > 沉默越久 > 关系越亲近
+ */
+export function scoreRosterEntry({ unread = 0, openLoopsDue = 0, hoursSince = 0, warmth = 0 } = {}) {
+  return (Number(unread) > 0 ? 100 : 0)
+    + (Number(openLoopsDue) > 0 ? 50 : 0)
+    + Math.min(30, Math.max(0, Number(hoursSince) || 0))
+    + Math.min(10, Math.max(0, Number(warmth) || 0) / 10);
+}
+
+/**
+ * 全局唤醒的决策提示词。
+ *
+ * 与单会话版的区别只在 user：这里给的是**一份 roster（几个人）**。
+ * system 逐字相同，所以两套模式共享同一份缓存前缀。
+ *
+ * @param {object} p
+ * @param {string} [p.botName]
+ * @param {object} p.state { energy, todayProactive, maxProactive }
+ * @param {object[]} p.roster 已排序的会话摘要（top N）
+ * @param {{id:string,text:string,chatKey?:string,name?:string}[]} p.candidates
+ * @param {object[]} p.actions
+ * @param {number} [p.now]
+ * @param {number} [p.restCount] 未进 roster 的会话数
+ * @param {string} [p.lastAction] 上次行动摘要（"3 小时前：找王哥说话"）
+ */
+export function buildGlobalDecisionPrompt({
+  botName = '她', state = {}, roster = [], candidates = [], actions = [],
+  now = Date.now(), restCount = 0, lastAction = null
+} = {}) {
+  const name = String(botName || '她').trim() || '她';
+  const system = buildDecisionSystem({ name, actions });
+
+  const lines = [
+    `现在：${new Date(now).toLocaleString('zh-CN', { hour12: false })}`,
+    `体力：${Math.round(Number(state.energy) || 0)}`,
+    `今天已经主动说过 ${Number(state.todayProactive) || 0} 次话`
+  ];
+
+  if (roster.length) {
+    lines.push('', '你最近留意到的人：');
+    for (const r of roster) {
+      const bits = [];
+      if (r.stageLabel) bits.push(String(r.stageLabel));
+      const h = Number(r.hoursSince);
+      if (r.hoursSince !== null && r.hoursSince !== undefined && Number.isFinite(h)) {
+        bits.push(h >= 24 ? `${Math.round(h / 24)} 天前` : `${h} 小时前`);
+      }
+      if (Number(r.unread) > 0) bits.push(`${Number(r.unread)} 条未读`);
+      lines.push(`- ${r.name}${bits.length ? `（${bits.join('，')}）` : ''}${r.lastLine ? `：「${r.lastLine}」` : ''}`);
+      if (Number(r.openLoopsDue) > 0) lines.push('  · 有件事一直没问');
+    }
+    if (Number(restCount) > 0) lines.push(`（另外还有 ${Number(restCount)} 个会话，最近都很安静）`);
+  }
+
+  if (candidates.length) {
+    lines.push('', '你想到的：');
+    for (const c of candidates) lines.push(`- ${c.name ? `${c.name}：` : ''}${c.text}`);
+  } else {
+    lines.push('', '你没想到什么特别的。');
+  }
+
+  if (lastAction) lines.push('', `上次行动：${lastAction}`);
+
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: lines.join('\n') }
+  ];
+}
+

@@ -76,7 +76,16 @@ export class ChatStore {
     // 曾经用 !m.read 把 self 也算进去，机器人自己的发言会把角标顶大。
     const unread = st.messages.filter((m) => !m.read && !m.self).length;
     const last = st.messages[st.messages.length - 1] || null;
-    return { chatKey, total: st.messages.length, unread, lastTs: last?.ts ?? 0, lastText: last?.text ?? '' };
+    return {
+      chatKey,
+      total: st.messages.length,
+      unread,
+      lastTs: last?.ts ?? 0,
+      lastText: last?.text ?? '',
+      // 最后一句是不是她自己说的：全局唤醒的 roster 要据此区分"谁在等谁"。
+      lastSelf: last?.self === true,
+      lastSender: last?.senderName || (last?.self ? 'self' : '')
+    };
   }
 
   /** 追加一条收到的消息（未读）。返回写入的条目。 */
