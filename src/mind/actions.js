@@ -99,9 +99,33 @@ export function getAction(id) {
 }
 
 /**
+ * 内置动作 + 配置里的体力成本。
+ *
+ * 早先体力是写死在 actions.js 里的（25/15/5），而 config.mind.energy.cost
+ * 是一份没人读的死配置 —— 用户在设置里改了也不会生效。现在统一从这里取。
+ */
+export function actionsWithCosts(cfg = {}) {
+  const costs = (cfg && cfg.energy && cfg.energy.cost) || {};
+  return ACTIONS.map((a) => {
+    const c = Number(costs[a.id]);
+    return Number.isFinite(c) && c >= 0 ? { ...a, energy: c } : a;
+  });
+}
+
+/**
  * 当前可用的动作（已过前置条件与体力检查）。
  * 菜单只列这些，所以被拦下的动作她根本看不到。
+ *
+ * @param {object} state
+ * @param {object[]} [actions] 允许传入已解析成本的动作表（内置 + 扩展）
  */
-export function availableActions(state = {}) {
-  return ACTIONS.filter((a) => actionBlocked(a, state) === null);
+export function availableActions(state = {}, actions = ACTIONS) {
+  return actions.filter((a) => actionBlocked(a, state) === null);
+}
+
+/** 被拦下的动作及原因（菜单里最多列几条，让她知道"以后能做"）。 */
+export function blockedActions(state = {}, actions = ACTIONS) {
+  return actions
+    .map((a) => ({ action: a, reason: actionBlocked(a, state) }))
+    .filter((x) => x.reason);
 }

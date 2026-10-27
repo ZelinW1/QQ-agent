@@ -27,6 +27,9 @@ import {
   getAction,
   actionBlocked,
   availableActions,
+  blockedActions,
+  actionsWithCosts,
+  extensionActions,
   resolveSleepWindow,
   classifySleep,
   buildBirthPrompt,
@@ -43,6 +46,7 @@ import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
 import { currentProviders } from './providers.js';
 import { skillManager } from './skills/manager.js';
 import { getToolAvailability } from './tool-registry.js';
+import { listTools } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
 
 /**
@@ -2418,7 +2422,18 @@ export class Orchestrator {
       stayUps: Number((tick.sleep && tick.sleep.stayUps) || 0),
       maxStayUp: Math.max(0, Number(m.sleep?.maxStayUp) || 2)
     };
-    let actions = availableActions(state);
+    // 内置动作的成本改成从配置读（energy.cost 以前是死配置）；
+    // 再把扩展里声明了 mindAction 的工具并入菜单。
+    const coreActions = actionsWithCosts(m);
+    const extActions = extensionActions({ tools: listTools(), cfg: m.actions || {} })
+      .map((a) => ({
+        ...a,
+        run: (ctx, args) => this.#runExtensionTool(a.toolId, ctx, args)
+      }));
+    const allActions = [...coreActions, ...extActions];
+    const showBlocked = Math.max(0, Math.min(5, Number(m.actions?.showBlocked) || 2));
+    let actions = availableActions(state, allActions);
+    const blocked = blockedActions(state, allActions).slice(0, showBlocked);
     if (!actions.some((a) => a.id === 'organize')) {
       candidates = candidates.filter((c) => c.id !== 'reflect_pending');
     }
@@ -2437,7 +2452,8 @@ export class Orchestrator {
       actions,
       now,
       restCount: roster.restCount,
-      lastAction: this.#lastActionText()
+      lastAction: this.#lastActionText(),
+      blocked
     });
     const maxActions = Math.max(1, Math.min(6, Number(m.actions?.maxPerWake) || 3));
     const tools = this.#freeActionTools(actions);
@@ -2646,6 +2662,31 @@ export class Orchestrator {
       }
     };
     return action.run(ctx, decision.args || {});
+  }
+
+  /**
+   * 执行一个"扩展行动"：本质上就是调用那个 Skill/插件注册的工具。
+   *
+   * 与聊天里的工具调用共用同一份工具定义与执行器，所以参数校验、返回值包装、
+   * 错误语义都保持一致；区别只在于 ctx 里没有本次会话对象（自由时间不是会话）。
+   */
+  async #runExtensionTool(toolId, ctx0 = {}, args = {}) {
+    const toolCtx = {
+      chatKey: ctx0.chatKey || '',
+      store: this.store,
+      memory: this.memory,
+      sender: this.sender,
+      onebot: this.onebot,
+      session: null,
+      reminders: this.reminders,
+      stickers: this.stickers,
+      emit: (name, payload) => this.emit(name, payload),
+      mind: this.mind,
+      now: ctx0.now
+    };
+    const r = await executeTool(listTools(), toolCtx, toolId, JSON.stringify(args || {}));
+    if (r?.isError) throw new Error(String(r.content || `工具 ${toolId} 执行失败`));
+    return { ok: true, content: r?.content ?? null };
   }
 
   /**

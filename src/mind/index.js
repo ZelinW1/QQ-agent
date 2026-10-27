@@ -48,7 +48,9 @@ export {
   actionBlocked
 } from './tick.js';
 
-export { ACTIONS, getAction, availableActions } from './actions.js';
+export { ACTIONS, getAction, availableActions, blockedActions, actionsWithCosts } from './actions.js';
+
+export { extensionActions } from './extensions.js';
 
 export { resolveSleepWindow, classifySleep, describeWindow } from './sleep.js';
 

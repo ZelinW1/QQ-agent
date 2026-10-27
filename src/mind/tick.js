@@ -281,7 +281,7 @@ export function scoreRosterEntry({ unread = 0, openLoopsDue = 0, hoursSince = 0,
  */
 export function buildGlobalDecisionPrompt({
   botName = '她', state = {}, roster = [], candidates = [], actions = [],
-  now = Date.now(), restCount = 0, lastAction = null
+  now = Date.now(), restCount = 0, lastAction = null, blocked = []
 } = {}) {
   const name = String(botName || '她').trim() || '她';
   const system = buildDecisionSystem({ name, actions });
@@ -313,6 +313,16 @@ export function buildGlobalDecisionPrompt({
     for (const c of candidates) lines.push(`- ${c.name ? `${c.name}：` : ''}${c.text}`);
   } else {
     lines.push('', '你没想到什么特别的。');
+  }
+
+  // 被拦下的动作只列几条并附原因：让她知道"以后能做"，
+  // 但不让 prompt 被一堆做不了的选项撑爆。
+  if (Array.isArray(blocked) && blocked.length) {
+    lines.push('', '现在做不了的：');
+    for (const b of blocked) {
+      const label = b?.action?.label || b?.action?.id || '某项行动';
+      lines.push(`- ${label}：${b?.reason || '现在不适合'}`);
+    }
   }
 
   if (lastAction) lines.push('', `上次行动：${lastAction}`);

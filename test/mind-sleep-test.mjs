@@ -149,7 +149,9 @@ console.log('\n=== 4. 编排器行为 ===');
 {
   updateConfig({
     api: { model: 'test-model', baseUrl: 'http://127.0.0.1:1/v1' },
-    mind: { enabled: true, tick: { enabled: true }, sleep: CFG }
+    // 这一组测的是旧的 per-chat 心跳路径（全局路径的作息行为由
+    // mind-global-tick-test 覆盖）。显式声明，避免默认值变化影响本套。
+    mind: { enabled: true, tick: { enabled: true, mode: 'per-chat' }, sleep: CFG }
   });
 
   const mkOrch = ({ unread = 0, lastTs = 0 } = {}) => {

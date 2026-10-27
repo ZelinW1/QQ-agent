@@ -82,24 +82,21 @@ if (crossesMidnight && d.getHours() < end.h) d.setDate(d.getDate() - 1);
 
 ---
 
-## P3 · 动作注册表 v2
+## P3 · 动作注册表 v2 —— ✅ 已完成（默认 mode 同时翻成 global）
 
-- 内置动作的体力**改为读配置**（修掉现在 `energy.cost` 是死配置、
-  `actions.js` 里硬编码 25/15/5 的问题）
+- 内置动作的体力**改为读配置**（`actionsWithCosts`），修掉 `energy.cost`
+  是死配置、`actions.js` 里硬编码 25/15/5 的问题
 - 扩展行动：`registerTool({ ..., mindAction: { label, energy, defaultEnabled, when } })`
   - 可选字段，`registerTool` 已透传；不写就永远只是辅助工具
-  - **默认关闭**，由用户在配置里逐项开启
-- 配置（界面以后再说，先收在一个命名空间）：
-  ```jsonc
-  "mind": { "actions": {
-    "maxPerWake": 3,
-    "showBlocked": 2,
-    "overrides": { "qzone_post": { "enabled": true, "label": "发条动态", "energy": 15 } }
-  } }
-  ```
-- 菜单里最多附带 `showBlocked` 条"现在做不了 + 原因"
-- 技能禁用/卸载 → 其行动自动消失（`skillId` 生命周期已有）
-- 测试：扩展行动启用/禁用、技能卸载后消失、体力覆盖生效
+  - **默认关闭**，由 `mind.actions.overrides[工具id]` 逐项开启/覆盖 label/energy
+  - 技能禁用/卸载 → 工具消失 → 行动一起消失
+- 菜单里附 `showBlocked` 条"现在做不了 + 原因"（默认 2）
+- 编排器统一执行：扩展行动最终调用 `executeTool`，与聊天里的工具同一条链路
+- 测试：`mind-actions-v2-test` 22 项（成本覆盖 / 被拦原因 / 扩展启用与覆盖 /
+  工具消失 / 提示词可见 / 编排器真的执行了扩展工具）
+- **`mind.tick.mode` 默认已改为 `global`**；旧的 per-chat 路径保留，
+  相关测试显式声明 `mode:'per-chat'` 继续覆盖回滚路径
+
 
 ---
 

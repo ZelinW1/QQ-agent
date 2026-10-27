@@ -164,7 +164,8 @@ console.log('\n=== 7. 一轮心跳 ===');
 {
   updateConfig({
     api: { model: 'test-model', baseUrl: 'http://127.0.0.1:1/v1' },
-    mind: { enabled: true, tick: { enabled: true }, reflectAfterEvents: 3, energy: { floor: 10 } }
+    // 本套测的是旧的 per-chat 心跳路径；全局路径由 mind-global-tick-test 覆盖
+    mind: { enabled: true, tick: { enabled: true, mode: 'per-chat' }, reflectAfterEvents: 3, energy: { floor: 10 } }
   });
 
   const mkOrch = ({ lastTs, unread = 0, running = false } = {}) => {
