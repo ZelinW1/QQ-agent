@@ -117,7 +117,13 @@
 
 export const MIND_PORT_API = 1;
 
-export function createRuntimePort(mind, { log = console } = {}) {
+// deps 全部由装配根注入；端口自己不 import 领域模块，也不复制领域公式
+export function createRuntimePort(mind, deps = {}) {
+  // deps.settle(tick, now)      体力结算 + 跨天清零（绑定配置后传入）
+  // deps.chatStore              会话存档（scene 用；缺省时 scene 为空）
+  // deps.scoreEntry(entry)      现场排序分数（缺省按沉默时长）
+  // deps.pickEvents(events, o)  回想排序（缺省按关键词字面匹配）
+  // deps.energyMax              体力上限（缺省 null，表示"未知"）
   if (!mind) return createNoopRuntimePort();
 
   return {
@@ -252,6 +258,9 @@ export function createRuntimePort(mind, { log = console } = {}) {
   roster 的排序规则（未读 > 到期未完结 > 沉默时长 > 亲密度）是**领域知识**，
   而且 per-chat / global 两条路径现在各写了一遍（`orchestrator.js:2290-2344` 与
   `:2106-2127`）。收到端口里是消掉重复的唯一办法。
+- **领域逻辑靠注入，不靠复制**：体力结算（settleEnergy + resetDaily）留在领域层，
+  由装配根绑定配置后注入 deps.settle；端口只负责"调它、写盘、返回快照"。
+  把公式抄进端口是最容易埋下"两处算得不一样"的做法，这里明确不做。
 - **端口同步，不 async**：现有 store 全同步（`fs.readFileSync`/`appendFileSync`）。
   A1 保持同步，迁移面最小；B 期若统计需要异步，再整体加 `await`（一次性改，不散着改）。
 - **`bodyApply` 必须带 `rev`（比较并交换）**：这不是洁癖，是因为
