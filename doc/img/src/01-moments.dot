@@ -1,0 +1,35 @@
+digraph moments {
+  graph [rankdir=TB, fontname="Microsoft YaHei", fontsize=11, bgcolor="white",
+         nodesep=0.45, ranksep=0.60, pad=0.30, dpi=150, ordering=out];
+  node  [shape=box, style="rounded,filled", fontname="Microsoft YaHei", fontsize=11,
+         color="#9aa3ae", penwidth=1.1, fillcolor="#ffffff", margin="0.15,0.08", width=2.5];
+  edge  [fontname="Microsoft YaHei", fontsize=9, color="#6b7280", arrowsize=0.65];
+
+  t1 [label="有人说话\n每条消息先过门禁"];
+  t2 [label="时间到了\n意图 / 动作成熟 / 社交到期\n或随机冲动（平均 4 小时）"];
+  t3 [label="攒够了\n未整理的事件堆到阈值"];
+  t4 [label="定时任务 cron\n到点必执行"];
+
+  m1 [label=<<B>对话时刻 chat</B><BR/><FONT POINT-SIZE="9">估算每天几十次</FONT>>, fillcolor="#e8f1ff"];
+  m2 [label=<<B>自由时刻 free</B><BR/><FONT POINT-SIZE="9">估算每天 6–10 次</FONT>>, fillcolor="#e9f7ec"];
+  m3 [label=<<B>整合时刻 integrate</B><BR/><FONT POINT-SIZE="9">估算每天 2–5 次</FONT>>, fillcolor="#fff3e2"];
+  m4 [label=<<B>自动化时刻 automate</B><BR/><FONT POINT-SIZE="9">通常不调模型</FONT>>, fillcolor="#f1f2f4"];
+
+  o1 [label="消息 ＋ 事件"];
+  o2 [label="一次尝试 ＋ 一条待观测\n＋ 可能的新意图"];
+  o3 [label="一条反思\n每 5–7 天合成一篇叙事\n每月或强事件改写一次自我"];
+  o4 [label="外部动作 ＋ 运行日志"];
+
+  n1 [shape=note, style="filled", fillcolor="#f7fbff", color="#a9c1f5",
+      label=<<FONT POINT-SIZE="10">其中「主动找人说话」这类行动，会在自由时刻里<BR/>再发起一次对话时刻（嵌套，深度只能为 1）。<BR/>那次对话里看不到这类行动，所以不会无限套娃。</FONT>>];
+
+  { rank=same; t1 -> t2 -> t3 -> t4 [style=invis]; }
+  { rank=same; m1 -> m2 -> m3 -> m4 [style=invis]; }
+  { rank=same; o1 -> o2 -> o3 -> o4 [style=invis]; }
+
+  t1 -> m1; t2 -> m2 [label=" 到点"]; t3 -> m3 [label=" 阶梯"]; t4 -> m4;
+  m1 -> o1; m2 -> o2; m3 -> o3; m4 -> o4;
+
+  o4 -> n1 [style=invis];
+  o2 -> n1 [style=dashed, color="#5b8def", fontcolor="#3b6fd4", label=" 其中一类"];
+}

@@ -77,6 +77,9 @@ LLM 层面零历史，单次成本恒定。所以"她记得什么"完全取决�
 攒够一定条数的事件后，她会自己整理：压缩琐碎、更新对人的判断。
 阈值、冷却、每日上限都可以调（默认 8 条 / 120 分钟 / 8 次）。
 
+> 以上是**当前版本**的运作方式。重构后的完整设计与导读见 [doc/](doc/README.md)：
+> 唤醒改为两套时钟、反思改为四级整合、行动有了结果闭环。两套描述不要混用。
+
 ---
 
 ## 这个分支做了什么
@@ -202,6 +205,23 @@ npm run dist       # 打 NSIS 安装包（首次需联网下载 NSIS 工具链�
 
 发布内容由 `package.json → build.files` 白名单控制：`data/`、`snowluma/`、`runtime/`、
 `test/`、`doc/`、`scripts/` 都不会进包。
+
+---
+
+## 文档
+
+完整索引见 [`doc/README.md`](doc/README.md)。常用的三份：
+
+| 文档 | 内容 | 状态 |
+|---|---|---|
+| [`doc/architecture-overview.md`](doc/architecture-overview.md) | 现行代码架构（含与扩展文档的偏差清单） | 现状快照 |
+| [`doc/architecture-primer.md`](doc/architecture-primer.md) | 行动运行时导读：她何时想事情、看到什么、记在哪里 | 设计导读 |
+| [`doc/action-runtime-design.md`](doc/action-runtime-design.md) | 行动运行时设计 v3.1（施工依据） | 设计定稿，未实施 |
+
+写技能 / 插件请看 [`doc/extend_development/`](doc/extend_development/)。
+
+> 注意区分：根 README 与「现行代码架构」描述**当前版本行为**；
+> 导读与设计稿描述**重构之后的行为**，尚未实施。
 
 ---
 

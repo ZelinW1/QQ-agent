@@ -1,0 +1,33 @@
+digraph memory {
+  graph [rankdir=BT, fontname="Microsoft YaHei", fontsize=11, bgcolor="white",
+         nodesep=0.50, ranksep=0.55, pad=0.30, dpi=150];
+  node  [shape=box, style="rounded,filled", fontname="Microsoft YaHei", fontsize=10,
+         color="#9aa3ae", penwidth=1.1, fillcolor="#ffffff", margin="0.16,0.10"];
+  edge  [fontname="Microsoft YaHei", fontsize=9, color="#6b7280", arrowsize=0.62];
+
+  E  [label="事件\n发生过什么（原子事实）\n每条带时间、当事人、 来源时刻", fillcolor="#eef4ff"];
+  SC [label="会话反思\n这段关系里聊出了什么", fillcolor="#e8f1ff"];
+  SG [label="全局反思\n我最近是怎么了", fillcolor="#e6f4ea"];
+  NT [label="自我笔记\n「我好像变了」的一闪念\n（会话反思只能写到这里）", fillcolor="#f3eefc"];
+  N  [label="叙事\n最近发生了什么事\n（日记形态，每 5–7 天一篇）", fillcolor="#fff3e2"];
+  S  [label="自我\n我认为自己是怎样的人\n每次改写留一个版本，可以回看「她变了」", fillcolor="#fde8e8"];
+
+  X  [shape=ellipse, style="filled", fillcolor="#fff1cc", color="#d9a93a",
+      label="强事件\n冲突 / 里程碑 / 关系回退", fontsize=9];
+
+  E  -> SC [label=" 同一会话攒够 8 条未整理"];
+  SC -> SG [label=" 累计 12 条会话反思"];
+  SC -> NT [label=" 顺手记下"];
+  SG -> N  [label=" 每 7 天 或 里程碑"];
+  SG -> S  [label=" 每月一次"];
+  N  -> S  [label=" 作为材料"];
+  NT -> S  [label=" 攒够 3 条"];
+  X  -> S  [style=dashed, color="#d9a93a", fontcolor="#8a6a12", label=" 不必等月历"];
+
+  n [shape=note, style="filled", fillcolor="#fbfbfc", color="#c9ced6",
+     label=<<FONT POINT-SIZE="9">写入的规矩：会话反思只能改「对某个人的看法」，改不了「她自己」；<BR/>改写自我只有两个入口——整合时刻，或她自己显式说「我想重新说说我自己」。<BR/>所以话多的群不会因为她回得多，就把她的自我带歪。</FONT>>];
+
+  { rank=same; E; X; }
+  { rank=same; SC; NT; }
+  S -> n [style=invis];
+}

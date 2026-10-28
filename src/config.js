@@ -403,7 +403,7 @@ export const DEFAULT_CONFIG = {
     },
     // —— 节律（心跳）——
     // 心跳不是"每 5 分钟调一次模型"：结算与廉价预判都不花钱，
-    // 只有命中候选才调决策模型。详见 doc/m1-mind-plan.md §6.2。
+    // 只有命中候选才调决策模型。详见 doc/action-runtime-design.md §7.3。
     tick: {
       enabled: true,
       // 'global' = 一次唤醒、一份 roster、一张菜单、可连续做几件事（新，默认）

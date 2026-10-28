@@ -56,3 +56,9 @@ release/
 community.key
 
 .goal-baseline/
+
+# 本地扩展：skills/ 与 plugins/ 是使用者自己的技能与插件目录（可能含个人提示词、
+# 本机路径、第三方代码），与 data/ 同理不入库。
+# 仓库只提供开发文档与范例，见 doc/extend_development/。
+skills/
+plugins/

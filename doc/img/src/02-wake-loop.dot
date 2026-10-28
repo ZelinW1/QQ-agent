@@ -1,0 +1,39 @@
+digraph wake {
+  graph [rankdir=TB, fontname="Microsoft YaHei", fontsize=11, bgcolor="white",
+         nodesep=0.40, ranksep=0.42, pad=0.30, dpi=150];
+  node  [shape=box, style="rounded,filled", fontname="Microsoft YaHei", fontsize=11,
+         color="#9aa3ae", penwidth=1.1, fillcolor="#ffffff", margin="0.16,0.09", width=3.0];
+  edge  [fontname="Microsoft YaHei", fontsize=9, color="#6b7280", arrowsize=0.62];
+
+  a1  [label="算下一次唤醒时刻\n取四项里最早的一个：\n冲动 / 意图到期 / 动作成熟 / 社交到期", fillcolor="#f4f7fb"];
+  g   [shape=diamond, style="filled", fillcolor="#fff8e1", color="#d9b23a",
+       label="九道门禁\n全部通过？", fontsize=10, width=1.8, height=0.9, margin="0.02,0.02"];
+  a2  [label="装配素材\n六段，各有预算", fillcolor="#eef7f0"];
+  a3  [label="调模型：她想做点什么", fillcolor="#e9f7ec"];
+  d1  [shape=diamond, style="filled", fillcolor="#fff8e1", color="#d9b23a",
+       label="选了一个行动？", fontsize=10, width=1.7, height=0.8, margin="0.02,0.02"];
+  a4  [label="走管线执行\n资格 → 权限 → 参数校验 → 否决 → 执行 → 归一 → 审计", fillcolor="#eef4ff"];
+  d2  [shape=diamond, style="filled", fillcolor="#fff8e1", color="#d9b23a",
+       label="还想再做？\n（最多 3 件）", fontsize=10, width=1.9, height=0.9, margin="0.02,0.02"];
+  a6  [label="什么都不做\n（记一笔 idle，给候选打盹）", fillcolor="#f7f7f8"];
+  a5  [label="收尾：记时刻 ／ 记尝试 ／ 开观测 ／ 重抽冲动", fillcolor="#f4f7fb"];
+
+  n_gate [shape=note, style="filled", fillcolor="#fffdf5", color="#e0c56a",
+          label=<<FONT POINT-SIZE="9">睡着了 ／ 暂停 ／ 体力不足 ／ 当日额度用完<BR/>刚醒过（最小间隔）／ 有可应答未读（让位给对话）<BR/>目标会话正在跑 ／ 刚聊过 ／ 当日成本超限</FONT>>];
+
+
+  a1 -> g;
+  g -> a2 [label=" 能"];
+  g -> a1 [style=dashed, label=" 不能：记下原因\n 并重抽冲动", constraint=false];
+  a2 -> a3 -> d1;
+  d1 -> a4 [label=" 是"];
+  d1 -> a6 [label=" 否"];
+  a4 -> d2;
+  d2 -> a4 [label=" 是", constraint=false];
+  d2 -> a5 [label=" 否"];
+  a6 -> a5;
+  a5 -> a1 [style=dashed, label=" 回到等待", constraint=false];
+
+  g -> n_gate [style=dotted, arrowhead=none, color="#c9a227"];
+  { rank=same; g; n_gate; }
+}

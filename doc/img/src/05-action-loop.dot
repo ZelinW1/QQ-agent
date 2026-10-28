@@ -1,0 +1,38 @@
+digraph act {
+  graph [rankdir=TB, fontname="Microsoft YaHei", fontsize=11, bgcolor="white",
+         nodesep=0.42, ranksep=0.40, pad=0.30, dpi=150];
+  node  [shape=box, style="rounded,filled", fontname="Microsoft YaHei", fontsize=10,
+         color="#9aa3ae", penwidth=1.1, fillcolor="#ffffff", margin="0.16,0.10", width=3.1];
+  edge  [fontname="Microsoft YaHei", fontsize=9, color="#6b7280", arrowsize=0.62];
+
+  I [label="她惦记的事\n（意图：说好要问的、想再看的）", fillcolor="#f3eefc", width=2.6];
+  R [label="该做了\n（某类行动到了它自己的节奏）", fillcolor="#e9f7ec", width=2.6];
+  M [label="菜单\n此刻她可以做的全部（外加她惦记的那几条）", fillcolor="#eef4ff", width=3.8];
+  C [shape=diamond, style="filled", fillcolor="#fff8e1", color="#d9b23a", fontsize=10,
+     label="她选了\n什么？", width=1.7, height=0.85, margin="0.02,0.02"];
+  N [label="什么都不做\n（记一笔，给候选打盹）", fillcolor="#f7f7f8", width=2.6];
+  T [label="尝试\n（走管线：资格 → 权限 → 校验 → 否决 → 执行）", fillcolor="#eef4ff", width=3.6];
+  F [label="结果回灌\n她看到「做成了 / 没做成 / 他说了什么」", fillcolor="#eef4ff", width=3.6];
+  O [label="观测\n系统替她等回声（私聊 72 小时）", fillcolor="#fff3e2", width=3.4];
+  S [label="统计\n更新「下次什么时候再想起」", fillcolor="#e9f7ec", width=3.2];
+  Z [label="结束这次自由时刻", fillcolor="#f7f7f8", width=2.6];
+
+  n [shape=note, style="filled", fillcolor="#fbfbfc", color="#c9ced6",
+     label=<<FONT POINT-SIZE="9">学习的规矩（三种情况分开处理）：<BR/>　有回应 → 稍微更愿意做（间隔 ×0.95）<BR/>　没回应 → 只是轻微降频（×1.03），不归因、不写进她的自我<BR/>　没做成 → 只退避，不改频率<BR/>另外：至少观察 5 次才开始学；再愿意也不能密于初值的 0.6 倍，<BR/>再冷淡也不会淡于 3 倍 —— 触顶就标成「她很久没做了」，不会静默消失。</FONT>>];
+
+  I -> M; R -> M;
+  M -> C;
+  C -> T [label=" 做了"];
+  C -> N  [label=" 没做"];
+  T -> F;
+  F -> C [style=dashed, label=" 还想再做（最多 3 件）"];
+  F -> O [label=" 这一件做完了"];
+  O -> S [label=" 有回声 / 没回声\n 或作废"];
+  S -> R [style=dashed, label=" 调整下一次"];
+  N -> Z [style=dashed];
+  S -> Z [style=dashed];
+
+  { rank=same; I; R; N; }
+  S -> n [style=invis];
+  { rank=same; Z; n; }
+}

@@ -1,0 +1,31 @@
+digraph store {
+  graph [rankdir=LR, fontname="Microsoft YaHei", fontsize=11, bgcolor="white",
+         nodesep=0.18, ranksep=0.95, pad=0.30, dpi=150];
+  node  [shape=box, style="rounded,filled", fontname="Microsoft YaHei", fontsize=10,
+         color="#9aa3ae", penwidth=1.0, fillcolor="#ffffff", margin="0.12,0.07"];
+  edge  [color="#8b93a1", arrowsize=0.55];
+
+  root [shape=folder, style="filled", fillcolor="#eef1f5", label="data/"];
+  mind [shape=folder, style="filled", fillcolor="#eef1f5", label="mind/　她的全部内心"];
+  usage[shape=folder, style="filled", fillcolor="#eef1f5", label="usage/"];
+  u    [label="<日期>.json\n每天花了多少、分给哪个时刻", fillcolor="#f1f2f4"];
+
+  s1 [label="self.json\n她认为的自己 ＋ 每次改写的版本", fillcolor="#fde8e8"];
+  s2 [label="relations/<QQ>.json\n对每个人的看法、阶段、证据、版本", fillcolor="#fde8e8"];
+  s3 [label="events/<会话>/<年月>.jsonl\n发生过什么（原子事实）", fillcolor="#eef4ff"];
+  s4 [label="reflections.jsonl\n她怎么理解（每会话 / 全局两级）", fillcolor="#fff3e2"];
+  s5 [label="diary/<年月>.jsonl\n最近发生了什么事（叙事）", fillcolor="#fde8e8"];
+  s6 [label="intentions.jsonl\n她想做但还没做的事", fillcolor="#f3eefc"];
+  s7 [label="tick.json\n体力 / 今日计数 / 下次冲动的时刻 / 每类行动的节奏统计", fillcolor="#f1f2f4"];
+  s8 [label="attempts.jsonl\n每一次尝试（做了什么、成没成）", fillcolor="#f1f2f4"];
+  s9 [label="observations.jsonl\n系统替她盯着的「后来有没有反应」", fillcolor="#f1f2f4"];
+  s10[label="moments/<年月>.jsonl\n每一次模型调用的完整记录（可回放）", fillcolor="#f1f2f4"];
+  s11[label=".schema.json\n数据版本号（升级时用）", fillcolor="#f1f2f4"];
+
+  root -> mind; root -> usage;
+  mind -> {s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11} [arrowhead=none];
+  usage -> u [arrowhead=none];
+  u -> lg [style=invis];
+
+  lg [shape=plaintext, label=<<FONT POINT-SIZE="9"><B>颜色 = 谁写的</B><BR/>粉：她自己（以及整合时刻替她写）<BR/>橙：整合时刻（反思 / 叙事）<BR/>蓝：系统随聊天自动记<BR/>灰：系统机制（不是内容）</FONT>>];
+}

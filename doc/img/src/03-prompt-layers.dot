@@ -1,0 +1,32 @@
+digraph prompt {
+  graph [rankdir=TB, fontname="Microsoft YaHei", fontsize=11, bgcolor="white",
+         nodesep=0.35, ranksep=0.34, pad=0.30, dpi=150];
+  node  [shape=box, style="rounded,filled", fontname="Microsoft YaHei", fontsize=10,
+         color="#9aa3ae", penwidth=1.1, fillcolor="#ffffff", margin="0.16,0.10", width=5.2];
+  edge  [fontname="Microsoft YaHei", fontsize=9, color="#6b7280", arrowsize=0.6];
+
+  subgraph cluster_sys {
+    label=<<B>system 消息：稳定前缀</B><BR/><FONT POINT-SIZE="9">同一运行时下逐字不变，可以命中缓存</FONT>>;
+    fontsize=11; fontcolor="#2f6b3f"; style="rounded"; color="#bfe0c8"; penwidth=1.4;
+    S0 [label="S0　安全规则 ＋ 章程 ＋ 身份摘要\n上限约 300 词元", fillcolor="#eaf6ec"];
+    S1 [label="S1　这一轮是什么场合（对话 / 自由 / 整合 / 自动化，每个一份）\n上限约 120 词元", fillcolor="#eaf6ec"];
+    S2 [label="S2　她这次能用哪些工具、每个工具怎么用\n工具清单不变，这一段就不变", fillcolor="#eaf6ec"];
+  }
+
+  subgraph cluster_usr {
+    label=<<B>user 消息：每轮重新拼</B><BR/><FONT POINT-SIZE="9">每次都不一样，不参与缓存</FONT>>;
+    fontsize=11; fontcolor="#8a5a12"; style="rounded"; color="#f0d5a8"; penwidth=1.4;
+    U1 [label="U1　现在的处境：时间、体力、睡着没、今天还剩多少额度\n上限约 80 词元", fillcolor="#fff4e2"];
+    U2 [label="U2　素材包：她是谁 ／ 对谁什么看法 ／ 惦记的事 ／ 谁在等她 ／ 最近发生了什么\n上限约 600 词元", fillcolor="#fff4e2"];
+    U3 [label="U3　这次要她做什么：回一批消息，或者从一张菜单里选\n上限约 200 词元", fillcolor="#fff4e2"];
+    U4 [label="U4　刚才调用的工具结果（一步一段，超长截断并注明）\n每段上限约 400 词元", fillcolor="#fff4e2"];
+  }
+
+  n [shape=note, style="filled", fillcolor="#fbfbfc", color="#c9ced6",
+     label=<<FONT POINT-SIZE="9">什么会打断缓存：启停扩展（S2 变）／ 切换运行时（S1 变）／ 改人设（S0 变）。<BR/>所以时间、体力、素材一律不进 system —— 它们每轮都变，放进去等于让缓存永远失效。</FONT>>];
+
+  S0 -> S1 -> S2;
+  S2 -> U1 [style=dashed, color="#d08b32", fontcolor="#8a5a12", label=" 缓存边界"];
+  U1 -> U2 -> U3 -> U4;
+  U4 -> n [style=invis];
+}
