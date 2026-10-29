@@ -46,7 +46,7 @@ import { skillManager } from './skills/manager.js';
 import { getToolAvailability } from './tool-registry.js';
 import { listTools } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
-import { createRuntimePort, createAdminPort } from './contract/mind-port.js';
+import { createRuntimePort, createWriterPort, createAdminPort } from './contract/mind-port.js';
 
 /**
  * 正文像不像"本来就该发出去的话"。
@@ -881,6 +881,13 @@ export class Orchestrator {
     return { baseUrl: api.baseUrl, apiKey, model: api.model, provider: api.provider };
   }
 
+  /**
+   * 给一次工具调用绑定写入句柄：`by` 由管线注入，工具侧拿不到这个参数。
+   * 没有 mind 时它仍是空实现——工具拿到 enabled=false 的句柄，回报"心智功能未启用"。
+   */
+  #writerFor(toolId) {
+    return createWriterPort(this.mind, { by: `tool:${String(toolId || '')}` });
+  }
   /** 触发批的文本（裁判要知道"这轮收到了什么"，才能判断正文是对它的回复）。 */
   #triggerText(triggerEntries) {
     return (triggerEntries || []).map((e) => String(e?.text || '')).filter(Boolean).join('\n').slice(0, 400);
@@ -1388,7 +1395,9 @@ export class Orchestrator {
         }
         const result = blocked
           ? { content: `错误：${blocked.reason || '该工具调用被 Skill 拒绝'}`, isError: true }
-          : await executeTool(toolDefs, ctx, name, argsRaw);
+          // 写入句柄按“这一次调用”绑定：`by` 由这里注入，工具自己给不出来。
+          // 越权因此在结构上不可能，而不是靠工具作者自觉。
+          : await executeTool(toolDefs, { ...ctx, writer: this.#writerFor(name) }, name, argsRaw);
         try {
           await skillManager.runHook('after-tool', {
             ...skillContext, toolName: name, argsRaw, result, session

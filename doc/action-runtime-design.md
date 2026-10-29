@@ -199,7 +199,7 @@ Intention {
 | `Self.selfNotes` | `integrate.chat`、`integrate.global` | `momentId` | 追加，上限 20 滚动 |
 | `Self.invariants` | 无（仅配置） | — | 运行时只读 |
 | `Relation` | `tool:update_relation`、`integrate.chat` | `evidence: [eventId]` | `version++` + `changelog` |
-| `Event` | `tool:remember_event`、`runtime.chat`、`runtime.free`、`integrate.global` | `source` + `momentId` | 追加，按 id 去重 |
+| `Event` | `tool:remember_event`、`tool:update_relation`（依据事件）、`runtime.chat`、`runtime.free`、`integrate.global` | `source` + `momentId` | 追加，按 id 去重 |
 | `Reflection` | `integrate.chat`、`integrate.global` | `materialsDigest` | 追加 |
 | `Narrative` | `tool:diary_write`、`integrate.global` | `eventIds` 或 `reflectionIds` | 软删 |
 | `Intention` | `runtime.free`、`integrate.*`、`user` | `reason` 或来源 | 状态机 |
@@ -1033,7 +1033,8 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R1 | A1-1 领域端口 + 空实现 + 单测（74 项） | ✅ |
 | R2 | A1-2 端口接线 + 睡眠/心跳/stay_up 的 body 与行动记录迁移（26 处） | ✅ |
 | R3 | 切割：删除 per-chat 心跳模式，只保留全局唤醒（-186 行，含配置项与两套测试） | ✅ |
-| R4 | A1-3 工具改走 WriterPort（`by` 由管线注入） | 未开始 |
+| R4 | A1-3 三个写工具改走 WriterPort（`by` 由管线注入，工具伪造不了） | ✅ |
+| R5 | A1-4 控制台改走 AdminPort；装配根成为唯一 import 领域模块的地方 | 未开始 |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 

@@ -5,6 +5,10 @@
 // 而不是鼓励她多用。
 //
 // 注册进全局 registry，可用性由 `requiresMind` 门控（mind 未启用时模型看不见）。
+//
+// 写操作一律经 WriterPort：`by` 由管线按调用注入（`tool:<id>`），工具自己给不出来，
+// 越权检查因此在结构上生效，而不是靠作者自觉。读操作（回想）仍走 ctx.mind ——
+// A1-5 会把读也收口到端口的 recall，那要等它支持按 userId 过滤。
 import { getConfig } from '../config.js';
 import { registerTool } from '../tool-registry.js';
 import { selectRecall, formatRecallForPrompt, tokenize } from './recall.js';
@@ -12,9 +16,14 @@ import { selectRecall, formatRecallForPrompt, tokenize } from './recall.js';
 const ok = (payload) => ({ content: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 1) });
 const err = (message) => ({ content: `错误：${message}`, isError: true });
 
-/** 取心智存储；不存在说明功能没接上，直接拒绝而不是静默失败。 */
+/** 写句柄。没有它就是"心智没接上"，直接拒绝而不是静默失败。 */
+function writerOf(ctx) {
+  return ctx?.writer && ctx.writer.enabled === true ? ctx.writer : null;
+}
+
+/** 读句柄（只给 recall 用）。 */
 function mindOf(ctx) {
-  return ctx?.mind && typeof ctx.mind.appendEvent === 'function' ? ctx.mind : null;
+  return ctx?.mind && typeof ctx.mind.queryEvents === 'function' ? ctx.mind : null;
 }
 
 /** 从本会话活跃成员里找名字（用于给事件补 actorName）。 */
@@ -68,8 +77,8 @@ export function registerMindTools() {
       required: ['text']
     },
     async execute(ctx, args) {
-      const mind = mindOf(ctx);
-      if (!mind) return err('心智功能未启用');
+      const writer = writerOf(ctx);
+      if (!writer) return err('心智功能未启用');
       const text = String(args?.text ?? '').trim();
       if (!text) return err('text 不能为空');
       const actorRaw = String(args?.actorId ?? '').trim();
@@ -79,7 +88,7 @@ export function registerMindTools() {
       const actorId = actorRaw || 'self';
       const actorName = actorRaw ? memberName(ctx, actorRaw) : String(ctx.selfNickname || '我');
 
-      const r = mind.appendEvent({
+      const r = writer.appendEvent({
         chatKey: ctx.chatKey,
         actorId,
         actorName,
@@ -89,7 +98,7 @@ export function registerMindTools() {
         salience: args?.salience,
         tags: args?.tags
       });
-      if (!r.ok) return err(r.reason || '写入失败');
+      if (!r.ok) return err(r.message || '写入失败');
       return ok({ saved: true, id: r.event.id, duplicate: r.duplicate === true });
     }
   });
@@ -123,8 +132,8 @@ export function registerMindTools() {
       required: ['userId']
     },
     async execute(ctx, args) {
-      const mind = mindOf(ctx);
-      if (!mind) return err('心智功能未启用');
+      const writer = writerOf(ctx);
+      if (!writer) return err('心智功能未启用');
 
       const userId = String(args?.userId ?? '').trim();
       if (!/^\d{1,15}$/.test(userId)) return err('userId 必须是数字 QQ 号');
@@ -141,7 +150,7 @@ export function registerMindTools() {
       // 先落一条事件作为依据：关系永远有源头，不能凭空气改。
       const name = memberName(ctx, userId);
       const reason = String(args?.reason ?? '').trim() || '对他的感觉有点变了';
-      const evidence = mind.appendEvent({
+      const evidence = writer.appendEvent({
         chatKey: ctx.chatKey,
         actorId: userId,
         actorName: name,
@@ -151,11 +160,11 @@ export function registerMindTools() {
         tags: ['关系更新']
       });
 
-      const r = mind.patchRelation(userId, patch, {
-        evidence: evidence.ok ? [evidence.event.id] : [],
-        now: Date.now()
+      // 证据是写入规程的一部分：没有依据事件，改对人的看法会被端口拒绝。
+      const r = writer.patchRelation(userId, patch, {
+        evidence: evidence.ok ? [evidence.event.id] : []
       });
-      if (!r.ok) return err(r.reason || '更新失败');
+      if (!r.ok) return err(r.message || '更新失败');
 
       return ok({
         userId,
@@ -187,8 +196,8 @@ export function registerMindTools() {
       required: ['reason']
     },
     async execute(ctx, args) {
-      const mind = mindOf(ctx);
-      if (!mind) return err('心智功能未启用');
+      const writer = writerOf(ctx);
+      if (!writer) return err('心智功能未启用');
       if (getConfig().mind?.allowSelfRevise === false) {
         return err('自我改写当前被管理员关闭（设置 → 心智）');
       }
@@ -204,8 +213,8 @@ export function registerMindTools() {
       if (Array.isArray(args?.preoccupations)) patch.preoccupations = args.preoccupations;
       if (!Object.keys(patch).length) return err('没有要改的内容');
 
-      const r = mind.reviseSelf(patch, { by: 'self', reason });
-      if (!r.ok) return err(r.reason || '改写被拒绝');
+      const r = writer.reviseSelf(patch, { reason });
+      if (!r.ok) return err(r.message || '改写被拒绝');
       return ok({
         version: r.self.version,
         narrativeChars: String(r.self.narrative || '').length,
@@ -231,6 +240,7 @@ export function registerMindTools() {
       }
     },
     async execute(ctx, args) {
+      // 这是只读工具：只在记忆里翻，不写回。写句柄与它无关。
       const mind = mindOf(ctx);
       if (!mind) return err('心智功能未启用');
 

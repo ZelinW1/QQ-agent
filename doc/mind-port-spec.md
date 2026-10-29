@@ -303,7 +303,7 @@ export function createWriterPort(mind, { now = Date.now } = {}) {
     'self.narrative': ['integrate.global', 'tool:self_revise'],
     'self.notes':     ['integrate.chat', 'integrate.global'],
     'relation':       ['tool:update_relation', 'integrate.chat'],
-    'event':          ['tool:remember_event', 'runtime.chat', 'runtime.free', 'integrate.global'],
+    'event':          ['tool:remember_event', 'tool:update_relation', 'runtime.chat', 'runtime.free', 'integrate.global'],
     'reflection':     ['integrate.chat', 'integrate.global'],
     'narrative':      ['tool:diary_write', 'integrate.global'],
     'intention':      ['runtime.free', 'integrate.chat', 'integrate.global', 'user'],

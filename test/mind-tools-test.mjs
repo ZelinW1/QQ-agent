@@ -24,6 +24,7 @@ const check = (cond, msg, detail = '') => {
 
 const { MindStore } = await import(src('src/mind/store.js'));
 const { registerMindTools } = await import(src('src/mind/tools.js'));
+const { createWriterPort } = await import(src('src/contract/mind-port.js'));
 const { getTool, getToolAvailability } = await import(src('src/tool-registry.js'));
 const { buildToolDefs } = await import(src('src/tools.js'));
 
@@ -38,11 +39,17 @@ const mkStore = (opts = {}) => new MindStore({
   getOptions: () => ({ seedInvariants: [], ...opts })
 });
 
-/** 工具的返回值是 { content, isError }，JSON 载荷需要解出来再看。 */
-const run = async (id, ctx, args) => {
+/**
+ * 跑一个工具。
+ *
+ * 写入句柄由这里注入 —— 生产环境里是管线按调用创建，`by` 固定成 `tool:<id>`。
+ * 第二个参数 `by` 允许测试伪造来源，用来验证"越权写不进去"。
+ */
+const run = async (id, ctx, args, by = `tool:${id}`) => {
   const tool = getTool(id);
   if (!tool) return { missing: true };
-  const r = await tool.execute(ctx, args);
+  const writer = createWriterPort(ctx.mind, { by });
+  const r = await tool.execute({ ...ctx, writer }, args);
   let data = null;
   try { data = JSON.parse(r.content); } catch { /* 文本型结果 */ }
   return { ...r, data };
@@ -182,5 +189,25 @@ console.log('\n=== 5. recall ===');
   check((await run('recall', ctx, { userId: 'abc' })).isError === true, '非数字 userId 被拒绝');
 }
 
+// ── 9. 写入规程：来源由管线注入，工具伪造不了 ───────────────────────────
+console.log('\n=== 9. 写入越权 ===');
+{
+  const mind = mkStore();
+  const ctx = mkCtx(mind);
+
+  const r1 = await run('remember_event', ctx, { text: '越权尝试' }, 'runtime.automate');
+  check(r1.isError === true, '未登记的来源不能写事件');
+  check(mind.queryEvents({ chatKey: CHAT }).length === 0, '被拒的写入没有落盘');
+
+  const r2 = await run('update_relation', ctx, { userId: '456', nickname: '越权' }, 'runtime.chat');
+  check(r2.isError === true, '会话运行时不能改对人的看法');
+
+  const r3 = await run('self_revise', ctx, { narrative: '越权改写', reason: '试试' }, 'tool:update_relation');
+  check(r3.isError === true && r3.content.includes('不能写'), '别的工具改不了自我');
+  check(mind.getSelf().version === 0, '自我没有被改动');
+
+  const r4 = await run('remember_event', ctx, { text: '正常记一笔' });
+  check(r4.data?.saved === true, '正常来源写入成功');
+}
 console.log(`\n心智工具：通过 ${pass}，失败 ${fail}`);
 if (fail > 0) process.exit(1);
