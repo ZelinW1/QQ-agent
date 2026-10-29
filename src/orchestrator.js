@@ -18,6 +18,8 @@ import {
   buildIntegratePrompt,
   parseIntegrateOutput,
   applyIntegrate,
+  buildNarrativePrompt,
+  parseNarrativeOutput,
   settleEnergy,
   resetDaily,
   collectCandidates,
@@ -116,6 +118,7 @@ export class Orchestrator {
     this.consolidating = new Set();    // 正在整理记忆的 chatKey
     this.reflecting = new Set();       // 正在反思的 chatKey（心智，防重入）
     this.integrating = false;          // 正在做全局整合（防重入）
+    this.narrating = false;            // 正在写叙事（防重入）
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
     this.tickBootTimer = null;         // 启动后的一次性心跳
     this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
@@ -1952,12 +1955,148 @@ export class Orchestrator {
         rawSummary: raw.slice(0, 300)
       });
 
+      // 整合完成之后顺手看一眼：是不是该写周记了、是不是该做月度兜底。
+      this.maybeNarrative();
       return { ok: true, empty: parsed.empty === true, applied, rejected };
     } finally {
       this.integrating = false;
     }
   }
 
+  /**
+   * 写一段叙事："这段时间我过成了什么样"。
+   *
+   * 材料不是原始事件，而是这一周里全局整合的产物 + 强事件 ——
+   * 已经沉淀过一遍的东西才值得再写一遍，否则叙事会退化成"这周发生了什么"的摘要。
+   *
+   * @param {object} [opts]
+   * @param {Function} [opts.chat] 测试注入
+   * @param {boolean} [opts.force] 忽略材料门槛（手动重写用）
+   */
+  async runNarrative({ chat = null, force = false } = {}) {
+    const store = this.mind;
+    if (!store) return { ok: false, reason: '心智未接入' };
+    if (this.narrating) return { ok: false, reason: '正在写叙事' };
+
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+    const nc = m.narrative || {};
+    if (nc.enabled === false) return { ok: false, reason: '叙事已关闭' };
+
+    const tick = store.getTick();
+    const now = Date.now();
+    const last = Number(tick.lastNarrativeAt) || 0;
+    const from = last || (now - Math.max(86400000, Number(nc.everyMs) || 7 * 24 * 3600 * 1000));
+    const reflections = store.listReflections({ limit: 60 })
+      .filter((r) => r.scope === 'global' && r.ok === true && Number(r.at) >= from);
+    const strong = store.listStrongSince(from);
+    if (!force && reflections.length + strong.length < Math.max(1, Number(nc.minMaterials) || 1)) {
+      return { ok: false, reason: 'no-material' };
+    }
+
+    const previous = store.latestNarrative?.()?.text || '';
+    const messages = buildNarrativePrompt({
+      botName: cfg.persona?.botName,
+      self: store.getSelf(),
+      period: { from, to: now },
+      reflections,
+      strong,
+      previous
+    });
+
+    this.narrating = true;
+    try {
+      const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
+      const raw = String(res?.message?.content ?? '');
+      const parsed = parseNarrativeOutput(raw);
+      if (!parsed.ok) return { ok: false, reason: parsed.reason };
+      if (parsed.empty) {
+        // 没写出东西也算成功：不重试，只是这段时间确实没什么可写的。
+        store.updateTick({ lastNarrativeAt: now });
+        return { ok: true, empty: true };
+      }
+
+      const r = store.appendNarrative({
+        title: parsed.data.title,
+        text: parsed.data.text,
+        source: 'integrate.global',
+        at: now,
+        period: { from, to: now },
+        materials: {
+          reflections: reflections.map((x) => x.id),
+          strong: strong.map((x) => `${x.kind}@${x.at}`)
+        }
+      });
+      if (!r.ok) return { ok: false, reason: r.reason };
+
+      // 标题只进反思日志（叙事文件保持"她自己写的那段话"这一件事）
+      store.updateTick({ lastNarrativeAt: now });
+      store.appendReflection({
+        scope: 'global', kind: 'narrative', at: now, ok: true, empty: false,
+        title: parsed.data.title || '',
+        period: { from, to: now },
+        usage: res?.usage || null
+      });
+      return { ok: true, narrative: r.narrative };
+    } finally {
+      this.narrating = false;
+    }
+  }
+
+  /** 该不该现在写一段叙事：满一周，或期间出现过强事件。 */
+  maybeNarrative() {
+    try {
+      if (!this.mind || this.narrating) return;
+      const cfg = getConfig();
+      const m = cfg.mind || {};
+      if (m.enabled !== true || (m.narrative || {}).enabled === false) return;
+      if (this.paused || this.aborted) return;
+      if (!cfg.api?.model || !cfg.api?.baseUrl) return;
+
+      const tick = this.mind.getTick();
+      const since = Number(tick.lastNarrativeAt) || 0;
+      const everyMs = Math.max(86400000, Number((m.narrative || {}).everyMs) || 7 * 24 * 3600 * 1000);
+      const dueByTime = Date.now() - since >= everyMs;
+      const dueByStrong = this.mind.listStrongSince(since).length > 0;
+      if (!dueByTime && !dueByStrong) return;
+
+      this.runNarrative()
+        .then((r) => { if (!r.ok && r.reason !== 'no-material') console.error('[mind] 叙事未完成:', r.reason); })
+        .catch((error) => console.error('[mind] 叙事失败:', error?.message ?? error));
+    } catch { /* 写作失败不影响聊天 */ }
+  }
+
+  /**
+   * 月度兜底：即使强事件一次都没命中，自我也按月更新一次。
+   *
+   * 这是"她不会因为没人吵架就永远不变"的保险，也是 selfNotes 不会因为
+   * 长期没触发整合而被挤掉的保证。
+   */
+  maybeMonthlySelf() {
+    try {
+      if (!this.mind || this.integrating) return;
+      const cfg = getConfig();
+      const m = cfg.mind || {};
+      if (m.enabled !== true || (m.integrate || {}).enabled === false) return;
+      if (this.paused || this.aborted) return;
+      if (!cfg.api?.model || !cfg.api?.baseUrl) return;
+
+      const self = this.mind.getSelf();
+      const updatedAt = Number(self.updatedAt) || 0;
+      if (!updatedAt) return;   // 还没出生过，交给出生仪式
+      if (Date.now() - updatedAt < 30 * 24 * 3600 * 1000) return;
+      if (!this.mind.undigestedSelfNotes().length) return;
+
+      this.integrating = true;
+      this.runIntegrate({ force: true })
+        .then((r) => {
+          // runIntegrate 内部也会置位；这里补一次兜底，避免异常路径卡住
+          if (!r.ok) console.error('[mind] 月度自我更新未完成:', r.reason);
+        })
+        .catch((error) => console.error('[mind] 月度自我更新失败:', error?.message ?? error))
+        .finally(() => { this.integrating = false; });
+    } catch { /* 兜底失败不影响聊天 */ }
+  }
   /**
    * 该不该现在做一次全局整合（可以反复调用，它自己判断）。
    *
@@ -2199,6 +2338,8 @@ export class Orchestrator {
       console.error('[mind] 心跳异常:', error);
       result = { results: [], skipped: 'error', error: String(error?.message ?? error) };
     }
+    // 每次心跳顺手检查一次月度兜底（它自己会判断该不该跑，平时只是一次比较）。
+    this.maybeMonthlySelf();
     this.#recordTick(now, result);
     return result;
   }

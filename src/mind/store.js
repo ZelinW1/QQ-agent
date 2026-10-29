@@ -278,6 +278,7 @@ function defaultTick() {
     // 全局整合的额度与冷却：独立于会话反思（两者抢同一份预算会让"她什么时候想自己"变得随机）。
     todayIntegrates: 0,
     lastIntegrateAt: 0,
+    lastNarrativeAt: 0,
     lastInteractionAt: 0,
     lastReflectAt: 0,
     // 上次**尝试**反思的时间（无论成败）。冷却用它而不是 lastReflectAt：
@@ -329,6 +330,7 @@ export class MindStore {
   #attemptsFile() { return path.join(this.root, 'attempts.jsonl'); }
   #intentionsFile() { return path.join(this.root, 'intentions.jsonl'); }
   #observationsFile() { return path.join(this.root, 'observations.jsonl'); }
+  #narrativesFile() { return path.join(this.root, 'narratives.jsonl'); }
 
   // ── 事件 ──
 
@@ -664,9 +666,27 @@ export class MindStore {
     }
     if (!added) return { ok: true, added: 0, self };
 
+    // 淘汰顺序：先丢"已消化"的最旧几条，再丢"未消化"的 —— 且要计数。
+    // 以前直接 slice(-20)，一个从没触发过整合的月里，最早的笔记会被无声抹掉，
+    // 而"被忘掉"本身应该是可观测的，不是悄悄发生。
+    let kept = next;
+    if (kept.length > LIMITS.selfNotes) {
+      // 按原顺序走一遍，先扔掉最旧的"已消化"条目（它们已经进了自我，留着只是归档）
+      let over = kept.length - LIMITS.selfNotes;
+      kept = kept.filter((n) => {
+        if (over > 0 && Number(n.digestedAt)) { over--; return false; }
+        return true;
+      });
+      if (kept.length > LIMITS.selfNotes) {
+        const droppedFresh = kept.length - LIMITS.selfNotes;
+        kept = kept.slice(-LIMITS.selfNotes);
+        self.selfNotesDropped = (Number(self.selfNotesDropped) || 0) + droppedFresh;
+      }
+    }
+
     const patched = {
       ...self,
-      selfNotes: next.slice(-LIMITS.selfNotes),
+      selfNotes: kept,
       updatedAt: at
     };
     writeJsonAtomic(this.#selfFile(), patched);
@@ -833,6 +853,44 @@ export class MindStore {
     };
     appendJsonl(this.#attemptsFile(), record);
     return record;
+  }
+
+  /**
+   * 写一段叙事。
+   *
+   * 叙事与反思的区别：反思是"这段时间我想到的"，按会话或全局触发、可能一天几次；
+   * 叙事是"这几周我过成了什么样"，按周或里程碑写，写的是已经沉淀下来的东西。
+   * 所以它只在 integrate 层产出，且**不覆盖**旧段落 —— 每一段都是她人生里的一段。
+   */
+  appendNarrative(input = {}) {
+    const at = Number(input.at) || Date.now();
+    const text = str(input.text, 2000);
+    if (!text) return { ok: false, reason: '叙事不能为空' };
+    const narrative = {
+      id: nowId('nr', at),
+      at,
+      title: str(input.title, 60),
+      text,
+      source: String(input.source || 'integrate.global'),
+      period: {
+        from: Number(input.period?.from) || 0,
+        to: Number(input.period?.to) || at
+      },
+      materials: {
+        reflections: Array.isArray(input.materials?.reflections) ? input.materials.reflections.slice(0, 40) : [],
+        strong: Array.isArray(input.materials?.strong) ? input.materials.strong.slice(0, 20) : []
+      }
+    };
+    appendJsonl(this.#narrativesFile(), narrative);
+    return { ok: true, narrative };
+  }
+
+  listNarratives({ limit = 10 } = {}) {
+    return tailJsonl(this.#narrativesFile(), limit);
+  }
+
+  latestNarrative() {
+    return this.listNarratives({ limit: 1 })[0] || null;
   }
 
   /** 只读：全部尝试（按写入顺序）。给 UI/统计用。 */

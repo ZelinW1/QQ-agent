@@ -244,6 +244,12 @@ console.log('\n=== 6b. 自我笔记 ===');
   check(createWriterPort(store, { by: 'runtime.chat' }).proposeIntention({ text: '越权' }).code === 'not_a_writer',
     '会话运行时不能自己挂意图（那是自由时刻的事）');
 
+  // 叙事：只有全局整合能写（按周/里程碑那一段）
+  const nw = createWriterPort(store, { by: 'integrate.global' });
+  const nr = nw.writeNarrative({ text: '这段时间我过成了这样。', period: { from: 0, to: 1 } });
+  check(nr.ok === true && nr.narrative.id.startsWith('nr_'), '全局整合可以写叙事');
+  check(createWriterPort(store, { by: 'tool:update_relation' }).writeNarrative({ text: '越权' }).code === 'not_a_writer',
+    '别的来源写不了叙事');
   const rt = createRuntimePort(store);
   check(rt.intentions().length === 1, '运行时能读到待办');
   const closed = iw.closeIntention(p1.intention.id, { status: 'done', note: '问过了' });

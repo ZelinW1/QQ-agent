@@ -547,8 +547,18 @@ export function createWriterPort(mind, opts = {}) {
       }
     },
 
-    /** 叙事（日记）：B 期才有存储。 */
-    writeNarrative() { return fail('not-implemented', '叙事在 B 期接入'); },
+    /** 叙事（日记）：按周/里程碑写的一段，追加而不是覆盖。 */
+    writeNarrative(input = {}) {
+      if (!allowed('narrative')) return deny('narrative');
+      try {
+        const r = mind.appendNarrative?.({ ...input, source: by }) || { ok: false, reason: '存储不支持叙事' };
+        if (!r?.ok) return fail('invalid_patch', r?.reason || '叙事写入失败');
+        return ok({ narrative: r.narrative });
+      } catch (error) {
+        log.error?.(`[mind-port] 写叙事失败：${error?.message ?? error}`);
+        return fail('store-error', '叙事写入失败');
+      }
+    },
 
     /**
      * 挂一条意图："我想做某件事，打算什么时候做"。

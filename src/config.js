@@ -388,6 +388,12 @@ export const DEFAULT_CONFIG = {
     reflectMaxRelations: 8,         // 单次反思最多带几份关系档案
     // 全局整合：把会话级攒下的自我笔记收拢成"她对自己的说法"。
     // 额度与冷却都独立于会话反思 —— 两者抢同一份预算会让"她什么时候想自己"变得随机。
+    // 叙事：按周或里程碑写"这段时间我过成了什么样"。与反思的区别见 design §4.1。
+    narrative: {
+      enabled: true,
+      everyMs: 7 * 24 * 3600 * 1000,  // 默认一周一段
+      minMaterials: 1                 // 至少有一条整合记录或强事件才写
+    },
     integrate: {
       enabled: true,
       maxPerDay: 2,                 // 一天最多两次（再多就该怀疑是不是在自我感动）

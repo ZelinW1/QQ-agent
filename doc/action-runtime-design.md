@@ -176,7 +176,7 @@ Reflection {
   id, ts, scope: 'chat' | 'global', chatKey?, materialsDigest,
   text, patches: []              // 这次反思实际改了什么
 }
-Narrative { id, ts, title, body, eventIds: [], reflectionIds: [], chats: [], tags: [], deleted }
+Narrative { id, at, title, text, period: { from, to }, materials: { reflections: [], strong: [] }, source }
 Intention {
   id, ts, createdBy: 'self' | 'reflection' | 'user',
   text, about: { chatKey?, userId? },
@@ -201,7 +201,7 @@ Intention {
 | `Relation` | `tool:update_relation`、`integrate.chat` | `evidence: [eventId]` | `version++` + `changelog`；**只补证据不算改动**（版本记的是"判断变了第几次"） |
 | `Event` | `tool:remember_event`、`tool:update_relation`（依据事件）、`runtime.chat`、`runtime.free`、`integrate.global` | `source` + `momentId` | 追加，按 id 去重 |
 | `Reflection` | `integrate.chat`、`integrate.global` | `materialsDigest` | 追加 |
-| `Narrative` | `tool:diary_write`、`integrate.global` | `eventIds` 或 `reflectionIds` | 软删 |
+| `Narrative` | `tool:diary_write`、`integrate.global` | 至少一条整合记录或强事件 | 追加，不覆盖旧段落 |
 | `Intention` | `runtime.free`、`integrate.*`、`user` | `reason` 或来源 | 状态机 |
 | `Observation` | 管线（自动） | `attemptId` | 状态机 |
 
@@ -1041,6 +1041,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R8 | B2 前半：会话反思不再改写自我，只产出 `selfNotes`；`#maybeReflect` 改走端口账本 | ✅ |
 | R9 | B2 后半：全局整合（L2b）落地（额度/冷却/材料/消化）；强事件机械判定接入 | ✅ |
 | R10 | B3 意图 / 尝试 / 观察三张表；冻结 `actions.jsonl`（不双写，读路径合并新旧） | ✅ |
+| R11 | B4 叙事（按周/里程碑）+ 月度自我兜底 + 笔记淘汰保护 | ✅ |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 
