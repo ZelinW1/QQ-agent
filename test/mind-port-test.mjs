@@ -203,8 +203,11 @@ console.log('\n=== 6. 写入端口：来源与规程 ===');
 
   check(updater.patchRelation('456', { nickname: '小王' }).code === 'needs_evidence',
     '改对人的看法必须带依据');
-  const r = updater.patchRelation('456', { nickname: '小王' }, { evidence: ['e1'] });
+  const r = updater.patchRelation('456', { nickname: '小王' }, { evidence: ['e1'], reason: '他让我这么叫' });
   check(r.ok === true && r.relation.nickname === '小王', '带依据后写入成功');
+  check(r.relation.version === 1, '写入后版本 +1');
+  check(r.relation.changelog?.at(-1)?.by === 'tool:update_relation', 'changelog 记下注入的来源');
+  check(r.relation.changelog?.at(-1)?.reason === '他让我这么叫', 'changelog 记下理由');
 
   check(updater.reviseSelf({ narrative: '我最近在学着少说两句。' }, { reason: '想了很久' }).code === 'not_a_writer',
     '更新关系不能改写自我');

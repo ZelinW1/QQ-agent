@@ -135,6 +135,11 @@ console.log('\n=== 3. update_relation（关系必须有源头）===');
   const ev = store.queryEvents({ chatKey: CHAT, actorId: '456' });
   check(ev.length === 1 && ev[0].text.includes('能聊'), '证据事件内容是那句 reason');
 
+  // 关系的 changelog 要能回答"谁改的、为什么"：来源由管线注入，理由来自工具参数。
+  const log = rel.changelog.at(-1) || {};
+  check(log.by === 'tool:update_relation', 'changelog 记下来源');
+  check(log.reason === '聊过几次，感觉是个能聊的人', 'changelog 记下理由');
+
   check((await run('update_relation', ctx, { userId: '小王', trust: 60 })).isError === true, '非数字 userId 被拒绝');
   check((await run('update_relation', ctx, { userId: '789', trust: 60 })).isError === true, '没出现过的人被拒绝（防编造）');
   check((await run('update_relation', ctx, { userId: '456' })).isError === true, '没有任何字段时拒绝');

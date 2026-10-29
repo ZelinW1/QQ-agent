@@ -164,7 +164,7 @@ Self {
 Relation {
   userId, names: [], nickname, stage, trust, warmth,
   knownFor: [], tender: [], recentSummary, confidence, evidence: [],
-  version, changelog: [], updatedAt          // ← 旧数据没有，B1 补
+  version, changelog: [], updatedAt          // B1 已补：老数据读取时按 0 / [] 兜底
 }
 Event {
   id, ts, chatKey, actorId, actorName, kind, text,
@@ -198,7 +198,7 @@ Intention {
 | `Self.narrative/mood/preoccupations` | `integrate.global`、`tool:self_revise` | `momentId` + `reason` | `version++` + `changelog` |
 | `Self.selfNotes` | `integrate.chat`、`integrate.global` | `momentId` | 追加，上限 20 滚动 |
 | `Self.invariants` | 无（仅配置） | — | 运行时只读 |
-| `Relation` | `tool:update_relation`、`integrate.chat` | `evidence: [eventId]` | `version++` + `changelog` |
+| `Relation` | `tool:update_relation`、`integrate.chat` | `evidence: [eventId]` | `version++` + `changelog`；**只补证据不算改动**（版本记的是"判断变了第几次"） |
 | `Event` | `tool:remember_event`、`tool:update_relation`（依据事件）、`runtime.chat`、`runtime.free`、`integrate.global` | `source` + `momentId` | 追加，按 id 去重 |
 | `Reflection` | `integrate.chat`、`integrate.global` | `materialsDigest` | 追加 |
 | `Narrative` | `tool:diary_write`、`integrate.global` | `eventIds` 或 `reflectionIds` | 软删 |
@@ -1037,6 +1037,8 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R5 | A1-4 控制台改走 AdminPort；`new MindStore` 收口到 app.js + 静态守门 | ✅ |
 | R6 | A1-5 收尾：`createApp({ mind: null })` 测试缝 + 端到端守门（没有心智时对话照跑、工具消失、接口不 500） | ✅ |
 | —— | **A 期收尾**：chat 侧仍有两处直连（`#buildMindContext` 的采集、`#maybeReflect` 的阈值），它们跟着 `materials.js` / 整合阶梯在 B、C 期一起搬 | 已知 |
+| R7 | B1 关系版本化：`version` + `changelog`（来源、理由、依据），只补证据不升版本 | ✅ |
+| R8 | B2 整合阶梯：L2a/L2b 两级、Self 写入收窄到全局整合、强事件接入 | 未开始 |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 

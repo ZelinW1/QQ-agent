@@ -212,9 +212,19 @@ function defaultSelf() {
   };
 }
 
+/** 关系的"判断"字段：版本与 changelog 只跟这些走，证据/置信度不算。 */
+const JUDGMENT_KEYS = ['nickname', 'stage', 'trust', 'warmth', 'knownFor', 'tender', 'recentSummary', 'openLoops', 'names', 'contexts'];
+function judgmentOf(rel) {
+  return JSON.stringify(JUDGMENT_KEYS.map((k) => (rel?.[k] ?? null)));
+}
+
 function defaultRelation(userId) {
   return {
     userId: String(userId ?? ''),
+    // 关系的版本与改写记录：与 self 同口径（谁改的、为什么、依据是什么）。
+    // 老数据没有这两个字段，读取时按 0 / [] 兜底，第一次写入就变 1。
+    version: 0,
+    changelog: [],
     names: [],
     stage: 'stranger',
     trust: 50,
@@ -454,13 +464,16 @@ export class MindStore {
    * @param {number|null} [opts.confidence]
    * @returns {{ok:boolean, relation?:object, clamp?:string[], reason?:string}}
    */
-  patchRelation(userId, patch = {}, { evidence = [], confidence = null, now = Date.now() } = {}) {
+  patchRelation(userId, patch = {}, {
+    evidence = [], confidence = null, now = Date.now(), by = 'unknown', reason = ''
+  } = {}) {
     const id = String(userId ?? '').trim();
     if (!/^\d{1,15}$/.test(id)) return { ok: false, reason: 'userId 必须是数字 QQ 号' };
     if (!isPlainObject(patch)) return { ok: false, reason: 'patch 必须是对象' };
 
     const rel = this.getRelation(id);
     const clampNotes = [];
+    const beforeJudgment = judgmentOf(rel);
 
     if (patch.nickname !== undefined) rel.nickname = str(patch.nickname, LIMITS.nickname);
 
@@ -522,9 +535,25 @@ export class MindStore {
       rel.confidence = Math.min(1, (Number(rel.confidence) || 0.3) + 0.05 * ev.length);
     }
 
+    // 只记"看法真的变了"的调用：重复写同一个昵称、或者只是补一条证据，
+    // 都不该把版本刷到两位数，也不该在 changelog 里留下空记录。
+    // 版本记的是"她对他的判断变了第几次"，不是"这个文件被写过几次"。
+    const changed = judgmentOf(rel) !== beforeJudgment;
     rel.updatedAt = Number(now) || Date.now();
+    if (changed) {
+      rel.version = (Number(rel.version) || 0) + 1;
+      rel.changelog = [
+        ...(Array.isArray(rel.changelog) ? rel.changelog : []),
+        {
+          at: rel.updatedAt,
+          by: str(by, 40) || 'unknown',
+          reason: str(reason, LIMITS.reason),
+          evidence: ev.slice(-5)
+        }
+      ].slice(-LIMITS.changelog);
+    }
     writeJsonAtomic(this.#relationFile(id), rel);
-    return { ok: true, relation: rel, clamp: clampNotes };
+    return { ok: true, relation: rel, clamp: clampNotes, changed };
   }
 
   listRelations() {

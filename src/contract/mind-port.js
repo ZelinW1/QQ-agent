@@ -505,7 +505,10 @@ export function createWriterPort(mind, opts = {}) {
         return fail('needs_evidence', '改对人的看法必须给依据（事件 id）');
       }
       try {
-        const r = mind.patchRelation(userId, patch, { evidence, now: Date.now() });
+        // 来源与理由一路带到 store：关系的 changelog 要能回答"谁改的、为什么"。
+        const r = mind.patchRelation(userId, patch, {
+          evidence, now: Date.now(), by, reason: String(meta.reason || '').trim()
+        });
         if (!r?.ok) return fail('invalid_patch', r?.reason || '关系更新失败');
         return ok({ relation: r.relation, clamp: r.clamp || [] });
       } catch (error) {

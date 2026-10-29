@@ -189,6 +189,33 @@ console.log('\n=== 6. 关系：未完结事项与证据 ===');
   check(listed.length === 1 && listed[0].userId === '456', 'listRelations 可枚举');
 }
 
+// ── 6b. 关系：版本与改写记录 ───────────────────────────────────────────
+console.log('\n=== 6b. 关系：版本与改写记录 ===');
+{
+  const store = mk();
+  const fresh = store.getRelation('456');
+  check(fresh.version === 0 && Array.isArray(fresh.changelog), '新关系的版本是 0');
+
+  const r1 = store.patchRelation('456', { nickname: '小王' }, {
+    evidence: ['e_1'], by: 'tool:update_relation', reason: '他让我这么叫'
+  });
+  check(r1.changed === true, '真的改了 → changed=true');
+  check(r1.relation.version === 1, '第一次改写 → 版本 1');
+  const log1 = r1.relation.changelog[0];
+  check(log1.by === 'tool:update_relation', 'changelog 记下来源');
+  check(log1.reason === '他让我这么叫', 'changelog 记下理由');
+  check(Array.isArray(log1.evidence) && log1.evidence[0] === 'e_1', 'changelog 记下依据事件');
+
+  const r2 = store.patchRelation('456', { nickname: '小王' }, { evidence: ['e_2'], by: 'tool:update_relation' });
+  check(r2.changed === false, '同一个昵称再写一次不算改动');
+  check(r2.relation.version === 1, '没改动就不升版本（否则版本号会被刷爆）');
+  check(r2.relation.changelog.length === 1, '也没留下空记录');
+
+  const r3 = store.patchRelation('456', { warmth: 60 }, { evidence: ['e_3'], by: 'integrate.chat', reason: '聊得不错' });
+  check(r3.relation.version === 2, '第二次真正的改写 → 版本 2');
+  check(r3.relation.changelog.at(-1).by === 'integrate.chat', '第二个来源也记得住');
+  check(r3.relation.changelog.at(-1).reason === '聊得不错', '第二个理由也记得住');
+}
 // ── 7. 自我：版本、留痕、底线 ───────────────────────────────────────────
 console.log('\n=== 7. 自我：版本、留痕、底线 ===');
 {

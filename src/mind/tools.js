@@ -162,7 +162,8 @@ export function registerMindTools() {
 
       // 证据是写入规程的一部分：没有依据事件，改对人的看法会被端口拒绝。
       const r = writer.patchRelation(userId, patch, {
-        evidence: evidence.ok ? [evidence.event.id] : []
+        evidence: evidence.ok ? [evidence.event.id] : [],
+        reason
       });
       if (!r.ok) return err(r.message || '更新失败');
 

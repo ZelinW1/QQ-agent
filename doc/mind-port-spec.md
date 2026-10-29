@@ -327,8 +327,11 @@ export function createWriterPort(mind, { now = Date.now } = {}) {
      * @param {string} userId
      * @param {object} patch
      * @param {{ evidence: string[], reason?: string }} meta   ← **没有 by**
-     * @returns {{ ok, relation?, clamp?, code?, message? }}
+     * @returns {{ ok, relation?, clamp?, changed?, code?, message? }}
      *   code: 'not_a_writer' | 'needs_evidence' | 'invalid_patch'
+     *
+     * 来源与理由会写进 relation 的 changelog（`version++` 只在"判断真的变了"时发生，
+     * 只补一条证据不算改动）。
      */
     patchRelation(userId, patch, meta) { /* … */ },
 
