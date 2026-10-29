@@ -35,6 +35,13 @@ export {
   applyReflection
 } from './reflect.js';
 
+// 全局整合：会话级反思的上一层（唯一能自动改写自我的地方）
+export {
+  buildIntegratePrompt,
+  parseIntegrateOutput,
+  applyIntegrate
+} from './integrate.js';
+
 export {
   settleEnergy,
   resetDaily,

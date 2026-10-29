@@ -15,6 +15,9 @@ import {
   buildReflectPrompt,
   parseReflectOutput,
   applyReflection,
+  buildIntegratePrompt,
+  parseIntegrateOutput,
+  applyIntegrate,
   settleEnergy,
   resetDaily,
   collectCandidates,
@@ -112,6 +115,7 @@ export class Orchestrator {
     this.verifiedWakes = new Set();    // 本轮 wake 由 onIncoming 触发判定排定的 chatKey（区别于 drain 等机械重排）
     this.consolidating = new Set();    // 正在整理记忆的 chatKey
     this.reflecting = new Set();       // 正在反思的 chatKey（心智，防重入）
+    this.integrating = false;          // 正在做全局整合（防重入）
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
     this.tickBootTimer = null;         // 启动后的一次性心跳
     this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
@@ -1850,6 +1854,8 @@ export class Orchestrator {
       lastReflectAt: newestTs,
       lastReflectAttemptAt: now
     });
+    // 反思成功之后顺手看一眼：笔记攒够了没有。整合自己会再判额度与冷却。
+    this.maybeIntegrateGlobal();
     store.appendReflection({
       scope: 'chat',
       chatKey, at: now, ok: true, empty: parsed.empty === true,
@@ -1865,6 +1871,133 @@ export class Orchestrator {
     return { ok: true, empty: parsed.empty === true, applied, rejected };
   }
 
+  /**
+   * 全局整合：把会话级攒下的自我笔记，收拢成"她对自己的说法"。
+   *
+   * 与 reflectForChat 的分工：
+   *   · 会话反思看**一个会话**，只能改关系、只能记笔记；
+   *   · 全局整合看**所有会话沉淀的笔记**，是唯一能自动改写自我的地方。
+   *
+   * 触发时机由 maybeIntegrateGlobal 决定；本函数只管"现在跑一次"。
+   *
+   * @param {object} [opts]
+   * @param {Function} [opts.chat] 测试注入：chat(messages)
+   * @param {boolean} [opts.force] 忽略额度/材料门槛（仅测试与手动触发用）
+   */
+  async runIntegrate({ chat = null, force = false } = {}) {
+    const store = this.mind;
+    if (!store) return { ok: false, reason: '心智未接入' };
+    if (this.integrating) return { ok: false, reason: '正在整合' };
+
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+    const ic = m.integrate || {};
+    if (ic.enabled === false) return { ok: false, reason: '整合已关闭' };
+
+    const tick = store.getTick();
+    const today = todayKey();
+    const used = tick.today === today ? (Number(tick.todayIntegrates) || 0) : 0;
+    const notes = typeof store.undigestedSelfNotes === 'function' ? store.undigestedSelfNotes() : [];
+    if (!force) {
+      if (used >= Math.max(1, Number(ic.maxPerDay) || 2)) return { ok: false, reason: 'quota' };
+      const cooldown = Number.isFinite(Number(ic.cooldownMs)) ? Number(ic.cooldownMs) : 21600000;
+      if (Date.now() - (Number(tick.lastIntegrateAt) || 0) < Math.max(0, cooldown)) {
+        return { ok: false, reason: 'cooldown' };
+      }
+      if (notes.length < Math.max(1, Number(ic.minNotes) || 3)) return { ok: false, reason: 'no-material' };
+    }
+    if (!notes.length) return { ok: false, reason: 'no-material' };
+
+    const reflections = store.listReflections({ limit: 30 })
+      .filter((r) => r.scope === 'chat' && r.ok === true);
+    const messages = buildIntegratePrompt({
+      botName: cfg.persona?.botName,
+      self: store.getSelf(),
+      notes,
+      reflections,
+      relations: store.listRelations()
+    });
+
+    this.integrating = true;
+    try {
+      const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
+      const raw = String(res?.message?.content ?? '');
+      const parsed = parseIntegrateOutput(raw);
+      const now = Date.now();
+
+      if (!parsed.ok) {
+        store.appendReflection({
+          scope: 'global', at: now, ok: false, reason: parsed.reason,
+          noteCount: notes.length, rawSummary: raw.slice(0, 300)
+        });
+        return { ok: false, reason: parsed.reason };
+      }
+
+      const { applied, rejected } = parsed.empty
+        ? { applied: { self: false, digested: 0 }, rejected: [] }
+        : applyIntegrate({ store, output: parsed.data, noteIds: notes.map((n) => n.id), now });
+
+      store.updateTick({
+        today,
+        todayIntegrates: (tick.today === today ? (Number(tick.todayIntegrates) || 0) : 0) + 1,
+        lastIntegrateAt: now
+      });
+      store.appendReflection({
+        scope: 'global', at: now, ok: true, empty: parsed.empty === true,
+        noteCount: notes.length,
+        produced: applied,
+        rejected: rejected.length,
+        rejectedDetail: rejected.slice(0, 10),
+        usage: res?.usage || null,
+        rawSummary: raw.slice(0, 300)
+      });
+
+      return { ok: true, empty: parsed.empty === true, applied, rejected };
+    } finally {
+      this.integrating = false;
+    }
+  }
+
+  /**
+   * 该不该现在做一次全局整合（可以反复调用，它自己判断）。
+   *
+   * 公开而非私有：它会从 reflectForChat 里被调用，而测试用
+   * Object.create(Orchestrator.prototype) 造最小实例 —— 私有方法在那种实例上
+   * 会因为 brand check 直接抛错。这个方法本身不碰私有字段，正好可以不私有。
+   *
+   * 设计 §4.3 的三个入口，满足任一：
+   *   · 会话反思累计到阈值（默认 12 条）；
+   *   · 期间出现过强事件（冲突 / 告别 / 承诺 / 关系回退）；
+   *   · 距上次整合超过一天，且手上确实攒着笔记。
+   * 额度与冷却由 runIntegrate 统一把守，这里只判断"有没有理由起来干活"。
+   */
+  maybeIntegrateGlobal() {
+    try {
+      if (!this.mind || this.integrating) return;
+      const cfg = getConfig();
+      const m = cfg.mind || {};
+      if (m.enabled !== true || (m.integrate || {}).enabled === false) return;
+      if (this.paused || this.aborted) return;
+      if (!cfg.api?.model || !cfg.api?.baseUrl) return;
+
+      const ic = m.integrate || {};
+      const notes = this.mind.undigestedSelfNotes();
+      const tick = this.mind.getTick();
+      const since = Number(tick.lastIntegrateAt) || 0;
+      const strong = this.mind.listStrongSince(since);
+      const chats = this.mind.listReflections({ limit: 40 })
+        .filter((r) => r.scope === 'chat' && r.ok === true && Number(r.at) > since).length;
+
+      const enoughChats = chats >= Math.max(1, Number(ic.afterChatReflections) || 12);
+      const daily = !since || (Date.now() - since) > 24 * 3600 * 1000;
+      const dailyDue = daily && notes.length >= Math.max(1, Number(ic.minNotes) || 3);
+      if (!enoughChats && !strong.length && !dailyDue) return;
+
+      this.runIntegrate()
+        .then((r) => { if (!r.ok && r.reason !== 'quota' && r.reason !== 'cooldown') console.error('[mind] 全局整合未完成:', r.reason); })
+        .catch((error) => console.error('[mind] 全局整合失败:', error?.message ?? error));
+    } catch { /* 整合失败不该影响聊天与心跳 */ }
+  }
   /**
    * 出生仪式：由主人给的种子生成身份草案。
    *

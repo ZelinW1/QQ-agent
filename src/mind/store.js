@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR, getConfig } from '../config.js';
+import { detectStrongText, stageRegressed, STRONG_KINDS } from './strong.js';
 
 const MIND_DIR = path.join(DATA_DIR, 'mind');
 
@@ -256,6 +257,9 @@ function defaultTick() {
     todayProactive: 0,
     todayDecisions: 0,
     todayReflections: 0,
+    // 全局整合的额度与冷却：独立于会话反思（两者抢同一份预算会让"她什么时候想自己"变得随机）。
+    todayIntegrates: 0,
+    lastIntegrateAt: 0,
     lastInteractionAt: 0,
     lastReflectAt: 0,
     // 上次**尝试**反思的时间（无论成败）。冷却用它而不是 lastReflectAt：
@@ -356,6 +360,16 @@ export class MindStore {
       // 摘要事件用它溯源到被压缩的原事件。必须写进磁盘（否则重启后溯源丢失）。
       summaryOf: strList(input.summaryOf, { maxItems: 50, maxLen: 60 })
     };
+
+    // 强事件在这里判定（纯文本规则，见 strong.js）。模型自己也可以标 strong，
+    // 但那是加分项，不是唯一入口——否则她连"这次很重要"都想不起来写。
+    const strongHint = detectStrongText(text);
+    if (strongHint || input.strong === true) {
+      event.strong = true;
+      event.strongKind = STRONG_KINDS.includes(input.strongKind)
+        ? input.strongKind
+        : (strongHint?.kind || 'milestone');
+    }
 
     shard.events.push(event);
     this.#writeShard(file, shard.events);
@@ -479,6 +493,7 @@ export class MindStore {
     const rel = this.getRelation(id);
     const clampNotes = [];
     const beforeJudgment = judgmentOf(rel);
+    const stageBefore = rel.stage;
 
     if (patch.nickname !== undefined) rel.nickname = str(patch.nickname, LIMITS.nickname);
 
@@ -544,6 +559,13 @@ export class MindStore {
     // 都不该把版本刷到两位数，也不该在 changelog 里留下空记录。
     // 版本记的是"她对他的判断变了第几次"，不是"这个文件被写过几次"。
     const changed = judgmentOf(rel) !== beforeJudgment;
+    // 关系阶段往下掉，本身就是一次强事件（比任何文本规则都可靠）。
+    const regressed = stageRegressed(stageBefore, rel.stage, STAGE_LEVEL);
+    if (regressed) {
+      rel.strongAt = Number(now) || Date.now();
+      rel.strongKind = 'stage-regressed';
+    }
+
     rel.updatedAt = Number(now) || Date.now();
     if (changed) {
       rel.version = (Number(rel.version) || 0) + 1;
@@ -558,7 +580,7 @@ export class MindStore {
       ].slice(-LIMITS.changelog);
     }
     writeJsonAtomic(this.#relationFile(id), rel);
-    return { ok: true, relation: rel, clamp: clampNotes, changed };
+    return { ok: true, relation: rel, clamp: clampNotes, changed, stageRegressed: regressed };
   }
 
   listRelations() {
@@ -627,6 +649,54 @@ export class MindStore {
     };
     writeJsonAtomic(this.#selfFile(), patched);
     return { ok: true, added, self: patched };
+  }
+
+  /** 还没被整合消化的自我笔记（全局整合的材料）。 */
+  undigestedSelfNotes() {
+    return this.getSelf().selfNotes.filter((n) => !Number(n.digestedAt));
+  }
+
+  /**
+   * 标记笔记已被消化。
+   *
+   * 不物理删除：原文留着才能回答"她当时为什么这么想"。消化只是不再进入下一次材料。
+   * @param {string[]} ids
+   */
+  markSelfNotesDigested(ids, now = Date.now()) {
+    const want = new Set((Array.isArray(ids) ? ids : []).map(String));
+    if (!want.size) return { ok: true, marked: 0 };
+    const self = this.getSelf();
+    let marked = 0;
+    const next = self.selfNotes.map((n) => {
+      if (!want.has(String(n.id)) || Number(n.digestedAt)) return n;
+      marked++;
+      return { ...n, digestedAt: Number(now) || Date.now() };
+    });
+    if (marked) writeJsonAtomic(this.#selfFile(), { ...self, selfNotes: next });
+    return { ok: true, marked };
+  }
+
+  /**
+   * 最近一段时间里的强事件（事件上的 strong 标记 + 关系阶段回退）。
+   * @param {number} since
+   */
+  listStrongSince(since = 0) {
+    const from = Number(since) || 0;
+    const out = [];
+    try {
+      for (const ev of this.queryEvents({ limit: 500 })) {
+        if (ev.strong === true && Number(ev.ts) >= from) {
+          out.push({ kind: ev.strongKind || 'milestone', at: Number(ev.ts), ref: ev.id });
+        }
+      }
+    } catch { /* 读取失败就当没有强事件 */ }
+    for (const rel of this.listRelations()) {
+      if (Number(rel.strongAt) >= from && rel.strongAt) {
+        out.push({ kind: rel.strongKind || 'stage-regressed', at: Number(rel.strongAt), ref: rel.userId });
+      }
+    }
+    out.sort((a, b) => a.at - b.at);
+    return out;
   }
 
   /**
