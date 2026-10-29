@@ -29,11 +29,12 @@ export const WRITERS = Object.freeze({
     'tool:update_relation',
     'runtime.chat',
     'runtime.free',
+    'runtime.automate',
     'integrate.global'
   ],
   reflection: ['integrate.chat', 'integrate.global'],
   narrative: ['tool:diary_write', 'integrate.global'],
-  intention: ['runtime.free', 'integrate.chat', 'integrate.global', 'user']
+  intention: ['runtime.free', 'runtime.automate', 'integrate.chat', 'integrate.global', 'user']
 });
 
 /** bodyApply 接受的键。白名单，未识别的键直接报错——不静默忽略。 */

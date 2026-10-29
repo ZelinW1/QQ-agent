@@ -8,7 +8,7 @@
 //
 // 同一会话（群/私聊）同时最多一个运行；运行期间新消息只写 JSON（未读），不叠加触发。
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
-import { getConfig } from './config.js';
+import { getConfig, DATA_DIR } from './config.js';
 import { resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
 // 领域函数（提示词、反思/整合、动作表、作息判定…）**不在模块顶层静态 import**。
 //
@@ -39,6 +39,8 @@ import { createRuntimePort, createWriterPort, createAdminPort } from './contract
 import { createPipeline } from './runtime/pipeline.js';
 import { buildFreeMaterials, renderMaterials } from './runtime/materials.js';
 import { drainDueObservations } from './runtime/observe.js';
+import { createAutomationStore, dueTasks } from './runtime/automation-store.js';
+import { runAutomation } from './runtime/automator.js';
 
 /**
  * 正文像不像"本来就该发出去的话"。
@@ -61,7 +63,7 @@ function looksLikeUnsentReply(text) {
 }
 
 export class Orchestrator {
-  constructor({ store, memory, stickers, sender, sessions, onebot, emit = null, reminders = null, videoReader = null, mind = null }) {
+  constructor({ store, memory, stickers, sender, sessions, onebot, emit = null, reminders = null, videoReader = null, mind = null, automationDir = null }) {
     this.store = store;
     this.memory = memory;
     this.stickers = stickers;
@@ -108,6 +110,8 @@ export class Orchestrator {
     this.reflecting = new Set();       // 正在反思的 chatKey（心智，防重入）
     this.integrating = false;          // 正在做全局整合（防重入）
     this.narrating = false;            // 正在写叙事（防重入）
+    // 自动化任务表：与心智数据同级，但**不属于领域**（它是配置，不是她的经历）。
+    this.automations = createAutomationStore({ dir: automationDir || DATA_DIR });
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
     this.tickBootTimer = null;         // 启动后的一次性心跳
     this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
@@ -2320,6 +2324,9 @@ export class Orchestrator {
    */
   async tickOnce(opts = {}) {
     const now = Number(opts?.now) || Date.now();
+    // 自动化先跑：它不受心智开关影响（没有内心生活的人也照样要发定时消息），
+    // 失败也不会挡住后面的心跳。
+    try { await this.runDueAutomations({ now }); } catch (error) { console.error('[automate] 调度失败:', error?.message ?? error); }
     let result;
     try {
       result = await this.#runTick({ ...opts, now });
@@ -2447,6 +2454,84 @@ export class Orchestrator {
     } catch { return ''; }
   }
 
+  /**
+   * 跑一次到点的自动化任务。
+   *
+   * 与自由时刻**完全独立**：不看 asleep / energy / 决策次数（设计 §8）。
+   * 但共用同一条管线：开关、参数、执行、审计，一步不少 —— 自动化是最该被约束的那块，
+   * 因为它是"配置一次、之后无人看管"的。
+   */
+  async runDueAutomations({ now = Date.now(), limit = 3 } = {}) {
+    const summary = { ran: 0, results: [] };
+    if (typeof this.automations?.list !== 'function') return summary;
+
+    const due = dueTasks(this.automations.list(), now, limit);
+    for (const task of due) {
+      let outcome;
+      try {
+        outcome = await runAutomation({ task, execute: (t) => this.execAutomation(t, now) });
+      } catch (error) {
+        outcome = { ok: false, code: 'error', message: String(error?.message ?? error) };
+      }
+      this.automations.markRun(task.id, { ok: outcome.ok === true, error: outcome.message || '', at: now });
+      summary.ran += 1;
+      summary.results.push({
+        id: task.id,
+        name: task.name,
+        ok: outcome.ok === true,
+        code: outcome.code || '',
+        message: outcome.message || ''
+      });
+      console.log(`[automate] ${task.name} → ${outcome.ok ? 'ok' : (outcome.message || outcome.code || 'failed')}`);
+    }
+    return summary;
+  }
+
+  /**
+   * 执行一个自动化任务的动作。
+   *
+   * 动作集刻意只留三个：发消息、记事件、挂意图。
+   * 每多一个动作，就多一处"无人看管时可能做错事"的地方。
+   */
+  async execAutomation(task = {}, now = Date.now()) {
+    const action = String(task.action || '');
+    const args = task.args && typeof task.args === 'object' ? task.args : {};
+    const target = String(task.chatKey || args.chatKey || '').trim();
+
+    if (action === 'send') {
+      const text = String(args.text || '').trim();
+      if (!target) return { ok: false, reason: '没有目标会话' };
+      if (!text) return { ok: false, reason: '没有要发的内容' };
+      const r = await this.sender.sendTextBatch(target, [text], {});
+      const sent = Array.isArray(r?.sent) ? r.sent.length : 0;
+      if (!sent) return { ok: false, reason: r?.failed?.[0]?.error || '发送失败' };
+      return { ok: true, sent };
+    }
+
+    if (action === 'remember') {
+      const text = String(args.text || '').trim();
+      if (!text) return { ok: false, reason: '没有要记的内容' };
+      const writer = createWriterPort(this.mind, { by: 'runtime.automate' });
+      const r = writer.appendEvent({ chatKey: target, actorId: 'self', text: text.slice(0, 500), kind: 'observation' });
+      return r?.ok ? { ok: true, eventId: r.event?.id || '' } : { ok: false, reason: r?.message || '写入失败' };
+    }
+
+    if (action === 'plan') {
+      const text = String(args.text || '').trim();
+      if (!text) return { ok: false, reason: '没有要安排的事' };
+      const hours = Number(args.inHours);
+      const writer = createWriterPort(this.mind, { by: 'runtime.automate' });
+      const r = writer.proposeIntention({
+        text: text.slice(0, 160),
+        dueAt: now + Math.round((Number.isFinite(hours) ? Math.min(24 * 30, Math.max(0.25, hours)) : 24) * 3600000),
+        chatKey: target,
+        kind: 'delayed_check'
+      });
+      return r?.ok ? { ok: true, intentionId: r.intention?.id || '' } : { ok: false, reason: r?.message || '写入失败' };
+    }
+
+    return { ok: false, reason: `不认识的自动化动作：${action}` };
+  }
   async #runGlobalTick({ now = Date.now(), chat = null } = {}) {
     const cfg = getConfig();
     const m = cfg.mind || {};

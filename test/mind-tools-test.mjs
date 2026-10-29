@@ -200,7 +200,9 @@ console.log('\n=== 9. 写入越权 ===');
   const mind = mkStore();
   const ctx = mkCtx(mind);
 
-  const r1 = await run('remember_event', ctx, { text: '越权尝试' }, 'runtime.automate');
+  // 用一个**确实没登记**的来源：'user' 是管理侧来源，不是事件的写者。
+  // （别再用 runtime.automate —— 它从 D2 起真的能写事件了。）
+  const r1 = await run('remember_event', ctx, { text: '越权尝试' }, 'user');
   check(r1.isError === true, '未登记的来源不能写事件');
   check(mind.queryEvents({ chatKey: CHAT }).length === 0, '被拒的写入没有落盘');
 

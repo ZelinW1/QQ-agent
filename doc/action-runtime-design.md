@@ -144,6 +144,10 @@ src/mind/         （既有，按层整理）
 src/contract/mind-port.js     ✅ RuntimePort / WriterPort / AdminPort + 空实现
 src/runtime/pipeline.js       ✅ 八步管线（resolve…audit，超时与身份复核）
 src/runtime/materials.js      ✅ 自由时刻素材（self / 叙事标题 / 到期意图）
+src/runtime/observe.js        ✅ 观察队列的机械判定（不调模型）
+src/runtime/cron.js           ✅ 五段 cron 求值（无依赖）
+src/runtime/automation-store.js ✅ 任务表（JSON，含失败退避）
+src/runtime/automator.js      ✅ 任务执行（走同一条八步管线）
 ```
 
 没有建的：`tool-registry` 迁入、`permissions`、`capability-bus`、`nested`、
@@ -1064,6 +1068,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R14 | C3 收口：编排器零 `this.mind.xxx()` 直连（读走 RuntimePort、写走 recordAttempt/bodyApply、迁移走 AdminPort）+ 静态守门 | ✅ |
 | R15 | C4 领域缺席守门：编排器/装配根/工具注册全部改为**动态加载 + 降级**，`QQ_AGENT_NO_MIND=1` 等价于"删掉 `src/mind/`" | ✅ |
 | R16 | D1 延时意图：`plan` 动作挂意图、到期进候选并提前唤醒、做成即了结、逾期 7 天作废；观察队列改为机械判定消费 | ✅ |
+| R17 | D2 自动化：cron 求值、任务表、独立调度（不看体力/作息/决策次数）、失败 3 次自动停用 | ✅ |
 | —— | **A 期硬指标已达成**：没有领域模块时对话照跑、工具表不含心智工具、控制台不 500（`test/mind-deleted-test.mjs` 6 项） | ✅ |
 
 **本期未做（设计里写了、代码里没有）**
@@ -1078,7 +1083,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | 启动对账的完整版 | §9.4 | 已做结算/跨天/心跳兜底；"作废过期观察""补一次整合""boot 记录"随观察队列启用一起做 |
 | 强事件"沉默 30 天回归" | §4.3.1 | 需要材料层记"某人上次出现时间"，随 C 期材料一起 |
 | 参数三档预设（安静/标准/活跃） | §13.1 | 配置项已就位，预设只是 UI 与一个 map，等界面改版 |
-| 自动化 / cron 调度 | §8 | D 期 |
+| ~~自动化 / cron 调度~~ | §8 | **已做（R17）**：见 `src/runtime/{cron,automation-store,automator}.js`；动作集只留 send/remember/plan |
 | ~~`delayed_check` 的实际使用~~ | §4.4 | **已做（R16）**：`plan` 动作挂意图、到期提前唤醒、做成即了结 |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
