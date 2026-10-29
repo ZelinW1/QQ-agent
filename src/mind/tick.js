@@ -221,7 +221,7 @@ export function scoreRosterEntry({ unread = 0, openLoopsDue = 0, hoursSince = 0,
  */
 export function buildGlobalDecisionPrompt({
   botName = '她', state = {}, roster = [], candidates = [], actions = [],
-  now = Date.now(), restCount = 0, lastAction = null, blocked = []
+  now = Date.now(), restCount = 0, lastAction = null, blocked = [], materials = ''
 } = {}) {
   const name = String(botName || '她').trim() || '她';
   const system = buildDecisionSystem({ name, actions });
@@ -231,6 +231,11 @@ export function buildGlobalDecisionPrompt({
     `体力：${Math.round(Number(state.energy) || 0)}`,
     `今天已经主动说过 ${Number(state.todayProactive) || 0} 次话`
   ];
+
+  // 素材段（她是谁 / 最近写下什么 / 还惦记什么）。没有素材就整段不出现，
+  // 而不是留一个空标题 —— 空段会让模型以为"这一项是空的"，而不是"没这一项"。
+  const materialText = String(materials || '').trim();
+  if (materialText) lines.push('', '【现在的你】', materialText);
 
   if (roster.length) {
     lines.push('', '你最近留意到的人：');

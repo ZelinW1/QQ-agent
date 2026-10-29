@@ -51,6 +51,8 @@ import { getToolAvailability } from './tool-registry.js';
 import { listTools } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
 import { createRuntimePort, createWriterPort, createAdminPort } from './contract/mind-port.js';
+import { createPipeline } from './runtime/pipeline.js';
+import { buildFreeMaterials, renderMaterials } from './runtime/materials.js';
 
 /**
  * 正文像不像"本来就该发出去的话"。
@@ -2567,6 +2569,9 @@ export class Orchestrator {
 
     // ⑤ 自由行动会话（工具循环）
     // 一次上下文里连续做 ≤maxActions 件事：每个结果回灌，她自己决定继续还是收手。
+    // 素材：她现在怎么看自己、最近写下过什么、还惦记着什么事。
+    // 全部经端口读，端口返回空就整段不出现（自由时刻不该凭空多出一段空标题）。
+    const materials = buildFreeMaterials({ port: this.mindPort, now });
     const messages = buildGlobalDecisionPrompt({
       botName: cfg.persona?.botName,
       state,
@@ -2576,7 +2581,8 @@ export class Orchestrator {
       now,
       restCount: roster.restCount,
       lastAction: this.#lastActionText(),
-      blocked
+      blocked,
+      materials: renderMaterials(materials)
     });
     const maxActions = Math.max(1, Math.min(6, Number(m.actions?.maxPerWake) || 3));
     const tools = this.#freeActionTools(actions);
@@ -2621,47 +2627,95 @@ export class Orchestrator {
           convo.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ ok: false, error: '这次自由时间已经做够几件事了，先到这里' }) });
           continue;
         }
-        const action = actions.find((a) => a.id === name);
-        if (!action) {
-          convo.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ ok: false, error: `没有这个动作：${name}` }) });
-          continue;
-        }
-        // 体力以当前值为准（前一个动作可能刚花掉）
-        const blocked = actionBlocked(action, state);
-        if (blocked) {
-          convo.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ ok: false, error: `现在做不了：${blocked}` }) });
-          continue;
-        }
+        // 每个动作走一遍管线：校验 → 否决 → 执行 → 记账。
+        // 记账放在 audit 里，所以"没做成"也有 outcome 与稳定原因码 ——
+        // 这正是 attempts 表能统计"她为什么不行动"的前提。
+        // 不能叫 call：for (const call of calls) 的循环变量在同一作用域，
+        // 同名会触发 TDZ（Cannot access before initialization），报错位置还很远。
+        const argsRaw = String(call.function?.arguments || '{}');
+        const attempt = { name, action: null, args: {}, target: '', exec: null, error: '' };
+        const pipe = createPipeline({
+          steps: {
+            eligibility: () => {
+              if (executed.length >= maxActions) {
+                return { ok: false, code: 'cap', message: '这次自由时间已经做够几件事了，先到这里' };
+              }
+              return undefined;
+            },
+            validate: () => {
+              const found = actions.find((a) => a.id === attempt.name);
+              if (!found) return { ok: false, code: 'unknown-action', message: `没有这个动作：${attempt.name}` };
+              attempt.action = found;
+              try { attempt.args = JSON.parse(argsRaw) || {}; } catch { attempt.args = {}; }
+              return undefined;
+            },
+            veto: () => {
+              const why = actionBlocked(attempt.action, state);
+              if (why) return { ok: false, code: 'blocked', message: `现在做不了：${why}` };
+              return undefined;
+            },
+            execute: async () => {
+              attempt.target = this.#pickTargetChat({ args: attempt.args }, candidates, roster.top);
+              const exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now });
+              attempt.exec = exec;
+              if (exec && exec.ok === false) {
+                attempt.error = String(exec.reason || '没有做成');
+                return { ok: false, code: 'not-done', message: attempt.error };
+              }
+              return undefined;
+            },
+            audit: (_c, result) => {
+              const ok = result.ok === true;
+              const record = this.mind.appendAction({
+                chatKey: attempt.target,
+                at: now,
+                action: attempt.name,
+                reason: String(attempt.args.reason || '').slice(0, 120),
+                candidates: candidates.map((c) => c.id),
+                energySpent: ok ? (Number(attempt.action?.energy) || 0) : 0,
+                result: attempt.exec,
+                error: ok ? undefined : (attempt.error || result.message),
+                // 结局与原因码：'none' = 没轮到她做（超上限/不认识），与"失败"分开
+                outcome: ok ? 'done' : (['cap', 'blocked'].includes(result.code) ? 'blocked' : 'failed'),
+                reasonCode: ok ? '' : (result.code || ''),
+                usage: res?.usage || null
+              });
+              // 发出话之后开一个观察窗口：她不知道对方看没看、回没回，
+              // 立刻判定只能判"发出去了"。72 小时后才复查。
+              if (ok && attempt.name === 'send_proactive' && attempt.target) {
+                try {
+                  this.mind.appendObservation({
+                    attemptId: record?.id || '',
+                    chatKey: attempt.target,
+                    expect: '她应该会回我一句',
+                    now
+                  });
+                } catch { /* 观察是锦上添花 */ }
+              }
+              return record;
+            }
+          },
+          executeTimeoutMs: 60000
+        });
 
-        let args = {};
-        try { args = JSON.parse(String(call.function?.arguments || '{}')) || {}; } catch { args = {}; }
-        const target = this.#pickTargetChat({ args }, candidates, roster.top);
-        let exec = null;
-        let error = '';
-        try {
-          exec = await this.#runMindAction(action, target, { args }, { now });
-        } catch (e) {
-          error = String(e?.message ?? e);
-          console.error(`[mind] 行动 ${name} 失败:`, error);
-        }
-        // 动作自己报告"没做成"：不扣体力、如实回灌给她
-        if (!error && exec && exec.ok === false) error = String(exec.reason || '没有做成');
+        const outcome = await pipe.run({});
+        const error = outcome.ok ? '' : (attempt.error || outcome.message || '没有做成');
 
-        if (!error) {
+        if (outcome.ok) {
           tick = this.mind.getTick();
-          const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(action.energy) || 0)) };
+          const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(attempt.action.energy) || 0)) };
           if (name === 'send_proactive') {
             patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
-            if (target) this.lastProactiveAt.set(target, now);
+            if (attempt.target) this.lastProactiveAt.set(attempt.target, now);
           }
-          const snoozeFor = Math.max(0, Number(action.snoozeMs) || 0);
+          const snoozeFor = Math.max(0, Number(attempt.action.snoozeMs) || 0);
           const nextSnoozes = {};
           for (const [k, v] of Object.entries(snoozes)) {
             if (Number(v) > now) nextSnoozes[k] = v;
           }
           if (snoozeFor > 0) {
             for (const c of candidates) {
-              if (c.chatKey === target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
+              if (c.chatKey === attempt.target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
             }
           }
           patch.snoozes = nextSnoozes;
@@ -2669,25 +2723,14 @@ export class Orchestrator {
           state.energy = patch.energy;
         }
 
-        this.mind.appendAction({
-          chatKey: target,
-          at: now,
-          action: name,
-          reason: String(args.reason || '').slice(0, 120),
-          candidates: candidates.map((c) => c.id),
-          energySpent: error ? 0 : (Number(action.energy) || 0),
-          result: exec,
-          error: error || undefined,
-          usage: res?.usage || null
-        });
-        executed.push({ chatKey: target, action: name });
         convo.push({
           role: 'tool',
           tool_call_id: callId,
-          content: JSON.stringify(error
-            ? { ok: false, error }
-            : { ok: true, result: exec ?? null }).slice(0, 1500)
+          content: JSON.stringify(outcome.ok
+            ? { ok: true, result: attempt.exec ?? null }
+            : { ok: false, error }).slice(0, 1500)
         });
+        executed.push({ chatKey: attempt.target, action: name });
       }
 
       if (finishCall) {

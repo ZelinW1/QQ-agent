@@ -1043,6 +1043,8 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R10 | B3 意图 / 尝试 / 观察三张表；冻结 `actions.jsonl`（不双写，读路径合并新旧） | ✅ |
 | R11 | B4 叙事（按周/里程碑）+ 月度自我兜底 + 笔记淘汰保护 | ✅ |
 | R12 | C1 运行时地基：八步管线（`src/runtime/pipeline.js`）+ 现场收口到端口 `scene()` | ✅ |
+| R13 | C2 自由时刻换引擎：素材层进提示词、每个动作过管线、写 attempts/observations | ✅ |
+| R14 | C3 删除旧路径与剩余 `this.mind` 直连；`app.js` 成为唯一装配根 | 未开始 |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 

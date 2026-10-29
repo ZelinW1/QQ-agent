@@ -449,6 +449,11 @@ export function createRuntimePort(mind, deps = {}) {
       try { return mind.listIntentions?.({ status, dueBefore, limit }) || []; } catch { return []; }
     },
 
+    /** 最近的叙事（按时间倒序由调用方自己取尾部）。读永远不抛。 */
+    narratives({ limit = 3 } = {}) {
+      try { return mind.listNarratives?.({ limit }) || []; } catch { return []; }
+    },
+
     // ── 记录 ──────────────────────────────────────────────────────────
 
     /** A 期沿用 appendAction；B4 起由 recordAttempt 取代（唯一读路径见规格 §8.4）。 */
@@ -666,6 +671,7 @@ export function createNoopRuntimePort() {
     lastAction() { return null; },
     recentActions() { return []; },
     intentions() { return []; },
+    narratives() { return []; },
     recordAction: nothing,
     recordAttempt: nothing,
     recordOutcome: nothing,

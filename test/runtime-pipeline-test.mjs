@@ -145,5 +145,33 @@ console.log('\n=== 6. 现场 ===');
   check(noStore.scene().entries.length === 0, '没有会话源时返回空，而不是抛错');
 }
 
+// ── 7. 自由时刻的素材 ───────────────────────────────────────────────────
+console.log('\n=== 7. 素材 ===');
+{
+  const { buildFreeMaterials, renderMaterials } = await import(src('src/runtime/materials.js'));
+  const now = Date.now();
+  const port = {
+    selfBrief: () => '我比以前敢说不了。',
+    narratives: () => [{ title: '安静的一周' }, { title: '' }],
+    intentions: () => [
+      { text: '问他搬家的事', dueAt: now - 1000 },
+      { text: '换个头像', dueAt: now + 86400000 }
+    ]
+  };
+  const m = buildFreeMaterials({ port, now });
+  check(m.selfBrief.includes('敢说不'), '取到自我摘要');
+  check(m.narrativeTitles.length === 1 && m.narrativeTitles[0] === '安静的一周', '取到叙事标题（空标题被过滤）');
+  check(m.intentions.length === 2 && m.pendingIntents === 2, '取到待办');
+
+  const text = renderMaterials(m);
+  check(text.includes('你现在怎么看自己') && text.includes('最近写下的事'), '渲染出素材正文（标题由提示词层加）');
+  check(text.includes('（到点了）'), '到期的待办有标记');
+
+  check(renderMaterials(null) === '', '没有素材就是空串');
+  const empty = buildFreeMaterials({ port: null });
+  check(empty.selfBrief === '' && empty.intentions.length === 0, '没有端口时返回空素材（不抛）');
+  const broken = buildFreeMaterials({ port: { selfBrief: () => { throw new Error('炸'); }, narratives: () => { throw new Error('炸'); } } });
+  check(broken.selfBrief === '' && broken.narrativeTitles.length === 0, '端口抛错时降级为空素材');
+}
 console.log(`\n运行时地基：通过 ${pass}，失败 ${fail}`);
 if (fail > 0) process.exit(1);

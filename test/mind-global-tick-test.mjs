@@ -127,6 +127,13 @@ console.log('\n=== 2. 自由行动会话 ===');
   const after = Number(mind.getTick().energy) || 0;
   check(after === before - 25, `体力按动作成本扣减（${before} → ${after}）`);
   check(mind.getTick().todayProactive === 1, '今日主动次数 +1');
+
+  // 尝试与观察：C2 起每次动作都留结局与原因码，发出话之后开 72 小时观察窗口。
+  const attempts = mind.listAttempts({ limit: 5 });
+  check(attempts.length === 1 && attempts[0].action === 'send_proactive', '动作写进 attempts');
+  check(attempts[0].outcome === 'done', '成功动作的结局是 done');
+  const obs = mind.listDueObservations(now0 + 73 * H, 5);
+  check(obs.length === 1 && obs[0].chatKey === 'private:222', '发完话开了一条观察（72 小时后复查）');
 }
 
 // ── 2b. 一次唤醒连续做多件事 ────────────────────────────────────────────
