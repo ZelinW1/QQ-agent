@@ -1,4 +1,4 @@
-// 全局唤醒（mind.tick.mode='global'）自测：一次唤醒、一份 roster、一次决策。
+// 全局唤醒自测：一次唤醒、一份 roster、一次决策。心跳只有这一条路径。
 //
 // 覆盖：
 //   · roster 排序（未读 > 沉默时长）
@@ -52,7 +52,8 @@ updateConfig({
   }
 });
 const cfg = getConfig();
-check(cfg.mind.tick.mode === 'global', '配置已切到全局模式');
+// per-chat 模式已移除：心跳只有这一条路径，配置里不再有 mode 这个轴。
+check(cfg.mind.tick.enabled === true && cfg.mind.tick.mode === undefined, '心跳只有一条路径（无 mode 开关）');
 
 const mk = ({ chats, lastTsOf, unreadOf, relations = {} }) => {
   const mind = new MindStore({ root: fs.mkdtempSync(path.join(dataDir, 'g-')), getOptions: () => ({}) });

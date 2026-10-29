@@ -18,11 +18,9 @@ import {
   settleEnergy,
   resetDaily,
   collectCandidates,
-  buildDecisionPrompt,
   buildGlobalDecisionPrompt,
   scoreRosterEntry,
   truncateText,
-  parseDecision,
   nextTickAt,
   getAction,
   actionBlocked,
@@ -117,8 +115,7 @@ export class Orchestrator {
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
     this.tickBootTimer = null;         // 启动后的一次性心跳
     this.tickSchedule = new Map();     // chatKey -> 下次心跳时间（内存态，重启即重置相位）
-    // 全局唤醒（mind.tick.mode='global'）的节拍：一次唤醒只排一次，
-    // 不再按会话各排一次 —— 否则同一时段会连着做多次决策。
+    // 心跳节拍：一次唤醒只排一次。按会话各排一次会让同一时段连着做多次决策。
     this.globalNextWakeAt = 0;
     // 最近心跳（含"跳过"的那些）：只在内存里留 40 条，不写盘。
     // 写盘只记真正发生了的事（actions.jsonl），否则每 60 秒一条跳过日志会越积越多。
@@ -2089,6 +2086,14 @@ export class Orchestrator {
     } catch { /* 记录失败不影响心跳本身 */ }
   }
 
+  /**
+   * 心跳入口：只做共用的前置检查，然后交给全局唤醒。
+   *
+   * 旧的 per-chat 模式（每个会话各自醒来、各自决策、各自算体力与扩展动作）
+   * 已移除：它与全局唤醒是两份并行实现，同一份配置在两边被各算一遍，
+   * 长期必然漂移（例如 per-chat 曾经完全忽略 energy.cost 与扩展行动）。
+   * 需要回到旧行为时，回退移除它的那个提交即可。
+   */
   async #runTick({ now = Date.now(), chat = null } = {}) {
     const cfg = getConfig();
     const m = cfg.mind || {};
@@ -2096,211 +2101,15 @@ export class Orchestrator {
     if (m.enabled !== true) return { results: [], skipped: 'disabled' };
     if (this.paused || this.aborted) return { results: [], skipped: 'paused' };
     if (!cfg.api?.model || !cfg.api?.baseUrl) return { results: [], skipped: 'no-model' };
+    if (m.tick?.enabled === false) return { results: [], skipped: 'tick-disabled' };
 
-    const tickCfg = m.tick || {};
-    if (tickCfg.enabled === false) return { results: [], skipped: 'tick-disabled' };
-
-    // 全局唤醒：一次 roster、一张菜单、一次模型调用。
-    // 旧路径保留（mode='per-chat'），便于出问题时一键回滚。
-    if (String(tickCfg.mode || 'per-chat') === 'global') {
-      return this.#runGlobalTick({ now, chat });
-    }
-
-    // ⓪ 作息：睡着就不做决策（也不扫会话）。醒来由这里的状态机负责。
-    const sleep = this.#refreshSleep(now);
-    if (sleep.asleep) {
-      return { results: [{ chatKey: '', action: 'sleep', reason: sleep.reason }], skipped: 'asleep' };
-    }
-
-    // ① 结算（纯算术，0 token）。体力与跨天计数由端口统一结算并写盘。
-    this.mindPort.bodySettle({ now });
-
-    const chats = (this.store?.listChats?.() || [])
-      .filter((k) => String(k).startsWith('private:'));
-    const results = [];
-
-    for (const chatKey of chats) {
-      const due = this.tickSchedule.get(chatKey) || 0;
-      if (due > now) continue;
-      // 先排下一次，避免某次异常让她永远停在同一个会话上
-      this.tickSchedule.set(chatKey, nextTickAt(now, tickCfg.intervalMs, tickCfg.jitter));
-
-      // ② 仲裁：应答优先，心跳只捡安静的空档
-      if (this.runningChats?.has?.(chatKey)) { results.push({ chatKey, action: 'skip', reason: 'running' }); continue; }
-      if ((this.store?.unreadCount?.(chatKey) || 0) > 0) { results.push({ chatKey, action: 'skip', reason: 'unread' }); continue; }
-
-      const meta = this.store?.getChatMeta?.(chatKey) || {};
-      const idleLookbackMs = Math.max(0, Number(tickCfg.idleLookbackMin) || 2) * 60000;
-      if (meta.lastTs && now - Number(meta.lastTs) < idleLookbackMs) {
-        results.push({ chatKey, action: 'skip', reason: 'recent-activity' });
-        continue;
-      }
-
-      const lastProactiveAt = Number(this.lastProactiveAt.get(chatKey)) || 0;
-      const suppressMs = Math.max(0, Number(tickCfg.suppressAfterProactiveMs) || 600000);
-      if (lastProactiveAt > 0 && now - lastProactiveAt < suppressMs) {
-        results.push({ chatKey, action: 'skip', reason: 'just-proactive' });
-        continue;
-      }
-
-      // ③ 廉价预判
-      const chatId = String(chatKey).split(':')[1] || '';
-      const relation = this.mind.getRelation(chatId);
-      const body = this.mindPort.bodyRead();
-      const reflection = this.mindPort.reflectionState({ chatKey });
-      const unreflected = reflection.debt;
-      // 最近一条事件的时间：用来判断"刚聊过但还没记下什么"（unprocessed）
-      let lastEventAt = 0;
-      try {
-        const evs = this.mind.queryEvents({ chatKey, limit: 1 }) || [];
-        lastEventAt = Number(evs[evs.length - 1]?.ts) || 0;
-      } catch { lastEventAt = 0; }
-      let candidates = collectCandidates({
-        now,
-        energy: body.energy,
-        lastInteractionAt: Number(meta.lastTs) || 0,
-        lastEventAt,
-        openLoops: relation.openLoops,
-        unreflected,
-        cfg: m
-      });
-      // 到点了但还没睡：给她一次"睡 or 再待一会儿"的机会。
-      // 没有这个候选，入睡就完全是外部设定 —— 她连表态的机会都没有。
-      if (sleep.inWindow && !sleep.asleep) {
-        candidates = [...candidates, { id: 'bedtime', text: '夜深了，该睡了，还是再待一会儿？' }];
-      }
-
-      // 先算"现在能做什么"，再把"做了也白搭"的候选剔掉：
-      // 例如刚整理过不久，"攒了 N 件没整理"这条就不该再把她叫起来做决策 ——
-      // 否则只是花一次模型调用换一个"那算了"。 
-      const state = {
-        now,
-        energy: body.energy,
-        todayProactive: body.counters.todayProactive,
-        maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
-        minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
-        lastProactiveAt,
-        unreflected,
-        organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
-        lastReflectAttemptAt: reflection.lastAttemptAt,
-        reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000),
-        // 作息：让她自己决定"再撑一会儿"，但每晚有次数上限
-        inSleepWindow: sleep.inWindow === true ? 1 : 0,
-        stayUps: body.sleep.stayUps,
-        maxStayUp: Math.max(0, Number(m.sleep?.maxStayUp) || 2)
-      };
-      let actions = availableActions(state);
-      if (!actions.some((a) => a.id === 'organize')) {
-        candidates = candidates.filter((c) => c.id !== 'reflect_pending');
-      }
-      // 打盹：上次"想了一下但决定不做"的候选，在 snooze 到期前不再叫她。
-      // 真实的人不会每 5 分钟重新纠结同一件事。
-      const snoozes = { ...body.snoozes };
-      candidates = candidates.filter((c) => !(Number(snoozes[`${chatKey}|${c.id}`]) > now));
-      if (!candidates.length) { results.push({ chatKey, action: 'idle', reason: 'no-candidate' }); continue; }
-
-      // 熔断：当日决策次数
-      const maxDecisions = Math.max(1, Number(tickCfg.maxDecisionsPerDay) || 24);
-      if (body.counters.todayDecisions >= maxDecisions) {
-        results.push({ chatKey, action: 'idle', reason: 'decision-cap' });
-        continue;
-      }
-
-      // ④ 决策（唯一的模型调用，极小上下文）
-      const messages = buildDecisionPrompt({
-        botName: cfg.persona?.botName,
-        state,
-        candidates,
-        actions,
-        now
-      });
-      const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
-      const decision = parseDecision(String(res?.message?.content ?? ''), actions.map((a) => a.id));
-
-      // 决策次数记账（无论选了什么，这次模型调用都算）
-      this.mindPort.bodyUpdate(() => ({ counterDelta: { todayDecisions: 1 } }));
-
-      if (!decision || decision.action === 'idle') {
-        // 她想过但决定不做：给这些候选打个盹，免得每 5 分钟重新叫她一次。
-        const snoozeMs = Math.max(60000, Number(tickCfg.idleSnoozeMs) || 3600000);
-        const nextSnoozes = { ...snoozes };
-        for (const c of candidates) nextSnoozes[`${chatKey}|${c.id}`] = now + snoozeMs;
-        for (const [k, v] of Object.entries(nextSnoozes)) {
-          if (!(Number(v) > now)) delete nextSnoozes[k];
-        }
-        this.mindPort.bodyUpdate(() => ({ snooze: nextSnoozes }));
-
-        this.mindPort.recordAction({
-          chatKey, at: now, action: 'idle',
-          reason: decision ? (decision.reason || '想不出要做什么') : '输出无法解析，按不行动处理',
-          candidates: candidates.map((c) => c.id),
-          usage: res?.usage || null
-        });
-        results.push({ chatKey, action: 'idle', reason: decision ? 'chose-idle' : 'unparsable' });
-        continue;
-      }
-
-      // ⑤ 执行
-      const action = getAction(decision.action);
-      let exec = null;
-      let execError = '';
-      try {
-        exec = await this.#runMindAction(action, chatKey, decision, { now });
-      } catch (error) {
-        execError = String(error?.message ?? error);
-        console.error(`[mind] 行动 ${decision.action} 失败:`, execError);
-      }
-      // 动作自己报告"没做成"（例如会话正在聊、被禁言）：不算执行成功，
-      // 也不扣体力 —— 否则她会以为自己说过话。
-      if (!execError && exec && exec.ok === false) execError = String(exec.reason || '没有做成');
-
-      // 体力与计数：只要真的执行了（哪怕抛错）就记消耗 —— 她确实试过了。
-      // 一次同步补丁搞定体力、计数与打盹，避免三次写盘、也避免跨 await 的丢更新。
-      if (!execError) {
-        // 做完之后怎么处理这些候选：
-        //   · 会改变现场的动作（主动说话、整理、再撑一会）→ 清掉打盹，
-        //     因为情况已经不一样了；
-        //   · 不改变现场的动作（回想）→ 反而要给候选打盹，否则同一个理由
-        //     会让她每隔十分钟再"回想"一次（真实模拟里抓到的）。
-        const snoozeFor = Math.max(0, Number(action.snoozeMs) || 0);
-        const nextSnoozes = {};
-        for (const [k, v] of Object.entries(snoozes)) {
-          if (!k.startsWith(`${chatKey}|`) && Number(v) > now) nextSnoozes[k] = v;
-        }
-        if (snoozeFor > 0) {
-          for (const c of candidates) nextSnoozes[`${chatKey}|${c.id}`] = now + snoozeFor;
-        }
-        this.mindPort.bodyUpdate(() => ({
-          spend: Number(action.energy) || 0,
-          ...(decision.action === 'send_proactive' ? { counterDelta: { todayProactive: 1 } } : {}),
-          snooze: nextSnoozes
-        }));
-        if (decision.action === 'send_proactive') this.lastProactiveAt.set(chatKey, now);
-      }
-
-      this.mindPort.recordAction({
-        chatKey, at: now, action: decision.action, reason: decision.reason,
-        candidates: candidates.map((c) => c.id),
-        energySpent: execError ? 0 : (Number(action.energy) || 0),
-        result: exec,
-        error: execError || undefined,
-        usage: res?.usage || null
-      });
-      results.push({ chatKey, action: decision.action, reason: decision.reason, error: execError || undefined });
-
-      // 一次心跳最多服务一个会话：避免多个会话同时醒造成的成本尖峰。
-      break;
-    }
-
-    return { results, tick: this.mindPort.bodyRead() };
+    return this.#runGlobalTick({ now, chat });
   }
 
-  // ── 全局唤醒（mind.tick.mode = 'global'）─────────────────────────────
+  // ── 全局唤醒（唯一的心跳路径）─────────────────────────────────────────
   //
-  // 与旧的 per-chat 模式的区别只有两点：
-  //   1) 一次唤醒只调一次模型（而不是每个会话各调一次）
-  //   2) 她拿到的素材是一份 roster（几个人），因此可以跨会话做选择
-  // 睡眠、体力结算、预算与动作执行都沿用同一套规则。
+  // 一次唤醒：一份 roster（几个人）+ 一张菜单 + 一次模型调用，
+  // 因此她可以跨会话做选择。睡眠、体力结算、预算与动作执行都走同一套规则。
 
   #buildRoster(now = Date.now()) {
     const cfg = getConfig();

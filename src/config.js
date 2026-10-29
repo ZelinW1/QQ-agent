@@ -406,9 +406,8 @@ export const DEFAULT_CONFIG = {
     // 只有命中候选才调决策模型。详见 doc/action-runtime-design.md §7.3。
     tick: {
       enabled: true,
-      // 'global' = 一次唤醒、一份 roster、一张菜单、可连续做几件事（新，默认）
-      // 'per-chat' = 每个会话各自醒来各自决策（旧，保留用于回滚）
-      mode: 'global',
+      // 只有一种心跳：一次唤醒、一份 roster、一张菜单、可连续做几件事。
+      // 旧的 per-chat 模式已移除（两套并行实现会让同一份配置在两边各算一遍）。
       intervalMs: 300000,           // 5 分钟
       jitter: 0.1,                  // ±10% 抖动，避免所有会话同时醒
       idleLookbackMin: 2,           // 会话刚活跃过（2 分钟内）跳过心跳，别插嘴
@@ -640,7 +639,10 @@ const OBSOLETE_PATHS = [
   ['store', 'peakSchedule', 'valley', 'start'],
   ['store', 'peakSchedule', 'valley', 'end'],
   ['store', 'peakSchedule', 'custom', 'valley', 'start'],
-  ['store', 'peakSchedule', 'custom', 'valley', 'end']
+  ['store', 'peakSchedule', 'custom', 'valley', 'end'],
+  // 2026-10-29 行动运行时重构：per-chat 心跳模式移除，只剩全局唤醒。
+  // 老配置里的 mode 会在 loadConfig 时被剔除，不会报错。
+  ['mind', 'tick', 'mode']
 ];
 
 export function stripObsoleteFields(node) {

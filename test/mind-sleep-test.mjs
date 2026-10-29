@@ -149,9 +149,9 @@ console.log('\n=== 4. 编排器行为 ===');
 {
   updateConfig({
     api: { model: 'test-model', baseUrl: 'http://127.0.0.1:1/v1' },
-    // 这一组测的是旧的 per-chat 心跳路径（全局路径的作息行为由
-    // mind-global-tick-test 覆盖）。显式声明，避免默认值变化影响本套。
-    mind: { enabled: true, tick: { enabled: true, mode: 'per-chat' }, sleep: CFG }
+    // 心跳只有一条路径（per-chat 模式已移除）；作息判定在 #refreshSleep 里，
+    // 对所有唤醒都生效。
+    mind: { enabled: true, tick: { enabled: true }, sleep: CFG }
   });
 
   const mkOrch = ({ unread = 0, lastTs = 0 } = {}) => {
@@ -211,9 +211,25 @@ console.log('\n=== 4. 编排器行为 ===');
     const { orch, mind } = mkOrch({ lastTs: at(day, 23, 0) });
     // 她刚刚还在说话（5 分钟前）→ 在安静宽限内，还没睡着，于是会被问"睡 or 再待一会儿"
     orch.lastActivityAt = at(day, 23, 35);
+    // 全局唤醒走工具调用：只回一次 stay_up，之后不再给工具调用，
+    // 否则循环会把它当成"还想再做"，连着撑三次。
+    let steps = 0;
     const r = await orch.tickOnce({
       now: at(day, 23, 40),
-      chat: async () => ({ message: { content: '{"action":"stay_up","reason":"还想再待一会儿"}' } })
+      chat: async () => {
+        steps++;
+        if (steps > 1) return { message: { content: '' } };
+        return {
+          message: {
+            content: '',
+            tool_calls: [{
+              id: 'c1',
+              type: 'function',
+              function: { name: 'stay_up', arguments: '{"reason":"还想再待一会儿"}' }
+            }]
+          }
+        };
+      }
     });
     check(r.results.some((x) => x.action === 'stay_up'), '她选择了再撑一会儿');
     check((mind.getTick().sleep || {}).stayUps === 1, '撑的次数 +1');

@@ -445,6 +445,11 @@ automate:  { requires: [], … },
 
 ## 8. 迁移清单（45 处 → 约 20 处）
 
+> **R3 之后的现状**：per-chat 心跳已整体移除，它名下的约 26 处调用点随之消失；
+> 睡眠切换、`stay_up`、旧印象迁移标记已在 R2 迁完。余下的是 free 侧
+> （`#runGlobalTick` 与 `#buildRoster`，C 期重写时一起换）与领域写入（A1-3）。
+> 下表保留删除前的行号，只作历史对照——**行号已失效，以方法名为准**。
+
 `orchestrator.js` 里 `this.mind.*` 共 **45 处**，按方法分布：
 
 | 方法 | 次数 | 目标端口 |
@@ -551,7 +556,7 @@ B 期会出现 `actions.jsonl` 与 `attempts.jsonl` 并存。规则：
 | 步 | 内容 | 完成标志 |
 |---|---|---|
 | **A1-1** | 新增 `src/contract/mind-port.js`（三个工厂 + 三个 NOOP + `rev`）。**无人调用** | `node -e "import('./src/contract/mind-port.js')"` 通过 |
-| **A1-2** | `Orchestrator` 注入 `runtimePort`/`writerPort`，**保留 `this.mind` 一版**；迁 **睡眠 + per-chat 遗留心跳 + stay_up** 的 body 与行动记录（26 处） | `npm run test:mind` 全绿；`mind-tick` / `mind-sleep` / `wake-semantics` 不变 |
+| **A1-2** | ✅ 已做。`Orchestrator` 注入 `runtimePort`/`writerPort`；睡眠切换、`stay_up`、迁移标记改走端口（per-chat 心跳随后整体删除，见 R3） | `npm run test:mind` 全绿 |
 | **A1-3** | 工具 ctx 从 `mind` 换成 `writer`（`by` 由管线注入）；`mindOf()` 改判 `writer.enabled` | `mind-tools-test` 全绿（12 项） |
 | **A1-4** | `routes.js` 换 `AdminPort`；`app.js` 成为唯一 import 领域模块的地方 | 控制台接口测试全绿 |
 | **A1-5** | 删除 chat 侧的 `this.mind` 直连；加守门测试与静态检查 | 见 §10.3（只覆盖 chat） |
