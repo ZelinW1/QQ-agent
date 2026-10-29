@@ -255,6 +255,17 @@ function bindAutomationEvents(root) {
     if (el) el.textContent = msg || '';
   };
 
+  // 设置页在 #settings-form 上挂了 input/change 监听（标记"设置已改动"→ 防抖保存
+  // → 可能重建表单）。自动化表单里的输入不是配置项，打一个字就触发保存/重建会
+  // 让人没法正常填写，所以在这里把事件拦在表单内部。
+  const formEl = root.querySelector('.auto-form');
+  if (formEl && !formEl.__autoIsolated) {
+    formEl.__autoIsolated = true;
+    for (const ev of ['input', 'change']) {
+      formEl.addEventListener(ev, (event) => event.stopPropagation());
+    }
+  }
+
   // 列表操作：委托在 #settings-form 上。该元素跨渲染复用，每渲染绑一次会叠加出
   // N 个处理器（点一次删除发 N 个请求），所以只绑一次；处理器读模块级 autoTasks。
   if (!root.__autoDelegated) {
