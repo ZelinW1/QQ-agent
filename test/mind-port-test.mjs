@@ -156,6 +156,40 @@ console.log('\n=== 5. 身体：原子补丁 ===');
   check(Object.keys(r4.body.snoozes).length === 0, '打盹表可整表清空');
 }
 
+// ── 5b. 身体：同步读改写（首选写法）────────────────────────────────────
+console.log('\n=== 5b. 身体：bodyUpdate ===');
+{
+  const store = mkStore();
+  const port = createRuntimePort(store);
+  let writes = 0;
+  const originalUpdate = store.updateTick.bind(store);
+  store.updateTick = (patch) => { writes++; return originalUpdate(patch); };
+
+  const r = port.bodyUpdate((body) => ({
+    spend: 10,
+    counterDelta: { todayDecisions: 1 },
+    proactiveAt: { chatKey: CHAT, at: body.rev + 100 }
+  }));
+  check(r.ok === true && r.changed === true, '回调给出补丁即生效');
+  check(writes === 1, '一次回调只写盘一次');
+  check(r.body.energy === 90 && r.body.counters.todayDecisions === 1, '补丁内容正确');
+
+  const before = writes;
+  const none = port.bodyUpdate(() => null);
+  check(none.ok === true && none.changed === false, '回调返回 null 表示不改');
+  check(writes === before, '不改时不写盘');
+
+  // 回调拿到的是快照副本：改它不会污染真实状态
+  port.bodyUpdate((body) => { body.energy = 1; body.counters.todayDecisions = 99; return null; });
+  check(port.bodyRead().energy === 90, '回调改快照不影响真实状态');
+
+  const boom = port.bodyUpdate(() => { throw new Error('算不出来'); });
+  check(boom.ok === false && boom.code === 'store-error', '回调抛错被兜住');
+
+  const base = port.bodyRead().rev;
+  const stale = port.bodyApply({ rev: base - 1, spend: 1 });
+  check(stale.code === 'stale', '两步写法仍会做 CAS 检查');
+}
 // ── 6. 写入端口：来源由外部绑定 ────────────────────────────────────────
 console.log('\n=== 6. 写入端口：来源与规程 ===');
 {

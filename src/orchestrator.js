@@ -48,6 +48,7 @@ import { skillManager } from './skills/manager.js';
 import { getToolAvailability } from './tool-registry.js';
 import { listTools } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
+import { createRuntimePort, createAdminPort } from './contract/mind-port.js';
 
 /**
  * 正文像不像"本来就该发出去的话"。
@@ -82,6 +83,20 @@ export class Orchestrator {
     // MindStore（可选；心智状态：事件/关系/自我）。未注入时 mind 相关路径全关，
     // 行为与没有这个子系统时完全一致。
     this.mind = mind;
+    // 领域端口：运行时不再直接碰 MindStore（设计稿 §3.3）。
+    // mind 为空时是空实现：读返回空形状、写返回 no-mind —— 这是
+    // "删掉 src/mind 仍能启动"这条判据的基础。
+    this.mindPort = createRuntimePort(mind, {
+      // 体力结算与跨天清零属于领域逻辑：这里绑定配置后注入，端口不复制公式。
+      settle: (tick, at) => resetDaily(
+        settleEnergy(tick, at, getConfig().mind?.energy || {}),
+        todayKey(at)
+      ),
+      chatStore: store,
+      scoreEntry: scoreRosterEntry
+    });
+    // 控制台/迁移专用（直通 store）。A1-5 之前只给迁移标记这类维护操作使用。
+    this.mindPortAdmin = createAdminPort(mind);
     // 事件出口：正常情况下由 app.js 注入（转发到 SSE）。
     // 兜底必须是**明确的 no-op** —— 早先用 createEventBus() 兜底，
     // 但那个总线上永远没人订阅，事件会被静默吞掉，排查时看不到任何线索。
@@ -1909,7 +1924,7 @@ export class Orchestrator {
       }
     }
 
-    this.mind.updateTick({ migratedImpressions: true, migratedImpressionsAt: Date.now() });
+    this.mindPortAdmin.updateTick({ migratedImpressions: true, migratedImpressionsAt: Date.now() });
     if (merged > 0) console.log(`[mind] 旧群友印象已并入关系档案：${users} 人 / ${merged} 条`);
     return { ok: true, users, merged };
   }
@@ -1934,8 +1949,8 @@ export class Orchestrator {
       return { asleep: false, window: null, reason: '无心智', changed: prev !== false, inWindow: false };
     }
 
-    const tick = this.mind.getTick();
-    const st = (tick.sleep && typeof tick.sleep === 'object') ? tick.sleep : {};
+    // 睡眠状态是"身体"的一部分，走端口读；不再直接碰 MindStore。
+    const st = this.mindPort.bodyRead().sleep;
     const window = resolveSleepWindow(now, sleepCfg);
     const quietForMs = this.lastActivityAt > 0 ? now - this.lastActivityAt : Infinity;
     const d = classifySleep({ now, window, state: st, quietForMs, cfg: sleepCfg });
@@ -1943,21 +1958,23 @@ export class Orchestrator {
     let changed = false;
     if (d.asleep && !prev) {
       changed = true;
-      this.mind.updateTick({
+      this.mindPort.bodyUpdate(() => ({
         sleep: { state: 'asleep', since: now, nightKey: d.nightKey, stayUps: Number(st.stayUps) || 0 }
-      });
-      this.mind.appendAction({ chatKey: '', at: now, action: 'sleep', reason: d.reason, candidates: [] });
+      }));
+      this.mindPort.recordAction({ chatKey: '', at: now, action: 'sleep', reason: d.reason, candidates: [] });
     } else if (!d.asleep && prev) {
       changed = true;
-      this.mind.updateTick({ sleep: { state: 'awake', since: now, nightKey: d.nightKey, stayUps: 0 } });
-      this.mind.appendAction({ chatKey: '', at: now, action: 'wake', reason: d.reason, candidates: [] });
+      this.mindPort.bodyUpdate(() => ({
+        sleep: { state: 'awake', since: now, nightKey: d.nightKey, stayUps: 0 }
+      }));
+      this.mindPort.recordAction({ chatKey: '', at: now, action: 'wake', reason: d.reason, candidates: [] });
       // 醒来：积压的消息当一批处理。模型没配时 wake 会自然跳过，消息仍保留未读。
       if (sleepCfg.wakeOnBacklog !== false) {
         try { this.drainBacklogAfterResume(); } catch { /* 补处理失败不影响醒来本身 */ }
       }
     } else if (!d.asleep && String(st.nightKey || '') !== String(d.nightKey)) {
       // 换夜了：清掉"再撑一会"的计数，别带到下一晚
-      this.mind.updateTick({ sleep: { ...st, nightKey: d.nightKey, stayUps: 0 } });
+      this.mindPort.bodyUpdate((body) => ({ sleep: { ...body.sleep, nightKey: d.nightKey, stayUps: 0 } }));
     }
 
     this.asleep = d.asleep;
@@ -2038,6 +2055,8 @@ export class Orchestrator {
     try {
       result = await this.#runTick({ ...opts, now });
     } catch (error) {
+      // 心跳内部异常不该静默：调度器只打一行 catch，排查时看不到栈。
+      console.error('[mind] 心跳异常:', error);
       result = { results: [], skipped: 'error', error: String(error?.message ?? error) };
     }
     this.#recordTick(now, result);
@@ -2093,10 +2112,8 @@ export class Orchestrator {
       return { results: [{ chatKey: '', action: 'sleep', reason: sleep.reason }], skipped: 'asleep' };
     }
 
-    // ① 结算（纯算术，0 token）
-    let tick = settleEnergy(this.mind.getTick(), now, m.energy || {});
-    tick = resetDaily(tick, todayKey(now));
-    this.mind.updateTick(tick);
+    // ① 结算（纯算术，0 token）。体力与跨天计数由端口统一结算并写盘。
+    this.mindPort.bodySettle({ now });
 
     const chats = (this.store?.listChats?.() || [])
       .filter((k) => String(k).startsWith('private:'));
@@ -2129,8 +2146,9 @@ export class Orchestrator {
       // ③ 廉价预判
       const chatId = String(chatKey).split(':')[1] || '';
       const relation = this.mind.getRelation(chatId);
-      tick = this.mind.getTick();
-      const unreflected = this.mind.countUnreflected(chatKey, Number(tick.lastReflectAt) || 0);
+      const body = this.mindPort.bodyRead();
+      const reflection = this.mindPort.reflectionState({ chatKey });
+      const unreflected = reflection.debt;
       // 最近一条事件的时间：用来判断"刚聊过但还没记下什么"（unprocessed）
       let lastEventAt = 0;
       try {
@@ -2139,7 +2157,7 @@ export class Orchestrator {
       } catch { lastEventAt = 0; }
       let candidates = collectCandidates({
         now,
-        energy: Number(tick.energy) || 0,
+        energy: body.energy,
         lastInteractionAt: Number(meta.lastTs) || 0,
         lastEventAt,
         openLoops: relation.openLoops,
@@ -2157,18 +2175,18 @@ export class Orchestrator {
       // 否则只是花一次模型调用换一个"那算了"。 
       const state = {
         now,
-        energy: Number(tick.energy) || 0,
-        todayProactive: Number(tick.todayProactive) || 0,
+        energy: body.energy,
+        todayProactive: body.counters.todayProactive,
         maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
         minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
         lastProactiveAt,
         unreflected,
         organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
-        lastReflectAttemptAt: Number(tick.lastReflectAttemptAt) || 0,
+        lastReflectAttemptAt: reflection.lastAttemptAt,
         reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000),
         // 作息：让她自己决定"再撑一会儿"，但每晚有次数上限
         inSleepWindow: sleep.inWindow === true ? 1 : 0,
-        stayUps: Number((tick.sleep && tick.sleep.stayUps) || 0),
+        stayUps: body.sleep.stayUps,
         maxStayUp: Math.max(0, Number(m.sleep?.maxStayUp) || 2)
       };
       let actions = availableActions(state);
@@ -2177,13 +2195,13 @@ export class Orchestrator {
       }
       // 打盹：上次"想了一下但决定不做"的候选，在 snooze 到期前不再叫她。
       // 真实的人不会每 5 分钟重新纠结同一件事。
-      const snoozes = (tick.snoozes && typeof tick.snoozes === 'object') ? { ...tick.snoozes } : {};
+      const snoozes = { ...body.snoozes };
       candidates = candidates.filter((c) => !(Number(snoozes[`${chatKey}|${c.id}`]) > now));
       if (!candidates.length) { results.push({ chatKey, action: 'idle', reason: 'no-candidate' }); continue; }
 
       // 熔断：当日决策次数
       const maxDecisions = Math.max(1, Number(tickCfg.maxDecisionsPerDay) || 24);
-      if ((Number(tick.todayDecisions) || 0) >= maxDecisions) {
+      if (body.counters.todayDecisions >= maxDecisions) {
         results.push({ chatKey, action: 'idle', reason: 'decision-cap' });
         continue;
       }
@@ -2200,8 +2218,7 @@ export class Orchestrator {
       const decision = parseDecision(String(res?.message?.content ?? ''), actions.map((a) => a.id));
 
       // 决策次数记账（无论选了什么，这次模型调用都算）
-      tick = this.mind.getTick();
-      this.mind.updateTick({ todayDecisions: (Number(tick.todayDecisions) || 0) + 1 });
+      this.mindPort.bodyUpdate(() => ({ counterDelta: { todayDecisions: 1 } }));
 
       if (!decision || decision.action === 'idle') {
         // 她想过但决定不做：给这些候选打个盹，免得每 5 分钟重新叫她一次。
@@ -2211,9 +2228,9 @@ export class Orchestrator {
         for (const [k, v] of Object.entries(nextSnoozes)) {
           if (!(Number(v) > now)) delete nextSnoozes[k];
         }
-        this.mind.updateTick({ snoozes: nextSnoozes });
+        this.mindPort.bodyUpdate(() => ({ snooze: nextSnoozes }));
 
-        this.mind.appendAction({
+        this.mindPort.recordAction({
           chatKey, at: now, action: 'idle',
           reason: decision ? (decision.reason || '想不出要做什么') : '输出无法解析，按不行动处理',
           candidates: candidates.map((c) => c.id),
@@ -2237,15 +2254,9 @@ export class Orchestrator {
       // 也不扣体力 —— 否则她会以为自己说过话。
       if (!execError && exec && exec.ok === false) execError = String(exec.reason || '没有做成');
 
-      // 体力与计数：只要真的执行了（哪怕抛错）就记消耗 —— 她确实试过了
+      // 体力与计数：只要真的执行了（哪怕抛错）就记消耗 —— 她确实试过了。
+      // 一次同步补丁搞定体力、计数与打盹，避免三次写盘、也避免跨 await 的丢更新。
       if (!execError) {
-        tick = this.mind.getTick();
-        const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(action.energy) || 0)) };
-        if (decision.action === 'send_proactive') {
-          patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
-          this.lastProactiveAt.set(chatKey, now);
-        }
-
         // 做完之后怎么处理这些候选：
         //   · 会改变现场的动作（主动说话、整理、再撑一会）→ 清掉打盹，
         //     因为情况已经不一样了；
@@ -2259,11 +2270,15 @@ export class Orchestrator {
         if (snoozeFor > 0) {
           for (const c of candidates) nextSnoozes[`${chatKey}|${c.id}`] = now + snoozeFor;
         }
-        patch.snoozes = nextSnoozes;
-        this.mind.updateTick(patch);
+        this.mindPort.bodyUpdate(() => ({
+          spend: Number(action.energy) || 0,
+          ...(decision.action === 'send_proactive' ? { counterDelta: { todayProactive: 1 } } : {}),
+          snooze: nextSnoozes
+        }));
+        if (decision.action === 'send_proactive') this.lastProactiveAt.set(chatKey, now);
       }
 
-      this.mind.appendAction({
+      this.mindPort.recordAction({
         chatKey, at: now, action: decision.action, reason: decision.reason,
         candidates: candidates.map((c) => c.id),
         energySpent: execError ? 0 : (Number(action.energy) || 0),
@@ -2277,7 +2292,7 @@ export class Orchestrator {
       break;
     }
 
-    return { results, tick: this.mind.getTick() };
+    return { results, tick: this.mindPort.bodyRead() };
   }
 
   // ── 全局唤醒（mind.tick.mode = 'global'）─────────────────────────────
@@ -2624,7 +2639,7 @@ export class Orchestrator {
       for (const [k, v] of Object.entries(nextSnoozes)) {
         if (!(Number(v) > now)) delete nextSnoozes[k];
       }
-      this.mind.updateTick({ snoozes: nextSnoozes });
+      this.mindPort.bodyUpdate(() => ({ snooze: nextSnoozes }));
       this.mind.appendAction({
         chatKey: '', at: now, action: 'idle',
         reason: idleReason || '想不出要做什么',
@@ -2696,10 +2711,11 @@ export class Orchestrator {
       remember: (args) => this.#rememberForChat(chatKey, args || {}, now),
       // "再撑一会儿"：只延长入睡时间，不产生消息。次数由 maxStayUp 封顶。
       stayUp: () => {
-        const t = this.mind.getTick();
-        const st = (t.sleep && typeof t.sleep === 'object') ? t.sleep : {};
-        const next = (Number(st.stayUps) || 0) + 1;
-        this.mind.updateTick({ sleep: { ...st, stayUps: next } });
+        let next = 0;
+        this.mindPort.bodyUpdate((body) => {
+          next = body.sleep.stayUps + 1;
+          return { sleep: { ...body.sleep, stayUps: next } };
+        });
         return { stayUps: next };
       }
     };

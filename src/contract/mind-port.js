@@ -130,6 +130,74 @@ export function createRuntimePort(mind, deps = {}) {
     return body;
   };
 
+  /**
+   * 应用一个身体补丁并写盘。`rev` 由调用方持有：bodyUpdate 会用刚读到的 rev，
+   * bodyApply 用外部传入的 rev（可能是几秒前读的）。
+   */
+  const applyPatch = (patch = {}) => {
+    if (!plainObject(patch)) return fail('invalid_patch', '补丁必须是对象');
+    const unknown = Object.keys(patch).filter((k) => !BODY_PATCH_KEYS.includes(k));
+    if (unknown.length) return fail('invalid_patch', `不认识的键：${unknown.join('、')}`);
+    if (patch.rev === undefined) return fail('invalid_patch', '必须带 rev（防丢更新）');
+
+    const tick = mind.getTick();
+    const current = pickNumber(tick.rev);
+    if (pickNumber(patch.rev, -1) !== current) {
+      return fail('stale', '身体状态已被别处改动，请重读后重算');
+    }
+
+    const next = { ...tick, rev: current + 1 };
+    let spent = 0;
+
+    if (patch.spend !== undefined) {
+      const want = Math.max(0, pickNumber(patch.spend));
+      const before = pickNumber(tick.energy);
+      spent = Math.min(before, want);
+      next.energy = before - spent;
+    }
+
+    if (patch.counterDelta !== undefined) {
+      if (!plainObject(patch.counterDelta)) return fail('invalid_patch', 'counterDelta 必须是对象');
+      for (const [key, delta] of Object.entries(patch.counterDelta)) {
+        if (!COUNTER_KEYS.includes(key)) return fail('invalid_patch', `不认识的计数：${key}`);
+        next[key] = Math.max(0, pickNumber(tick[key]) + pickNumber(delta));
+      }
+    }
+
+    if (patch.sleep !== undefined) {
+      if (!plainObject(patch.sleep)) return fail('invalid_patch', 'sleep 必须是对象');
+      const base = plainObject(tick.sleep) ? tick.sleep : {};
+      const merged = { ...base };
+      for (const [key, value] of Object.entries(patch.sleep)) {
+        if (!SLEEP_KEYS.includes(key)) return fail('invalid_patch', `不认识的睡眠字段：${key}`);
+        merged[key] = value;
+      }
+      next.sleep = merged;
+    }
+
+    if (patch.snooze !== undefined) {
+      // 整表替换，不是合并：调用点都是"算出新整表再写"。
+      if (!plainObject(patch.snooze)) return fail('invalid_patch', 'snooze 必须是对象');
+      next.snoozes = { ...patch.snooze };
+    }
+
+    if (patch.proactiveAt !== undefined) {
+      if (!plainObject(patch.proactiveAt)) return fail('invalid_patch', 'proactiveAt 必须是对象');
+      const { chatKey, at } = patch.proactiveAt;
+      if (!chatKey) return fail('invalid_patch', 'proactiveAt 需要 chatKey');
+      const base = plainObject(tick.proactiveAt) ? tick.proactiveAt : {};
+      next.proactiveAt = { ...base, [String(chatKey)]: pickNumber(at, now()) };
+    }
+
+    try {
+      mind.updateTick(next);
+    } catch (error) {
+      log.error?.(`[mind-port] 写身体状态失败：${error?.message ?? error}`);
+      return fail('store-error', '体力状态写入失败');
+    }
+    return ok({ body: readBody(), spent });
+  };
+
   return {
     apiVersion: MIND_PORT_API,
     get enabled() { return true; },
@@ -156,75 +224,44 @@ export function createRuntimePort(mind, deps = {}) {
     },
 
     /**
-     * 原子补丁 + 比较并交换。
+     * 原子补丁 + 比较并交换（**遗留入口**）。
      *
-     * `rev` 必填：一次 tick 里夹着模型调用（秒级），期间另一次 tick 可能已经改过体力。
-     * 没有 CAS 时，两个 tick 各读 100、各扣 25，最终写 75 而不是 50 —— 丢更新。
+     * `rev` 必填。它只适用于"必须先读到、稍后才写"的场景：读取与写入之间夹了 await，
+     * 期间别处可能已经改过身体，rev 不符就返回 stale。
+     * 只做一次写的话，优先用 bodyUpdate —— 那里没有这个时间窗。
      */
-    bodyApply(patch = {}) {
-      if (!plainObject(patch)) return fail('invalid_patch', '补丁必须是对象');
-      const unknown = Object.keys(patch).filter((k) => !BODY_PATCH_KEYS.includes(k));
-      if (unknown.length) return fail('invalid_patch', `不认识的键：${unknown.join('、')}`);
-      if (patch.rev === undefined) return fail('invalid_patch', '必须带 rev（防丢更新）');
+    bodyApply: applyPatch,
 
-      const tick = mind.getTick();
-      const current = pickNumber(tick.rev);
-      if (pickNumber(patch.rev, -1) !== current) {
-        return fail('stale', '身体状态已被别处改动，请重读后重算');
-      }
-
-      const next = { ...tick, rev: current + 1 };
-      let spent = 0;
-
-      if (patch.spend !== undefined) {
-        const want = Math.max(0, pickNumber(patch.spend));
-        const before = pickNumber(tick.energy);
-        spent = Math.min(before, want);
-        next.energy = before - spent;
-      }
-
-      if (patch.counterDelta !== undefined) {
-        if (!plainObject(patch.counterDelta)) return fail('invalid_patch', 'counterDelta 必须是对象');
-        for (const [key, delta] of Object.entries(patch.counterDelta)) {
-          if (!COUNTER_KEYS.includes(key)) return fail('invalid_patch', `不认识的计数：${key}`);
-          next[key] = Math.max(0, pickNumber(tick[key]) + pickNumber(delta));
-        }
-      }
-
-      if (patch.sleep !== undefined) {
-        if (!plainObject(patch.sleep)) return fail('invalid_patch', 'sleep 必须是对象');
-        const base = plainObject(tick.sleep) ? tick.sleep : {};
-        const merged = { ...base };
-        for (const [key, value] of Object.entries(patch.sleep)) {
-          if (!SLEEP_KEYS.includes(key)) return fail('invalid_patch', `不认识的睡眠字段：${key}`);
-          merged[key] = value;
-        }
-        next.sleep = merged;
-      }
-
-      if (patch.snooze !== undefined) {
-        // 整表替换，不是合并：三个调用点都是"算出新整表再写"。
-        if (!plainObject(patch.snooze)) return fail('invalid_patch', 'snooze 必须是对象');
-        next.snoozes = { ...patch.snooze };
-      }
-
-      if (patch.proactiveAt !== undefined) {
-        if (!plainObject(patch.proactiveAt)) return fail('invalid_patch', 'proactiveAt 必须是对象');
-        const { chatKey, at } = patch.proactiveAt;
-        if (!chatKey) return fail('invalid_patch', 'proactiveAt 需要 chatKey');
-        const base = plainObject(tick.proactiveAt) ? tick.proactiveAt : {};
-        next.proactiveAt = { ...base, [String(chatKey)]: pickNumber(at, now()) };
-      }
-
+    /**
+     * 同步读-改-写：读当前身体 → 回调算补丁 → 一次写盘。
+     *
+     * 回调是同步的，中间没有 await，整个过程天然原子；这是调用方**首选**的写法，
+     * 也是把旧代码里"先 getTick 再 updateTick"的两步收敛成一步的地方。
+     * 回调返回 null/undefined 表示"这次不改"，不算错误。
+     *
+     * @param {(body: object) => (object|null)} mutate
+     * @returns {{ok:boolean, body?:object, spent?:number, changed?:boolean, code?:string}}
+     */
+    bodyUpdate(mutate) {
+      if (typeof mutate !== 'function') return fail('invalid_patch', 'bodyUpdate 需要回调');
+      const snapshot = readBody();
+      let patch;
       try {
-        mind.updateTick(next);
+        // 给回调一份浅拷贝，避免它顺手改了快照又被当成补丁
+        patch = mutate({
+          ...snapshot,
+          counters: { ...snapshot.counters },
+          sleep: { ...snapshot.sleep },
+          snoozes: { ...snapshot.snoozes },
+          proactiveAt: { ...snapshot.proactiveAt }
+        });
       } catch (error) {
-        log.error?.(`[mind-port] 写身体状态失败：${error?.message ?? error}`);
-        return fail('store-error', '体力状态写入失败');
+        log.error?.(`[mind-port] 身体补丁回调抛错：${error?.message ?? error}`);
+        return fail('store-error', '身体补丁计算失败');
       }
-      const body = readBody();
-      if (Number.isFinite(Number(energyMax))) body.energyMax = Number(energyMax);
-      return ok({ body, spent });
+      if (patch === null || patch === undefined) return ok({ body: snapshot, spent: 0, changed: false });
+      const result = applyPatch({ ...patch, rev: snapshot.rev });
+      return result.ok ? { ...result, changed: true } : result;
     },
 
     // ── 现场 ──────────────────────────────────────────────────────────
@@ -339,6 +376,20 @@ export function createRuntimePort(mind, deps = {}) {
         }) || [];
         return events.slice(-Math.max(1, limit));
       } catch { return []; }
+    },
+
+    /**
+     * 反思账本：欠了多少条未整理、上次尝试是什么时候。
+     * 两者一起给，是因为调用方几乎总是同时要（攒够没 + 冷却没）。
+     */
+    reflectionState({ chatKey = '' } = {}) {
+      try {
+        const tick = mind.getTick?.() || {};
+        return {
+          debt: Number(mind.countUnreflected?.(chatKey, pickNumber(tick.lastReflectAt))) || 0,
+          lastAttemptAt: pickNumber(tick.lastReflectAttemptAt)
+        };
+      } catch { return { debt: 0, lastAttemptAt: 0 }; }
     },
 
     /** 未反思事件数。`since` 缺省取她的 `lastReflectAt`，与现有语义一致。 */
@@ -529,6 +580,7 @@ export function createNoopRuntimePort() {
     relationBrief() { return ''; },
     recall() { return []; },
     recentEvents() { return []; },
+    reflectionState() { return { debt: 0, lastAttemptAt: 0 }; },
     reflectionDebt() { return 0; },
     lastAction() { return null; },
     recentActions() { return []; },

@@ -163,6 +163,18 @@ export function createRuntimePort(mind, deps = {}) {
      */
     bodyApply(patch) { /* … */ },
 
+    /**
+     * **首选写法**：同步读 → 回调算补丁 → 一次写盘。
+     *
+     * 回调是同步的，中间没有 await，整个过程天然原子；`rev` 由端口自己取，
+     * 调用方不需要先读再写，也就不存在"读到旧值、稍后写回去"的时间窗。
+     * 回调返回 null 表示这次不改（不算错误）。
+     *
+     * @param {(body: Body) => (object|null)} mutate
+     * @returns {{ ok:boolean, body?:Body, spent?:number, changed?:boolean, code?:string }}
+     */
+    bodyUpdate(mutate) { /* … */ },
+
     // ── 现场（L3 素材）────────────────────────────────────────────
 
     /**
@@ -189,6 +201,12 @@ export function createRuntimePort(mind, deps = {}) {
 
     /** @returns {Array} */
     recentEvents({ chatKey, limit = 5, sinceTs = 0 }) { /* … */ },
+
+    /**
+     * 反思账本：欠了多少条未整理、上次尝试是什么时候。两者总是一起用（攒够没 + 冷却没）。
+     * @returns {{ debt: number, lastAttemptAt: number }}
+     */
+    reflectionState({ chatKey }) { /* … */ },
 
     /** 取代 countUnreflected。@returns {number} */
     reflectionDebt({ chatKey }) { /* … */ },
@@ -533,7 +551,7 @@ B 期会出现 `actions.jsonl` 与 `attempts.jsonl` 并存。规则：
 | 步 | 内容 | 完成标志 |
 |---|---|---|
 | **A1-1** | 新增 `src/contract/mind-port.js`（三个工厂 + 三个 NOOP + `rev`）。**无人调用** | `node -e "import('./src/contract/mind-port.js')"` 通过 |
-| **A1-2** | `Orchestrator` 注入 `runtimePort`/`writerPort`，**保留 `this.mind` 一版**；只迁 **chat 侧**：`body` → `scene` → `actions` | `npm run test:mind` 全绿；chat 相关用例不变 |
+| **A1-2** | `Orchestrator` 注入 `runtimePort`/`writerPort`，**保留 `this.mind` 一版**；迁 **睡眠 + per-chat 遗留心跳 + stay_up** 的 body 与行动记录（26 处） | `npm run test:mind` 全绿；`mind-tick` / `mind-sleep` / `wake-semantics` 不变 |
 | **A1-3** | 工具 ctx 从 `mind` 换成 `writer`（`by` 由管线注入）；`mindOf()` 改判 `writer.enabled` | `mind-tools-test` 全绿（12 项） |
 | **A1-4** | `routes.js` 换 `AdminPort`；`app.js` 成为唯一 import 领域模块的地方 | 控制台接口测试全绿 |
 | **A1-5** | 删除 chat 侧的 `this.mind` 直连；加守门测试与静态检查 | 见 §10.3（只覆盖 chat） |
