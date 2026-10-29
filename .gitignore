@@ -30,7 +30,9 @@ pnpm-lock.yaml
 *.bak
 
 # 便携 QQ 运行时（setup 脚本下载/安装，不入库）
-runtime/
+# 只忽略仓库根目录那一份：src/runtime/ 是行动运行时的源码，必须入库。
+# （用 `runtime/` 会匹配任意层级，曾经把 src/runtime/ 整个吞掉。）
+/runtime/
 
 # 系统文件
 .DS_Store

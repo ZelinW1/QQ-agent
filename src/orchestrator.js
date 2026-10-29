@@ -25,7 +25,6 @@ import {
   collectCandidates,
   buildGlobalDecisionPrompt,
   scoreRosterEntry,
-  truncateText,
   nextTickAt,
   getAction,
   actionBlocked,
@@ -90,6 +89,8 @@ export class Orchestrator {
     // mind 为空时是空实现：读返回空形状、写返回 no-mind —— 这是
     // "删掉 src/mind 仍能启动"这条判据的基础。
     this.mindPort = createRuntimePort(mind, {
+      // 上次主动找某人的时间（内存态，不落盘）：端口不该自己猜，由这里注入。
+      proactiveAt: (chatKey) => Number(this.lastProactiveAt?.get?.(chatKey)) || 0,
       // 体力结算与跨天清零属于领域逻辑：这里绑定配置后注入，端口不复制公式。
       settle: (tick, at) => resetDaily(
         settleEnergy(tick, at, getConfig().mind?.energy || {}),
@@ -2395,62 +2396,45 @@ export class Orchestrator {
   // 一次唤醒：一份 roster（几个人）+ 一张菜单 + 一次模型调用，
   // 因此她可以跨会话做选择。睡眠、体力结算、预算与动作执行都走同一套规则。
 
+  /**
+   * 她现在看得到谁。
+   *
+   * 窗口参数（回看多久算"刚聊过"、主动发言后压多久、未完结事项多久算到期）由配置传入，
+   * 具体拼装交给端口的 scene()：那是**唯一**的现场实现，不再和别处各写一份。
+   * 这里只补运行时的东西——谁正在跑、排序分数、以及提示词要用的关系对象。
+   */
   #buildRoster(now = Date.now()) {
     const cfg = getConfig();
-    const m = cfg.mind || {};
-    const tickCfg = m.tick || {};
-    const idleLookbackMs = Math.max(0, Number(tickCfg.idleLookbackMin) || 2) * 60000;
-    const suppressMs = Math.max(0, Number(tickCfg.suppressAfterProactiveMs) || 600000);
-    const openLoopDueMs = Math.max(3600000, Number(tickCfg.openLoopDueMs) || 24 * 3600000);
-    const chats = (this.store?.listChats?.() || []).filter((k) => String(k).startsWith('private:'));
+    const tickCfg = cfg.mind?.tick || {};
+    const scene = this.mindPort.scene({
+      now,
+      limit: 3,
+      options: {
+        idleLookbackMs: Math.max(0, Number(tickCfg.idleLookbackMin) || 2) * 60000,
+        suppressMs: Math.max(0, Number(tickCfg.suppressAfterProactiveMs) || 600000),
+        openLoopDueMs: Math.max(3600000, Number(tickCfg.openLoopDueMs) || 24 * 3600000)
+      }
+    });
 
-    const all = [];
-    for (const chatKey of chats) {
-      const meta = this.store?.getChatMeta?.(chatKey) || {};
-      const chatId = String(chatKey).split(':')[1] || '';
+    const all = (scene.entries || []).map((entry) => {
+      const chatId = String(entry.chatKey).split(':')[1] || '';
       const relation = this.mind.getRelation(chatId) || {};
-      const lastTs = Number(meta.lastTs) || 0;
-      const unread = Number(meta.unread) || 0;
-      const hoursSince = lastTs > 0 ? Math.max(0, Math.round((now - lastTs) / 3600000)) : null;
-      const openLoopsDue = (Array.isArray(relation.openLoops) ? relation.openLoops : [])
-        .filter((l) => Number(l?.since) > 0 && now - Number(l.since) >= openLoopDueMs).length;
-      // 这条会话最近一条事件的时间：用于判断"刚聊过但还没记下什么"
-      let lastEventAt = 0;
-      try {
-        const evs = this.mind.queryEvents({ chatKey, limit: 1 }) || [];
-        lastEventAt = Number(evs[evs.length - 1]?.ts) || 0;
-      } catch { lastEventAt = 0; }
-      const lastProactiveAt = Number(this.lastProactiveAt.get(chatKey)) || 0;
-      const entry = {
-        chatKey,
-        name: String(relation.nickname || chatId),
-        stage: String(relation.stage || ''),
-        lastTs,
-        lastEventAt,
-        hoursSince,
-        unread,
-        lastLine: truncateText(meta.lastText, 30),
-        lastSelf: meta.lastSelf === true,
+      return {
+        ...entry,
         relation,
-        openLoopsDue,
-        running: this.runningChats?.has?.(chatKey) === true,
-        recent: lastTs > 0 && now - lastTs < idleLookbackMs,
-        suppressed: lastProactiveAt > 0 && now - lastProactiveAt < suppressMs,
-        score: 0
+        running: this.runningChats?.has?.(entry.chatKey) === true,
+        score: scoreRosterEntry({
+          unread: entry.unread,
+          openLoopsDue: entry.openLoopsDue,
+          hoursSince: entry.hoursSince ?? 0,
+          warmth: Number(relation.warmth) || 0
+        })
       };
-      entry.score = scoreRosterEntry({
-        unread,
-        openLoopsDue,
-        hoursSince: hoursSince ?? 0,
-        warmth: Number(relation.warmth) || 0
-      });
-      all.push(entry);
-    }
+    });
     all.sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
     const top = all.slice(0, 3);
     return { top, restCount: Math.max(0, all.length - top.length), all };
   }
-
   /** 决策指定了目标会话就用它，否则挑候选里最该找的那个人。 */
   #pickTargetChat(decision = {}, candidates = [], roster = []) {
     const wanted = String(decision?.args?.chatKey || '').trim();

@@ -129,7 +129,12 @@ function relationLine(rel = {}) {
  */
 export function createRuntimePort(mind, deps = {}) {
   if (!mind || typeof mind.getTick !== 'function') return createNoopRuntimePort();
-  const { settle = null, chatStore = null, scoreEntry = null, pickEvents = null, energyMax = null, log = console } = deps;
+  const {
+    settle = null, chatStore = null, scoreEntry = null, pickEvents = null, energyMax = null,
+    // 上次主动找某人是什么时候。这个状态在运行时内存里（不落盘），端口不该自己猜。
+    proactiveAt = null,
+    log = console
+  } = deps;
   const now = () => Date.now();
 
   const readBody = () => {
@@ -279,7 +284,10 @@ export function createRuntimePort(mind, deps = {}) {
      *
      * A1 只给到私聊；群聊进 roster 是后续版本的事（与现有 global 唤醒一致）。
      */
-    scene({ now: at = now(), limit = 3 } = {}) {
+    scene({ now: at = now(), limit = 3, options = {} } = {}) {
+      const idleLookbackMs = Math.max(0, Number(options.idleLookbackMs) || 2 * 60000);
+      const suppressMs = Math.max(0, Number(options.suppressMs) || 600000);
+      const openLoopDueMs = Math.max(0, Number(options.openLoopDueMs) || 24 * 3600000);
       if (!chatStore || typeof chatStore.listChats !== 'function') {
         return { entries: [], restCount: 0 };
       }
@@ -307,9 +315,11 @@ export function createRuntimePort(mind, deps = {}) {
           const hoursSince = lastTs > 0 ? Math.max(0, Math.round((at - lastTs) / 3600000)) : null;
           const openLoopsDue = (Array.isArray(rel.openLoops) ? rel.openLoops : []).filter((l) => {
             const since = Number(l?.since) || 0;
-            return since > 0 && at - since >= 24 * 3600000;
+            return since > 0 && at - since >= openLoopDueMs;
           }).length;
-          const proactiveAt = pickNumber((mind.getTick()?.proactiveAt || {})[chatKey]);
+          const lastProactiveAt = typeof proactiveAt === 'function'
+            ? pickNumber(proactiveAt(chatKey))
+            : pickNumber((mind.getTick()?.proactiveAt || {})[chatKey]);
           entries.push({
             chatKey,
             name: String(rel.nickname || chatId),
@@ -317,12 +327,14 @@ export function createRuntimePort(mind, deps = {}) {
             warmth: pickNumber(rel.warmth),
             hoursSince,
             unread: pickNumber(meta.unread),
+            lastTs,
             lastLine: String(meta.lastText || '').slice(0, 30),
+            lastSelf: meta.lastSelf === true,
             lastEventAt,
             openLoopsDue,
             running: false, // 由运行时自己填（端口不该知道谁在跑）
-            recent: lastTs > 0 && at - lastTs < 2 * 60000,
-            suppressed: proactiveAt > 0 && at - proactiveAt < 600000
+            recent: lastTs > 0 && at - lastTs < idleLookbackMs,
+            suppressed: lastProactiveAt > 0 && at - lastProactiveAt < suppressMs
           });
         } catch (error) {
           log.error?.(`[mind-port] 现场读取失败（${chatKey}）：${error?.message ?? error}`);
