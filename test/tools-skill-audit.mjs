@@ -247,6 +247,11 @@ async function main() {
     // 所以测试也必须按配置来，否则测的是不存在的语义。
     const { setSkillEnabled } = await import('../src/skills/config.js');
     const id = skillWithTools.id;
+    // 本地可能装了扩展（skills/ 不入库），它们在全新数据目录里默认关闭 ——
+    // 这是产品行为（新扩展默认关）。这里先显式打开，否则"启用时可用"的断言
+    // 会随这台机器装了什么而漂移。
+    setSkillEnabled(id, true);
+    await skillManager.activate(id, {});
     const before = (skillWithTools.toolIds || []).map((t) => getToolAvailability(t, baseCtx).enabled);
     check(before.every(Boolean), `技能 ${id} 启用时它的工具可用`, JSON.stringify(before));
 
