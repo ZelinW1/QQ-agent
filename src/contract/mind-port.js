@@ -517,6 +517,17 @@ export function createRuntimePort(mind, deps = {}) {
       try { return mind.listDueObservations?.(now) || []; } catch { return []; }
     },
 
+    /** 给一条观察下判定（机械判定，不调模型）。 */
+    resolveObservation(id, { verdict = 'void', note = '', now: at = now() } = {}) {
+      try {
+        const r = mind.resolveObservation?.(id, { verdict, note, now: at });
+        return r?.ok ? ok({ observation: r.observation }) : fail('invalid_patch', r?.reason || '观察判定失败');
+      } catch (error) {
+        log.error?.(`[mind-port] 观察判定失败：${error?.message || error}`);
+        return fail('store-error', '观察判定失败');
+      }
+    },
+
     // ── 领域读（自由时刻的材料）────────────────────────────────────────
 
     /** 她自己（完整对象，只读）。 */
@@ -758,6 +769,7 @@ export function createNoopRuntimePort() {
     recordAction: nothing,
     recordOutcome: nothing,
     openObservation: nothing,
+    resolveObservation: nothing,
     openObservations() { return []; },
     integrationState() { return { lastIntegrateAt: 0, todayIntegrates: 0, today: '', lastNarrativeAt: 0 }; },
     self() { return null; },

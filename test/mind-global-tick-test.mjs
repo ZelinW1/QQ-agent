@@ -314,6 +314,54 @@ console.log('\n=== 2h. recall → remember ===');
   check(events.some((e) => String(e.text || '').includes('翻旧事之后')), 'remember 在 recall 之后仍能写入');
 }
 
+// ── 2i. 到期意图：进候选、做完就了结 ────────────────────────────────────
+console.log('\n=== 2i. 到期意图 ===');
+{
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 3 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  // 主动说话需要一个能"真的发出去"的唤醒：这一组只关心意图的进出，替身即可。
+  orch.wake = async () => ({ ok: true });
+  const dueAt = now0 + 60000;
+  const made = mind.addIntention({ text: '问问他搬家的事', dueAt, chatKey: 'private:111', source: 'free', kind: 'delayed_check' });
+  check(made.ok === true, '先挂一条到期的意图');
+
+  let seen = null;
+  const replies = [
+    { tool_calls: [{ id: 'c1', function: { name: 'send_proactive', arguments: JSON.stringify({ chatKey: 'private:111', reason: '到点了' }) } }] },
+    { tool_calls: [{ id: 'c2', function: { name: 'finish', arguments: '{}' } }] }
+  ];
+  await orch.tickOnce({ now: dueAt + 1000, chat: async (msgs) => { seen = msgs; return { message: replies.shift() }; } });
+
+  const user = String(seen?.[1]?.content || '');
+  check(user.includes('你之前说要做的事'), '到期意图进了提示词');
+  const open = mind.listIntentions({ status: 'open' });
+  check(open.length === 0, '做完之后意图被了结');
+  check(mind.listIntentions({ limit: 10 })[0].status === 'done', '状态是 done');
+}
+// ── 2j. 她可以自己安排"过会儿再做" ──────────────────────────────────────
+console.log('\n=== 2j. 安排未来 ===');
+{
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 3 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  const replies = [
+    { tool_calls: [{ id: 'p1', function: { name: 'plan', arguments: JSON.stringify({ text: '问问他搬家的事', inHours: 2, chatKey: 'private:111' }) } }] },
+    { tool_calls: [{ id: 'p2', function: { name: 'finish', arguments: '{}' } }] }
+  ];
+  await orch.tickOnce({ now: now0, chat: async () => ({ message: replies.shift() }) });
+
+  const open = mind.listIntentions({ status: 'open' });
+  check(open.length === 1 && open[0].text.includes('搬家'), 'plan 挂出一条意图');
+  check(open[0].kind === 'delayed_check', '标记为延时查看');
+  check(open[0].dueAt === now0 + 2 * H, '按 inHours 算到期时间');
+}
 // ── 3. 同一次唤醒不会重复决策 ───────────────────────────────────────────
 console.log('\n=== 3. 节拍 ===');
 {

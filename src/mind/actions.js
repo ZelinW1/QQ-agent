@@ -78,6 +78,15 @@ export const ACTIONS = [
     }
   },
   {
+    id: 'plan',
+    label: '记下要做的事',
+    description: '把"过一会儿/明天想做的事"记下来，到点你会想起来；不用现在做',
+    energy: 3,
+    async run(ctx, args) {
+      return ctx.plan(args || {});
+    }
+  },
+  {
     id: 'stay_up',
     label: '再撑一会儿',
     description: '还不想睡，再待一会儿再睡',

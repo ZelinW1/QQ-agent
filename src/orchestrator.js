@@ -38,6 +38,7 @@ import { rescueUnsentReply } from './reply-rescue.js';
 import { createRuntimePort, createWriterPort, createAdminPort } from './contract/mind-port.js';
 import { createPipeline } from './runtime/pipeline.js';
 import { buildFreeMaterials, renderMaterials } from './runtime/materials.js';
+import { drainDueObservations } from './runtime/observe.js';
 
 /**
  * 正文像不像"本来就该发出去的话"。
@@ -2461,11 +2462,20 @@ export class Orchestrator {
     this.mindPort.bodySettle({ now });
     let tick = this.mindPort.bodyRead();
 
+    // ①b 顺手把到期的观察判掉（机械判定，不调模型）：她需要知道做过的事有没有用。
+    try { drainDueObservations({ port: this.mindPort, now }); } catch { /* 观察失败不影响心跳 */ }
+
     // ② 全局唤醒自身的节拍（不再按会话各排一次）
     if (this.globalNextWakeAt && now < this.globalNextWakeAt) {
       return { results: [], skipped: 'not-due' };
     }
     this.globalNextWakeAt = D.nextTickAt(now, tickCfg.intervalMs, tickCfg.jitter);
+    // 有到期的意图就提前醒：不然"她说 24 小时后问"要等到下一个心跳周期才可能发生。
+    const nextIntentAt = this.mindPort.intentions({ status: 'open', limit: 50 })
+      .map((x) => Number(x.dueAt) || 0)
+      .filter((at) => at > now)
+      .sort((a, b) => a - b)[0];
+    if (nextIntentAt) this.globalNextWakeAt = Math.min(this.globalNextWakeAt, nextIntentAt);
 
     const results = [];
     const roster = this.#buildRoster(now);
@@ -2501,6 +2511,27 @@ export class Orchestrator {
         candidates.push({ ...c, chatKey: r.chatKey, name: r.name });
       }
     }
+    // 到期的意图进候选：她自己安排的事，比任何"想找人说话"的理由都更该排在前面。
+    // 逾期太久（默认 7 天）的直接作废 —— 一直提醒一件早就不该做的事只会变成噪音。
+    const intentWriter = createWriterPort(this.mind, { by: 'runtime.free' });
+    const openIntents = this.mindPort.intentions({ status: 'open', limit: 50 });
+    for (const it of openIntents) {
+      const dueAt = Number(it.dueAt) || 0;
+      if (!dueAt) continue;
+      if (now - dueAt > 7 * 86400000) {
+        intentWriter.closeIntention(it.id, { status: 'expired', note: '放太久了，算了' });
+        continue;
+      }
+      if (dueAt > now) continue;
+      candidates.push({
+        id: `intent:${it.id}`,
+        text: `你之前说要做的事：${it.text}`,
+        chatKey: String(it.chatKey || ''),
+        name: '',
+        intentionId: it.id
+      });
+    }
+
     if (sleep.inWindow && !sleep.asleep) {
       candidates.push({ id: 'bedtime', text: '夜深了，该睡了，还是再待一会儿？', chatKey: '', name: '' });
     }
@@ -2711,6 +2742,15 @@ export class Orchestrator {
           if (applied.ok) {
             state.energy = Number(applied.body?.energy) || 0;
             if (attempt.target && name === 'send_proactive') this.lastProactiveAt.set(attempt.target, now);
+            // 对那个人做成了事，就把跟他相关的到期意图了结掉：
+            // 否则下次心跳她还会被同一件事叫起来。
+            if (attempt.target) {
+              for (const it of openIntents) {
+                if (String(it.chatKey || '') !== attempt.target) continue;
+                if (!(Number(it.dueAt) || 0) || Number(it.dueAt) > now) continue;
+                intentWriter.closeIntention(it.id, { status: 'done', note: `已处理：${attempt.name}` });
+              }
+            }
           }
         }
 
@@ -2786,9 +2826,16 @@ export class Orchestrator {
                   text: { type: 'string', description: '要记住的那句话或那件事（用她自己的话）' },
                   chatKey: { type: 'string', description: '这条记忆属于谁 / 哪个会话' }
                 }
+              : {}),
+            ...(a.id === 'plan'
+              ? {
+                  text: { type: 'string', description: '要做的事（一句话，比如"问问他搬家的事"）' },
+                  inHours: { type: 'number', description: '大概几小时后做（默认 24；不确定就省略）' },
+                  chatKey: { type: 'string', description: '跟谁有关（可选）' }
+                }
               : {})
           },
-          ...(a.id === 'remember' ? { required: ['text'] } : {}),
+          ...(a.id === 'remember' || a.id === 'plan' ? { required: ['text'] } : {}),
           additionalProperties: true
         }
       }
@@ -2820,6 +2867,8 @@ export class Orchestrator {
       // "记一笔"：把刚才的事写进她自己的记忆（事件），不是强制流程，
       // 只是自由时间里一个可选动作。
       remember: (args) => this.#rememberForChat(chatKey, args || {}, now),
+      // "记下要做的事"：挂一条意图（到点会进候选），不占现在的时间。
+      plan: (args) => this.#planForChat(chatKey, args || {}, now),
       // "再撑一会儿"：只延长入睡时间，不产生消息。次数由 maxStayUp 封顶。
       stayUp: () => {
         let next = 0;
@@ -2882,6 +2931,34 @@ export class Orchestrator {
     return { ok: true, eventId: r.event?.id || '', text, duplicate: r.duplicate === true };
   }
 
+  /**
+   * "记下要做的事"：挂一条意图，到点会进候选。
+   *
+   * 为什么它是个独立动作而不是让 remember 顺手做：记事实与安排未来是两件事。
+   * 事实属于事件（会被压缩、会被检索），安排属于意图（有到期时间、会被了结）。
+   * 混在一起，她就分不清"我记得这件事"与"我打算做这件事"。
+   */
+  #planForChat(chatKey, args = {}, now = Date.now()) {
+    const text = String(args.text || '').trim();
+    if (!text) return { ok: false, reason: '没有要记的事' };
+    const hoursRaw = Number(args.inHours);
+    const hours = Number.isFinite(hoursRaw) ? Math.max(0.25, Math.min(24 * 30, hoursRaw)) : 24;
+    const target = String(chatKey || args.chatKey || '').trim();
+    const writer = createWriterPort(this.mind, { by: 'runtime.free' });
+    const r = writer.proposeIntention({
+      text: text.slice(0, 160),
+      dueAt: now + Math.round(hours * 3600000),
+      chatKey: target,
+      kind: 'delayed_check'
+    });
+    if (!r?.ok) return { ok: false, reason: r?.message || '没能记下来' };
+    return {
+      ok: true,
+      intentionId: r.intention?.id || '',
+      dueAt: Number(r.intention?.dueAt) || 0,
+      duplicate: r.duplicate === true
+    };
+  }
   /**
    * "回想"动作：从更早的记忆里翻一条出来。
    *

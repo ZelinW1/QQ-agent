@@ -100,10 +100,10 @@ console.log('\n=== 6. 抖动与动作可用性 ===');
   check(nextTickAt(now0, 300000, 0, () => 0.5) === now0 + 300000, '无抖动时等于间隔');
 
   const rich = availableActions({ energy: 100, todayProactive: 0, maxProactive: 6, minProactiveGapMs: 0, lastProactiveAt: 0, unreflected: 5 });
-  check(rich.map((a) => a.id).join(',') === 'send_proactive,organize,recall,remember,idle', `体力充足时四个都可选（${rich.map((a) => a.id).join(',')}）`);
+  check(rich.map((a) => a.id).join(',') === 'send_proactive,organize,recall,remember,plan,idle', `体力充足时四个都可选（${rich.map((a) => a.id).join(',')}）`);
 
   const poor = availableActions({ energy: 6, todayProactive: 0, maxProactive: 6, minProactiveGapMs: 0, lastProactiveAt: 0, unreflected: 5 });
-  check(poor.map((a) => a.id).join(',') === 'recall,remember,idle', `体力低时只留轻量动作（${poor.map((a) => a.id).join(',')}）`);
+  check(poor.map((a) => a.id).join(',') === 'recall,remember,plan,idle', `体力低时只留轻量动作（${poor.map((a) => a.id).join(',')}）`);
 
   const capped = availableActions({ energy: 100, todayProactive: 6, maxProactive: 6, minProactiveGapMs: 0, lastProactiveAt: 0, unreflected: 5 });
   check(!capped.some((a) => a.id === 'send_proactive'), '今日主动次数用完 → 菜单里不出现');
@@ -151,7 +151,7 @@ console.log('\n=== 7. 心跳日志的取舍 ===');
 console.log('\n=== 8. 行动注册表 ===');
 {
   const ids = ACTIONS.map((a) => a.id);
-  check(ids.join(',') === 'send_proactive,organize,recall,remember,stay_up,idle', `内置动作齐全且顺序固定（${ids.join(',')}）`);
+  check(ids.join(',') === 'send_proactive,organize,recall,remember,plan,stay_up,idle', `内置动作齐全且顺序固定（${ids.join(',')}）`);
   check(ACTIONS.every((a) => a.label && !/扮演|角色扮演|人设/.test(a.label + (a.description || ''))), '动作文案不含扮演类词汇');
   check(ACTIONS.every((a) => typeof a.run === 'function'), '每个动作都有 run');
 }
