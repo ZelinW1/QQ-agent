@@ -48,6 +48,8 @@ const LIMITS = {
   preoccupations: 5,
   preoccupationItem: 60,
   changelog: 50,
+  // 自我笔记：只保留最近的，攒够几条就该由全局整合消化一次。
+  selfNotes: 20,
   reason: 200
 };
 
@@ -208,6 +210,9 @@ function defaultSelf() {
     narrative: '',
     mood: { label: '', valence: 0, since: 0 },
     preoccupations: [],
+    // 待整合的"我好像变了"：会话级反思只能写到这里，改写自我要等全局整合。
+    // 有它，"哪个群先攒够事件，哪个群就塑造她"这个问题才被挡住。
+    selfNotes: [],
     changelog: []
   };
 }
@@ -578,8 +583,50 @@ export class MindStore {
       ...raw,
       mood: { ...defaultSelf().mood, ...(isPlainObject(raw.mood) ? raw.mood : {}) },
       preoccupations: Array.isArray(raw.preoccupations) ? raw.preoccupations : [],
+      selfNotes: Array.isArray(raw.selfNotes) ? raw.selfNotes : [],
       changelog: Array.isArray(raw.changelog) ? raw.changelog : []
     };
+  }
+
+  /**
+   * 追加"自我笔记"：会话级反思的产物，**不是**对自我的改写。
+   *
+   * 为什么要分成两层：自我属于全局，而反思按会话触发。如果会话反思能直接改自我，
+   * 那么哪个会话先攒够事件，哪个会话的语境就会成为她自我叙事的来源 ——
+   * 刷屏的人会系统性地塑造她是谁。笔记只是一闪念，等全局整合来消化。
+   *
+   * @param {Array<{text:string, at?:number}>|string[]} notes
+   * @param {{ by?: string, now?: number }} [opts]
+   * @returns {{ ok:boolean, added:number, self?:object, reason?:string }}
+   */
+  appendSelfNotes(notes, { by = 'reflection', now = Date.now() } = {}) {
+    const list = (Array.isArray(notes) ? notes : [])
+      .map((n) => (typeof n === 'string' ? { text: n } : (isPlainObject(n) ? n : null)))
+      .filter(Boolean)
+      .map((n) => String(n.text ?? '').trim())
+      .filter(Boolean);
+    if (!list.length) return { ok: false, added: 0, reason: '没有要记的笔记' };
+
+    const self = this.getSelf();
+    const at = Number(now) || Date.now();
+    const next = [...self.selfNotes];
+    let added = 0;
+    for (const text of list) {
+      // 24 小时内同一句话不重复记（她容易连着几轮想到同一件事）
+      const dup = next.some((n) => String(n.text) === text && at - Number(n.at) < 24 * 3600 * 1000);
+      if (dup) continue;
+      next.push({ id: nowId('sn', at), at, text: str(text, 200), by });
+      added++;
+    }
+    if (!added) return { ok: true, added: 0, self };
+
+    const patched = {
+      ...self,
+      selfNotes: next.slice(-LIMITS.selfNotes),
+      updatedAt: at
+    };
+    writeJsonAtomic(this.#selfFile(), patched);
+    return { ok: true, added, self: patched };
   }
 
   /**

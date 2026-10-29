@@ -222,6 +222,23 @@ console.log('\n=== 6. 写入端口：来源与规程 ===');
   check(nobody.appendEvent({ chatKey: CHAT, text: 'x' }).code === 'not_a_writer', '未登记的来源不能写任何东西');
 }
 
+// ── 6b. 自我笔记：只有整合能写 ─────────────────────────────────────────
+console.log('\n=== 6b. 自我笔记 ===');
+{
+  const store = mkStore();
+  const integrator = createWriterPort(store, { by: 'integrate.chat' });
+  const r = integrator.writeSelfNotes(['我好像变了']);
+  check(r.ok === true && r.added === 1, '整合可以写自我笔记');
+  check(store.getSelf().version === 0, '写笔记不改变自我版本');
+  check(store.getSelf().selfNotes.length === 1, '落在 selfNotes 里');
+
+  const updater = createWriterPort(store, { by: 'tool:update_relation' });
+  check(updater.writeSelfNotes(['越权']).code === 'not_a_writer', '别的来源写不了自我笔记');
+
+  const account = createRuntimePort(store).reflectionState({ chatKey: CHAT });
+  check(typeof account.today === 'string', '反思账本带今日键');
+  check(account.todayReflections === 0, '反思账本带今日次数');
+}
 // ── 7. 写入端口：事件与反思 ────────────────────────────────────────────
 console.log('\n=== 7. 写入端口：事件 ===');
 {

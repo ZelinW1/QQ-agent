@@ -204,7 +204,7 @@ export function createRuntimePort(mind, deps = {}) {
 
     /**
      * 反思账本：欠了多少条未整理、上次尝试是什么时候。两者总是一起用（攒够没 + 冷却没）。
-     * @returns {{ debt: number, lastAttemptAt: number }}
+     * @returns {{ debt: number, lastAttemptAt: number, today: string, todayReflections: number }}
      */
     reflectionState({ chatKey }) { /* … */ },
 
@@ -344,7 +344,11 @@ export function createWriterPort(mind, { now = Date.now } = {}) {
 
     appendReflection(input) { /* … */ },
     writeNarrative(input) { /* … */ },
-    writeSelfNotes(notes, { momentId }) { /* B2 起才有存储；A 期 no-op ok:true */ },
+    /**
+     * 自我笔记：会话级反思的产物，**不是**改写自我。
+     * 只有 integrate.chat / integrate.global 能写；其它来源返回 `not_a_writer`。
+     */
+    writeSelfNotes(notes, { momentId }) { /* → mind.appendSelfNotes */ },
   };
 }
 ```

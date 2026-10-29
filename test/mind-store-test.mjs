@@ -249,6 +249,26 @@ console.log('\n=== 7. 自我：版本、留痕、底线 ===');
   check(r6.self.preoccupations.length === 5, '挂心事项截断到 5 条');
 }
 
+// ── 7b. 自我笔记：会话反思的产物，不是改写 ─────────────────────────────
+console.log('\n=== 7b. 自我笔记 ===');
+{
+  const store = mk();
+  const r1 = store.appendSelfNotes(['我好像变了', { text: '挂心：他最近不太对' }], { by: 'integrate.chat' });
+  check(r1.ok === true && r1.added === 2, '两条笔记写入');
+  check(store.getSelf().version === 0, '记笔记不改变自我版本（它不是改写）');
+  check(store.getSelf().selfNotes.length === 2, '落在 selfNotes 里');
+  check(store.getSelf().selfNotes[0].by === 'integrate.chat', '笔记带来源');
+
+  const r2 = store.appendSelfNotes(['我好像变了'], { by: 'integrate.chat' });
+  check(r2.added === 0, '24 小时内同一句话不重复记');
+
+  for (let i = 0; i < 30; i++) store.appendSelfNotes([`笔记 ${i}`]);
+  const notes = store.getSelf().selfNotes;
+  check(notes.length === 20, `只保留最近 20 条（实际 ${notes.length}）`);
+  check(notes.at(-1).text === '笔记 29', '留下的是最新的那批');
+
+  check(store.appendSelfNotes([]).ok === false, '空列表被拒绝');
+}
 // ── 8. 节律状态与日志 ───────────────────────────────────────────────────
 console.log('\n=== 8. 节律状态与日志 ===');
 {

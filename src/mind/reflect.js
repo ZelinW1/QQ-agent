@@ -159,7 +159,9 @@ export function parseReflectOutput(raw) {
  * @returns {{applied:object, rejected:object[]}}
  */
 export function applyReflection({ store, chatKey, output, inputEvents = [], now = Date.now() } = {}) {
-  const applied = { self: false, relations: [], compacted: 0, summaryId: null };
+  // 注意：这里**没有** self。会话级反思不再改写自我，只留下"自我笔记"，
+  // 等全局整合来消化（见设计 §4.3）。
+  const applied = { self: false, selfNotes: 0, relations: [], compacted: 0, summaryId: null };
   const rejected = [];
   if (!store || !isPlainObject(output)) return { applied, rejected };
 
@@ -168,27 +170,34 @@ export function applyReflection({ store, chatKey, output, inputEvents = [], now 
     inputEvents.map((e) => String(e.actorId ?? '')).filter((id) => id && id !== 'self')
   );
 
-  // ── 自我 ──
+  // ── 自我：会话级反思只能留笔记，改不了自我 ──
+  //
+  // 为什么收窄：自我属于全局，反思却按会话触发。放开这条线，"哪个群先攒够事件，
+  // 哪个群的语境就成为她自我叙事的来源"——刷屏的人会系统性地塑造她是谁。
+  // 会话级只在 selfNotes 里留一句"我好像变了"，由全局整合统一消化。
+  const selfNotes = [];
   if (isPlainObject(output.self)) {
-    const patch = {};
     if (typeof output.self.narrative === 'string' && output.self.narrative.trim()) {
-      patch.narrative = output.self.narrative;
+      selfNotes.push({ text: output.self.narrative });
     }
-    if (isPlainObject(output.self.mood)
-      && (String(output.self.mood.label ?? '').trim() || output.self.mood.valence !== undefined)) {
-      patch.mood = {
-        label: output.self.mood.label,
-        valence: output.self.mood.valence
-      };
+    const moodLabel = String(output.self.mood?.label ?? '').trim();
+    if (isPlainObject(output.self.mood) && moodLabel) {
+      selfNotes.push({ text: `心情像：${moodLabel}` });
     }
     if (Array.isArray(output.self.preoccupations)) {
-      patch.preoccupations = output.self.preoccupations;
+      for (const item of output.self.preoccupations) {
+        const text = String(item ?? '').trim();
+        if (text) selfNotes.push({ text: `挂心：${text}` });
+      }
     }
-    if (Object.keys(patch).length) {
-      const reason = String(output.notes ?? '').trim() || '安静下来想了想';
-      const r = store.reviseSelf(patch, { by: 'reflection', reason, now });
-      if (r.ok) applied.self = true;
-      else rejected.push({ kind: 'self', reason: r.reason });
+  }
+  if (selfNotes.length) {
+    if (typeof store.appendSelfNotes === 'function') {
+      const r = store.appendSelfNotes(selfNotes, { by: 'integrate.chat', now });
+      if (r?.ok) applied.selfNotes = Number(r.added) || 0;
+      else rejected.push({ kind: 'selfNotes', reason: r?.reason || '笔记写入失败' });
+    } else {
+      rejected.push({ kind: 'selfNotes', reason: '存储不支持自我笔记（版本过旧）' });
     }
   }
 

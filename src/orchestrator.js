@@ -1760,18 +1760,16 @@ export class Orchestrator {
       if (!cfg.api?.model || !cfg.api?.baseUrl) return;
       if (this.reflecting.has(chatKey)) return;
 
-      const tick = this.mind.getTick();
-      const since = Number(tick.lastReflectAt) || 0;
-      const pending = this.mind.countUnreflected(chatKey, since);
+      // 阈值与冷却都来自"反思账本"，走端口读；编排器不再摸 tick 的字段。
+      const account = this.mindPort.reflectionState({ chatKey });
       const need = Math.max(1, Number(m.reflectAfterEvents) || 8);
-      if (pending < need) return;
+      if (account.debt < need) return;
 
       const cooldown = Math.max(60000, Number(m.reflectCooldownMs) || 7200000);
-      const lastAttempt = Number(tick.lastReflectAttemptAt) || 0;
-      if (Date.now() - lastAttempt < cooldown) return;
+      if (Date.now() - account.lastAttemptAt < cooldown) return;
 
       const today = todayKey();
-      const used = tick.today === today ? (Number(tick.todayReflections) || 0) : 0;
+      const used = account.today === today ? account.todayReflections : 0;
       const cap = Math.max(1, Number(m.tick?.maxReflectPerDay) || 8);
       if (used >= cap) return;
 
@@ -1831,6 +1829,8 @@ export class Orchestrator {
     if (!parsed.ok) {
       store.updateTick({ lastReflectAttemptAt: now });
       store.appendReflection({
+        // scope 让全局整合能把"会话级"与"全局"分开取（设计 §4.3）
+        scope: 'chat',
         chatKey, at: now, ok: false, reason: parsed.reason,
         eventCount: events.length,
         rawSummary: raw.slice(0, 300)
@@ -1851,6 +1851,7 @@ export class Orchestrator {
       lastReflectAttemptAt: now
     });
     store.appendReflection({
+      scope: 'chat',
       chatKey, at: now, ok: true, empty: parsed.empty === true,
       window: { from: since, to: newestTs },
       eventCount: events.length,

@@ -156,16 +156,18 @@ console.log('\n=== 4. 应用成功：自我 / 关系 / 压缩 ===');
     }
   });
 
-  check(r.applied.self === true, '自我被改写');
+  // 会话级反思不再改写自我：它只留"自我笔记"，等全局整合消化。
+  check(r.applied.self === false && r.applied.selfNotes >= 1, '只留笔记，不改自我');
   check(r.applied.relations.length === 1, '关系被更新');
   check(r.applied.compacted === 2, '两条被压缩');
   check(Boolean(r.applied.summaryId), '生成了摘要事件');
 
   const self = store.getSelf();
-  check(self.version === 1, '自我版本 +1');
-  check(self.narrative.includes('上心一点'), '叙事写入');
-  check(self.mood.label === '有点闷', '心情写入');
-  check(self.changelog.at(-1).by === 'reflection', 'changelog 标记来源为反思');
+  check(self.version === 0, '自我版本不变');
+  check(!self.narrative.includes('上心一点'), '叙事没被会话反思改写');
+  check(self.selfNotes.some((n) => String(n.text).includes('上心一点')), '叙事内容进了自我笔记');
+  check(self.selfNotes.some((n) => String(n.text).includes('心情像：有点闷')), '心情也变成一条笔记');
+  check(self.changelog.length === 0, '没留下 changelog（自我没被改写）');
 
   const live = store.queryEvents({ chatKey: CHAT });
   check(live.length === 2, `原始两条已压缩、剩 1 条未压缩 + 摘要（${live.length}）`);
@@ -183,9 +185,10 @@ console.log('\n=== 5. 人格底线不会被反思绕过 ===');
     store, chatKey: CHAT, inputEvents: events, now: NOW,
     output: { self: { narrative: '我不想再当小鲸鱼了。' } }
   });
-  check(r.applied.self === false, '反思不能删改人格底线');
-  check(r.rejected.some((x) => x.kind === 'self' && String(x.reason).includes('底线')), '拒绝原因可读');
+  check(r.applied.self === false, '反思改不了自我');
+  check(r.applied.selfNotes >= 1, '只留下一条笔记');
   check(store.getSelf().narrative === '我是小鲸鱼。', '叙事未被改动');
+  // 底线本身仍由 reviseSelf 把守（见存储层测试）；会话反思现在连尝试的机会都没有。
 }
 
 // ── 6. 整条 reflectForChat（注入模型调用）──────────────────────────────
@@ -215,7 +218,8 @@ console.log('\n=== 6. reflectForChat 全链路 ===');
   const r = await orch.reflectForChat(CHAT, { chat: fakeChat });
   check(r.ok === true && r.empty === false, '反思成功');
   check(seen && seen[0].role === 'system', '确实调用了模型（拿到了 messages）');
-  check(store.getSelf().version === 1, '自我版本递增');
+  check(store.getSelf().version === 0, '自我不被会话级反思改写');
+  check(store.getSelf().selfNotes.length >= 1, '留下了自我笔记');
   check(store.getRelation('456').stage === 'acquaintance', '关系更新');
 
   const tick = store.getTick();

@@ -395,9 +395,12 @@ export function createRuntimePort(mind, deps = {}) {
         const tick = mind.getTick?.() || {};
         return {
           debt: Number(mind.countUnreflected?.(chatKey, pickNumber(tick.lastReflectAt))) || 0,
-          lastAttemptAt: pickNumber(tick.lastReflectAttemptAt)
+          lastAttemptAt: pickNumber(tick.lastReflectAttemptAt),
+          // 每日上限要用的两个字段。放在同一次读里，调用方不必再摸 store。
+          today: String(tick.today || ''),
+          todayReflections: pickNumber(tick.todayReflections)
         };
-      } catch { return { debt: 0, lastAttemptAt: 0 }; }
+      } catch { return { debt: 0, lastAttemptAt: 0, today: '', todayReflections: 0 }; }
     },
 
     /** 未反思事件数。`since` 缺省取她的 `lastReflectAt`，与现有语义一致。 */
@@ -546,8 +549,18 @@ export function createWriterPort(mind, opts = {}) {
     /** 叙事（日记）：B 期才有存储。 */
     writeNarrative() { return fail('not-implemented', '叙事在 B 期接入'); },
 
-    /** 自我笔记：B2 前没有独立存储，先接受写入但不落盘（返回 ok，避免调用方分支）。 */
-    writeSelfNotes() { return ok({ stored: false }); }
+    /** 自我笔记：会话级反思的产物，只记为"待整合"，不是改写自我。 */
+    writeSelfNotes(notes, meta = {}) {
+      if (!allowed('self.notes')) return deny('self.notes');
+      try {
+        const r = mind.appendSelfNotes?.(notes, { by, now: Date.now() });
+        if (!r?.ok) return fail('invalid_patch', r?.reason || '笔记写入失败');
+        return ok({ added: r.added ?? 0, self: r.self });
+      } catch (error) {
+        log.error?.(`[mind-port] 写自我笔记失败：${error?.message ?? error}`);
+        return fail('store-error', '自我笔记写入失败');
+      }
+    }
   };
 }
 
@@ -591,7 +604,7 @@ export function createNoopRuntimePort() {
     relationBrief() { return ''; },
     recall() { return []; },
     recentEvents() { return []; },
-    reflectionState() { return { debt: 0, lastAttemptAt: 0 }; },
+    reflectionState() { return { debt: 0, lastAttemptAt: 0, today: '', todayReflections: 0 }; },
     reflectionDebt() { return 0; },
     lastAction() { return null; },
     recentActions() { return []; },

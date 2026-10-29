@@ -158,7 +158,7 @@ src/mind/         （既有，按层整理）
 Self {
   version, narrative, mood: { label, valence }, preoccupations: [],
   invariants: [],                // 底线，整合改不动，只有管理员能改
-  selfNotes: [],                 // 待整合的"我好像变了"（per-chat 反思产出）
+  selfNotes: [],                 // 待整合的"我好像变了"：会话反思只能写这里（已实现）
   changelog: [], updatedAt
 }
 Relation {
@@ -1038,7 +1038,8 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R6 | A1-5 收尾：`createApp({ mind: null })` 测试缝 + 端到端守门（没有心智时对话照跑、工具消失、接口不 500） | ✅ |
 | —— | **A 期收尾**：chat 侧仍有两处直连（`#buildMindContext` 的采集、`#maybeReflect` 的阈值），它们跟着 `materials.js` / 整合阶梯在 B、C 期一起搬 | 已知 |
 | R7 | B1 关系版本化：`version` + `changelog`（来源、理由、依据），只补证据不升版本 | ✅ |
-| R8 | B2 整合阶梯：L2a/L2b 两级、Self 写入收窄到全局整合、强事件接入 | 未开始 |
+| R8 | B2 前半：会话反思不再改写自我，只产出 `selfNotes`；`#maybeReflect` 改走端口账本 | ✅ |
+| R9 | B2 后半：全局整合（L2b）成为唯一能写自我的自动路径；强事件接入 | 未开始 |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 
