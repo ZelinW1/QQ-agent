@@ -24,6 +24,7 @@ const { detectStrongText, stageRegressed } = await import(src('src/mind/strong.j
 const { MindStore } = await import(src('src/mind/store.js'));
 const { buildIntegratePrompt, parseIntegrateOutput, applyIntegrate } = await import(src('src/mind/integrate.js'));
 const { Orchestrator } = await import(src('src/orchestrator.js'));
+const { createRuntimePort } = await import(src('src/contract/mind-port.js'));
 const { updateConfig } = await import(src('src/config.js'));
 
 const mkStore = () => new MindStore({
@@ -123,6 +124,7 @@ console.log('\n=== 5. runIntegrate 全链路 ===');
   store.appendSelfNotes(['我好像没那么怕拒绝了', '挂心：他最近很累', '我可能有点在意别人怎么看我'], { by: 'integrate.chat' });
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
   orch.integrating = false;
 
   let seen = null;
@@ -171,6 +173,7 @@ console.log('\n=== 6. 冷却 ===');
   store.appendSelfNotes(['一条念头'], { by: 'integrate.chat' });
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
   orch.integrating = false;
   const fakeChat = async () => ({ message: { content: '{"self":{"narrative":"变了"}}' } });
 

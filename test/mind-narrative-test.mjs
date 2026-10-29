@@ -22,6 +22,7 @@ const check = (cond, msg, detail = '') => {
 const { MindStore } = await import(src('src/mind/store.js'));
 const { buildNarrativePrompt, parseNarrativeOutput } = await import(src('src/mind/narrative.js'));
 const { Orchestrator } = await import(src('src/orchestrator.js'));
+const { createRuntimePort } = await import(src('src/contract/mind-port.js'));
 const { updateConfig } = await import(src('src/config.js'));
 
 const mkStore = () => new MindStore({
@@ -78,6 +79,7 @@ console.log('\n=== 3. runNarrative 全链路 ===');
   store.appendReflection({ scope: 'global', at: Date.now() - DAY, ok: true, produced: { selfNotes: 1 } });
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
   orch.narrating = false;
 
   let seen = null;
@@ -102,6 +104,7 @@ console.log('\n=== 4. 材料门槛 ===');
   const store = mkStore();
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
   orch.narrating = false;
   const fakeChat = async () => ({ message: { content: '{"narrative":"硬写也要写"}' } });
 
@@ -117,6 +120,7 @@ console.log('\n=== 5. 叙事触发 ===');
   const store = mkStore();
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
   orch.narrating = false;
   let calls = 0;
   orch.runNarrative = async () => { calls++; return { ok: true }; };
@@ -132,6 +136,7 @@ console.log('\n=== 5. 叙事触发 ===');
   const store2 = mkStore();
   const orch2 = Object.create(Orchestrator.prototype);
   orch2.mind = store2;
+  orch2.mindPort = createRuntimePort(orch2.mind, {});
   orch2.narrating = false;
   let calls2 = 0;
   orch2.runNarrative = async () => { calls2++; return { ok: true }; };
@@ -153,6 +158,7 @@ console.log('\n=== 6. 月度兜底 ===');
 
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
   orch.integrating = false;
   let forced = null;
   orch.runIntegrate = async (opts) => { forced = opts; return { ok: true }; };

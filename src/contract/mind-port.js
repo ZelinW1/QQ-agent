@@ -467,9 +467,90 @@ export function createRuntimePort(mind, deps = {}) {
       }
     },
 
-    recordAttempt() { return fail('not-implemented', '尝试记录在 B 期接入'); },
-    recordOutcome() { return fail('not-implemented', '观测在 B 期接入'); },
-    openObservations() { return []; }
+    /**
+     * 记一次尝试（唯一写入路径）。
+     *
+     * 与 recordAction 是同一个存储的两个名字：appendAction 从 B3 起写的就是 attempts。
+     * 保留 recordAction 是为了旧调用点不用一次改完，新代码一律用这个名字。
+     */
+    recordAttempt(entry = {}) {
+      try {
+        const record = mind.appendAction?.(entry);
+        return ok({ id: String(record?.id || ''), outcome: String(record?.outcome || '') });
+      } catch (error) {
+        log.error?.(`[mind-port] 记录尝试失败：${error?.message || error}`);
+        return fail('store-error', '尝试记录写入失败');
+      }
+    },
+
+    /** 开一个观察窗口（发完话之后：她不知道对方会不会回）。 */
+    openObservation(input = {}) {
+      try {
+        const ob = mind.appendObservation?.(input);
+        return ok({ id: String(ob?.id || ''), dueAt: pickNumber(ob?.dueAt) });
+      } catch (error) {
+        log.error?.(`[mind-port] 开观察失败：${error?.message || error}`);
+        return fail('store-error', '观察写入失败');
+      }
+    },
+
+    /**
+     * 整合账本：上次整合/上次叙事/今日整合次数。
+     *
+     * 这几个字段不在"身体"里（不参与体力结算与打盹），单独给一个读口，
+     * 免得自由时刻为了它们去摸整个 tick。
+     */
+    integrationState() {
+      try {
+        const tick = mind.getTick() || {};
+        return {
+          lastIntegrateAt: pickNumber(tick.lastIntegrateAt),
+          todayIntegrates: pickNumber(tick.todayIntegrates),
+          today: String(tick.today || ''),
+          lastNarrativeAt: pickNumber(tick.lastNarrativeAt)
+        };
+      } catch { return { lastIntegrateAt: 0, todayIntegrates: 0, today: '', lastNarrativeAt: 0 }; }
+    },
+
+    /** 到期待复查的观察。读永远不抛。 */
+    openObservations(now = now()) {
+      try { return mind.listDueObservations?.(now) || []; } catch { return []; }
+    },
+
+    // ── 领域读（自由时刻的材料）────────────────────────────────────────
+
+    /** 她自己（完整对象，只读）。 */
+    self() {
+      try { return mind.getSelf?.() || null; } catch { return null; }
+    },
+
+    /** 对某个人的看法（完整对象，只读）。 */
+    relation(userId) {
+      try { return mind.getRelation?.(String(userId)) || null; } catch { return null; }
+    },
+
+    /** 所有关系（只读，已排序）。 */
+    relations() {
+      try { return mind.listRelations?.() || []; } catch { return []; }
+    },
+
+    /** 最近的反思（可按 scope 过滤）。 */
+    reflections({ limit = 20, scope = '' } = {}) {
+      try {
+        const list = mind.listReflections?.({ limit: scope ? Math.max(limit, 50) : limit }) || [];
+        return scope ? list.filter((r) => r.scope === scope).slice(-limit) : list;
+      } catch { return []; }
+    },
+
+    /** 还没被整合消化的自我笔记。 */
+    selfNotes() {
+      try { return mind.undigestedSelfNotes?.() || []; } catch { return []; }
+    },
+
+    /** 某个时间点之后的强事件。 */
+    strongSince(since = 0) {
+      try { return mind.listStrongSince?.(since) || []; } catch { return []; }
+    }
   };
 }
 
@@ -637,7 +718,7 @@ export function createWriterPort(mind, opts = {}) {
 export function createAdminPort(mind) {
   if (!mind) return createNoopAdminPort();
   const methods = [
-    'getTick', 'updateTick', 'getSelf', 'listRelations', 'patchRelation', 'reviseSelf',
+    'getTick', 'updateTick', 'getSelf', 'getRelation', 'listRelations', 'patchRelation', 'reviseSelf',
     'queryEvents', 'countUnreflected', 'listReflections', 'listActions', 'appendEvent',
     'appendReflection', 'appendAction', 'logSizes', 'clearLogs'
   ];
@@ -674,8 +755,17 @@ export function createNoopRuntimePort() {
     narratives() { return []; },
     recordAction: nothing,
     recordAttempt: nothing,
+    recordAction: nothing,
     recordOutcome: nothing,
-    openObservations() { return []; }
+    openObservation: nothing,
+    openObservations() { return []; },
+    integrationState() { return { lastIntegrateAt: 0, todayIntegrates: 0, today: '', lastNarrativeAt: 0 }; },
+    self() { return null; },
+    relation() { return null; },
+    relations() { return []; },
+    reflections() { return []; },
+    selfNotes() { return []; },
+    strongSince() { return []; }
   };
 }
 

@@ -325,7 +325,9 @@ console.log('\n=== 10. 架构约束 ===');
   const text = fs.readFileSync(file, 'utf8');
   check(!/from\s+['"][^'"]*\/mind\//.test(text), '端口文件不 import src/mind/**');
   check(!/from\s+['"]\.\.\/mind/.test(text), '端口文件不 import ../mind');
-  check(text.includes('not-implemented'), 'B 期方法显式声明未实现，而不是静默返回空');
+  // C3 起端口里不该再有"占位"：每个方法要么接上真实现，要么是空实现（no-mind）。
+  // 留着 not-implemented 会让调用方以为"这是设计如此"，而不是"这里没做完"。
+  check(!text.includes('not-implemented'), '端口里没有未实现的占位');
 
   const writers = Object.keys(WRITERS);
   check(writers.length === 7, '写入规程覆盖 7 个目标');

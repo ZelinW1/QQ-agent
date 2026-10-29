@@ -1806,7 +1806,7 @@ export class Orchestrator {
     const cfg = getConfig();
     const m = cfg.mind || {};
 
-    const tick = store.getTick();
+    const tick = this.mindPort.bodyRead();
     const since = Number(tick.lastReflectAt) || 0;
     const maxEvents = Math.max(5, Number(m.reflectMaxEvents) || 60);
 
@@ -1900,21 +1900,21 @@ export class Orchestrator {
     const ic = m.integrate || {};
     if (ic.enabled === false) return { ok: false, reason: '整合已关闭' };
 
-    const tick = store.getTick();
+    const tick = this.mindPort.bodyRead();
     const today = todayKey();
-    const used = tick.today === today ? (Number(tick.todayIntegrates) || 0) : 0;
+    const ledger = this.mindPort.integrationState(); const used = ledger.today === today ? ledger.todayIntegrates : 0;
     const notes = typeof store.undigestedSelfNotes === 'function' ? store.undigestedSelfNotes() : [];
     if (!force) {
       if (used >= Math.max(1, Number(ic.maxPerDay) || 2)) return { ok: false, reason: 'quota' };
       const cooldown = Number.isFinite(Number(ic.cooldownMs)) ? Number(ic.cooldownMs) : 21600000;
-      if (Date.now() - (Number(tick.lastIntegrateAt) || 0) < Math.max(0, cooldown)) {
+      if (Date.now() - ledger.lastIntegrateAt < Math.max(0, cooldown)) {
         return { ok: false, reason: 'cooldown' };
       }
       if (notes.length < Math.max(1, Number(ic.minNotes) || 3)) return { ok: false, reason: 'no-material' };
     }
     if (!notes.length) return { ok: false, reason: 'no-material' };
 
-    const reflections = store.listReflections({ limit: 30 })
+    const reflections = this.mindPort.reflections({ limit: 30, scope: 'chat' })
       .filter((r) => r.scope === 'chat' && r.ok === true);
     const messages = buildIntegratePrompt({
       botName: cfg.persona?.botName,
@@ -1945,7 +1945,7 @@ export class Orchestrator {
 
       store.updateTick({
         today,
-        todayIntegrates: (tick.today === today ? (Number(tick.todayIntegrates) || 0) : 0) + 1,
+        todayIntegrates: (this.mindPort.integrationState().today === today ? this.mindPort.integrationState().todayIntegrates : 0) + 1,
         lastIntegrateAt: now
       });
       store.appendReflection({
@@ -1986,13 +1986,13 @@ export class Orchestrator {
     const nc = m.narrative || {};
     if (nc.enabled === false) return { ok: false, reason: '叙事已关闭' };
 
-    const tick = store.getTick();
+    const tick = this.mindPort.bodyRead();
     const now = Date.now();
-    const last = Number(tick.lastNarrativeAt) || 0;
+    const last = this.mindPort.integrationState().lastNarrativeAt;
     const from = last || (now - Math.max(86400000, Number(nc.everyMs) || 7 * 24 * 3600 * 1000));
     const reflections = store.listReflections({ limit: 60 })
       .filter((r) => r.scope === 'global' && r.ok === true && Number(r.at) >= from);
-    const strong = store.listStrongSince(from);
+    const strong = this.mindPort.strongSince(from);
     if (!force && reflections.length + strong.length < Math.max(1, Number(nc.minMaterials) || 1)) {
       return { ok: false, reason: 'no-material' };
     }
@@ -2056,11 +2056,11 @@ export class Orchestrator {
       if (this.paused || this.aborted) return;
       if (!cfg.api?.model || !cfg.api?.baseUrl) return;
 
-      const tick = this.mind.getTick();
-      const since = Number(tick.lastNarrativeAt) || 0;
+      const tick = this.mindPort.bodyRead();
+      const since = this.mindPort.integrationState().lastNarrativeAt;
       const everyMs = Math.max(86400000, Number((m.narrative || {}).everyMs) || 7 * 24 * 3600 * 1000);
       const dueByTime = Date.now() - since >= everyMs;
-      const dueByStrong = this.mind.listStrongSince(since).length > 0;
+      const dueByStrong = this.mindPort.strongSince(since).length > 0;
       if (!dueByTime && !dueByStrong) return;
 
       this.runNarrative()
@@ -2084,11 +2084,11 @@ export class Orchestrator {
       if (this.paused || this.aborted) return;
       if (!cfg.api?.model || !cfg.api?.baseUrl) return;
 
-      const self = this.mind.getSelf();
+      const self = this.mindPort.self() || {};
       const updatedAt = Number(self.updatedAt) || 0;
       if (!updatedAt) return;   // 还没出生过，交给出生仪式
       if (Date.now() - updatedAt < 30 * 24 * 3600 * 1000) return;
-      if (!this.mind.undigestedSelfNotes().length) return;
+      if (!this.mindPort.selfNotes().length) return;
 
       this.integrating = true;
       this.runIntegrate({ force: true })
@@ -2123,11 +2123,11 @@ export class Orchestrator {
       if (!cfg.api?.model || !cfg.api?.baseUrl) return;
 
       const ic = m.integrate || {};
-      const notes = this.mind.undigestedSelfNotes();
-      const tick = this.mind.getTick();
-      const since = Number(tick.lastIntegrateAt) || 0;
-      const strong = this.mind.listStrongSince(since);
-      const chats = this.mind.listReflections({ limit: 40 })
+      const notes = this.mindPort.selfNotes();
+      const tick = this.mindPort.bodyRead();
+      const since = this.mindPort.integrationState().lastIntegrateAt;
+      const strong = this.mindPort.strongSince(since);
+      const chats = this.mindPort.reflections({ limit: 40, scope: 'chat' })
         .filter((r) => r.scope === 'chat' && r.ok === true && Number(r.at) > since).length;
 
       const enoughChats = chats >= Math.max(1, Number(ic.afterChatReflections) || 12);
@@ -2181,7 +2181,8 @@ export class Orchestrator {
    */
   migrateImpressionsToRelations() {
     if (!this.mind) return { ok: false, reason: '无心智' };
-    const tick = this.mind.getTick();
+    // 迁移标记是管理侧字段，不在"身体"里（bodyRead 不带它），所以走管理端口读整条 tick。
+    const tick = this.mindPortAdmin.getTick() || {};
     if (tick.migratedImpressions) return { ok: true, skipped: true };
 
     let users = 0;
@@ -2197,11 +2198,11 @@ export class Orchestrator {
           .filter(Boolean);
         if (!texts.length) continue;
 
-        const rel = this.mind.getRelation(userId);
+        const rel = this.mindPortAdmin.getRelation(userId);
         const knownFor = [...new Set([...(rel.knownFor || []), ...texts])];
         const patch = { knownFor };
         if (!rel.nickname && m.name) patch.nickname = String(m.name);
-        const r = this.mind.patchRelation(userId, patch, { evidence: ['migrated:memberImpression'] });
+        const r = this.mindPortAdmin.patchRelation(userId, patch, { evidence: ['migrated:memberImpression'] });
         if (r.ok) { users += 1; merged += texts.length; }
       }
     }
@@ -2420,7 +2421,7 @@ export class Orchestrator {
 
     const all = (scene.entries || []).map((entry) => {
       const chatId = String(entry.chatKey).split(':')[1] || '';
-      const relation = this.mind.getRelation(chatId) || {};
+      const relation = this.mindPort.relation(chatId) || {};
       return {
         ...entry,
         relation,
@@ -2451,8 +2452,7 @@ export class Orchestrator {
   /** 上次行动留成一句话，供决策提示词当"旧事"。 */
   #lastActionText() {
     try {
-      const list = this.mind.listActions({ limit: 2 }) || [];
-      const a = list[list.length - 1];
+      const a = this.mindPort.lastAction();
       if (!a?.at) return '';
       const hours = Math.max(0, Math.round((Date.now() - Number(a.at)) / 3600000));
       const when = hours <= 0 ? '刚才' : `${hours} 小时前`;
@@ -2472,10 +2472,9 @@ export class Orchestrator {
       return { results: [{ chatKey: '', action: 'sleep', reason: sleep.reason }], skipped: 'asleep' };
     }
 
-    // ① 结算
-    let tick = settleEnergy(this.mind.getTick(), now, m.energy || {});
-    tick = resetDaily(tick, todayKey(now));
-    this.mind.updateTick(tick);
+    // ① 结算：体力公式只在装配根注入的那一份，端口不复制。
+    this.mindPort.bodySettle({ now });
+    let tick = this.mindPort.bodyRead();
 
     // ② 全局唤醒自身的节拍（不再按会话各排一次）
     if (this.globalNextWakeAt && now < this.globalNextWakeAt) {
@@ -2490,7 +2489,7 @@ export class Orchestrator {
       return { results, skipped: '' };
     }
 
-    const energy = Number(this.mind.getTick().energy) || 0;
+    const energy = Number(this.mindPort.bodyRead().energy) || 0;
     const floor = Number(m.energy?.floor) || 10;
     if (energy < floor) {
       results.push({ chatKey: '', action: 'idle', reason: 'tired' });
@@ -2509,7 +2508,7 @@ export class Orchestrator {
         lastInteractionAt: Number(r.lastTs) || 0,
         lastEventAt: Number(r.lastEventAt) || 0,
         openLoops: r.relation?.openLoops || [],
-        unreflected: this.mind.countUnreflected(r.chatKey, lastReflectAt),
+        unreflected: this.mindPort.reflectionDebt({ chatKey: r.chatKey, since: lastReflectAt }),
         cfg: m
       });
       for (const c of cs) {
@@ -2666,7 +2665,7 @@ export class Orchestrator {
             },
             audit: (_c, result) => {
               const ok = result.ok === true;
-              const record = this.mind.appendAction({
+              const record = this.mindPort.recordAttempt({
                 chatKey: attempt.target,
                 at: now,
                 action: attempt.name,
@@ -2684,7 +2683,7 @@ export class Orchestrator {
               // 立刻判定只能判"发出去了"。72 小时后才复查。
               if (ok && attempt.name === 'send_proactive' && attempt.target) {
                 try {
-                  this.mind.appendObservation({
+                  this.mindPort.openObservation({
                     attemptId: record?.id || '',
                     chatKey: attempt.target,
                     expect: '她应该会回我一句',
@@ -2702,12 +2701,8 @@ export class Orchestrator {
         const error = outcome.ok ? '' : (attempt.error || outcome.message || '没有做成');
 
         if (outcome.ok) {
-          tick = this.mind.getTick();
-          const patch = { energy: Math.max(0, (Number(tick.energy) || 0) - (Number(attempt.action.energy) || 0)) };
-          if (name === 'send_proactive') {
-            patch.todayProactive = (Number(tick.todayProactive) || 0) + 1;
-            if (attempt.target) this.lastProactiveAt.set(attempt.target, now);
-          }
+          // 体力、主动计数、打盹一次写完：端口负责 rev 与原子性，
+          // 这里不再"先读 tick、算好、再整体写回"（那正是并发丢更新的来源）。
           const snoozeFor = Math.max(0, Number(attempt.action.snoozeMs) || 0);
           const nextSnoozes = {};
           for (const [k, v] of Object.entries(snoozes)) {
@@ -2718,9 +2713,20 @@ export class Orchestrator {
               if (c.chatKey === attempt.target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
             }
           }
-          patch.snoozes = nextSnoozes;
-          this.mind.updateTick(patch);
-          state.energy = patch.energy;
+          const bodyPatch = {
+            rev: this.mindPort.bodyRead().rev,
+            spend: Number(attempt.action.energy) || 0,
+            snooze: nextSnoozes
+          };
+          if (name === 'send_proactive') {
+            bodyPatch.counterDelta = { todayProactive: 1 };
+            if (attempt.target) bodyPatch.proactiveAt = { chatKey: attempt.target, at: now };
+          }
+          const applied = this.mindPort.bodyApply(bodyPatch);
+          if (applied.ok) {
+            state.energy = Number(applied.body?.energy) || 0;
+            if (attempt.target && name === 'send_proactive') this.lastProactiveAt.set(attempt.target, now);
+          }
         }
 
         convo.push({
@@ -2746,8 +2752,8 @@ export class Orchestrator {
     }
 
     // 记账：无论做了几件事，这次唤醒都算一次决策
-    tick = this.mind.getTick();
-    this.mind.updateTick({ todayDecisions: (Number(tick.todayDecisions) || 0) + 1 });
+    this.mindPort.bodyApply({ rev: this.mindPort.bodyRead().rev, counterDelta: { todayDecisions: 1 } });
+    tick = this.mindPort.bodyRead();
 
     if (!executed.length) {
       const snoozeMs = Math.max(60000, Number(tickCfg.idleSnoozeMs) || 3600000);
@@ -2760,7 +2766,7 @@ export class Orchestrator {
         if (!(Number(v) > now)) delete nextSnoozes[k];
       }
       this.mindPort.bodyUpdate(() => ({ snooze: nextSnoozes }));
-      this.mind.appendAction({
+      this.mindPort.recordAttempt({
         chatKey: '', at: now, action: 'idle',
         reason: idleReason || '想不出要做什么',
         candidates: candidates.map((c) => c.id),
@@ -2879,7 +2885,7 @@ export class Orchestrator {
     if (!text) return { ok: false, reason: '没有要记的内容' };
     const target = String(chatKey || args.chatKey || '').trim();
     if (!target) return { ok: false, reason: '不知道这条记忆属于哪个会话' };
-    const r = this.mind.appendEvent({
+    const r = createWriterPort(this.mind, { by: 'runtime.free' }).appendEvent({
       chatKey: target,
       kind: 'observation',
       actorId: 'self',
@@ -2899,7 +2905,7 @@ export class Orchestrator {
    */
   #recallForChat(chatKey, args = {}, now = Date.now()) {
     const olderThan = now - 7 * 86400000;
-    const pool = this.mind.queryEvents({ chatKey, limit: 300 })
+    const pool = this.mindPort.recentEvents({ chatKey, limit: 300 })
       .filter((e) => Number(e.ts) < olderThan && !(Array.isArray(e.summaryOf) && e.summaryOf.length));
     if (!pool.length) return { recalled: 0 };
 
@@ -2912,7 +2918,7 @@ export class Orchestrator {
       .sort((a, b) => (Number(b.salience) || 0) - (Number(a.salience) || 0)
         || (Number(b.ts) || 0) - (Number(a.ts) || 0))[0];
 
-    const appended = this.mind.appendEvent({
+    const appended = createWriterPort(this.mind, { by: 'runtime.free' }).appendEvent({
       chatKey,
       actorId: source.actorId,
       actorName: source.actorName,

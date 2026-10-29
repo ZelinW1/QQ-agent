@@ -27,6 +27,7 @@ const check = (cond, msg, detail = '') => {
 const { MindStore } = await import(src('src/mind/store.js'));
 const { buildReflectPrompt, parseReflectOutput, applyReflection } = await import(src('src/mind/reflect.js'));
 const { Orchestrator } = await import(src('src/orchestrator.js'));
+const { createRuntimePort } = await import(src('src/contract/mind-port.js'));
 
 const mkStore = (opts = {}) => new MindStore({
   root: fs.mkdtempSync(path.join(dataDir, 'm-')),
@@ -198,6 +199,7 @@ console.log('\n=== 6. reflectForChat 全链路 ===');
   const events = mkEvents(store);
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
 
   let seen = null;
   const fakeChat = async (messages) => {
@@ -241,6 +243,7 @@ console.log('\n=== 7. 解析失败的处理 ===');
   const events = mkEvents(store);
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
 
   const before = store.getTick().lastReflectAt;
   const r = await orch.reflectForChat(CHAT, { chat: async () => ({ message: { content: '我想了想，没什么可说的' } }) });

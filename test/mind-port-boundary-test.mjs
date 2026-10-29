@@ -73,6 +73,16 @@ console.log('\n=== 3. 控制台经 AdminPort ===');
   check(rawRefs === wrappedRefs, '裸 store 只出现在 createAdminPort(...) 里', `裸引用 ${rawRefs} / 包装 ${wrappedRefs}`);
 }
 
+// ── 3b. 编排器不再直接调用 store 方法 ───────────────────────────────────
+console.log('\n=== 3b. 编排器只经端口 ===');
+{
+  const orch = read('src/orchestrator.js');
+  const calls = [...orch.matchAll(/this\.mind\.(\w+)\s*\(/g)].map((m) => m[1]);
+  check(calls.length === 0, 'orchestrator 没有 this.mind.xxx() 直连', [...new Set(calls)].join('、'));
+  // 它还可以把 store 当作**值**交出去（applyReflection 这类领域函数要它），
+  // 但不能自己调方法 —— 那才是绕过写入规程的入口。
+  check(/this\.mindPort\./.test(orch), '确实在用端口（反向确认这条不是空转）');
+}
 // ── 4. 端口的两条硬约束 ─────────────────────────────────────────────────
 console.log('\n=== 4. 端口契约 ===');
 {
