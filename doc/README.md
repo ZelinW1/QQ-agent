@@ -9,13 +9,13 @@
 
 | 你想做什么 | 读这份 | 状态 |
 |---|---|---|
-| 先弄懂"她到底怎么运转" | [architecture-primer.md](./architecture-primer.md) · 行动运行时导读 | 设计导读（未实施） |
-| 动手实现重构 | [action-runtime-design.md](./action-runtime-design.md) · 设计 v3.1 | 施工依据（未实施） |
-| 实现 A1 的领域解耦 | [mind-port-spec.md](./mind-port-spec.md) · 领域端口规格 | 接口规范（未实施） |
-| 改这个仓库现有代码 | [architecture-overview.md](./architecture-overview.md) · 现行代码架构 | 现状快照 `ef5a8ec` |
+| 先弄懂"她到底怎么运转" | [architecture-primer.md](./architecture-primer.md) · 行动运行时导读 | 已落地的形态（先读这个） |
+| 查重构做到哪一步、为什么这样做 | [action-runtime-design.md](./action-runtime-design.md) · 设计 v3.2 | 施工依据；§12 是唯一进度清单 |
+| 查端口接口与迁移对照 | [mind-port-spec.md](./mind-port-spec.md) · 领域端口规格 | A1 已交付，B 期补齐 |
+| 读重构**前**的代码结构 | [architecture-overview.md](./architecture-overview.md) · 代码架构快照 | 快照 `ef5a8ec`（已过期，读开头横幅） |
 | 写技能 / 插件 | [extend_development/](./extend_development/) | 扩展作者文档（有已知偏差） |
 
-一句话顺序：**导读 → 设计稿 → 端口规格 → 开工**；改现有代码时另看架构快照。
+一句话顺序：**导读 → 设计稿 §12 → 端口规格**；架构快照只在读历史代码时用。
 
 ---
 
@@ -23,14 +23,38 @@
 
 | 文件 | 状态 | 读者 | 维护方式 |
 |---|---|---|---|
-| `architecture-primer.md` | 设计导读 | 产品 / 设计 / 验收 | 随设计稿同步 |
-| `action-runtime-design.md` | 施工依据（定稿未实施） | 实现者 / 评审 | 设计变更时改版本号与 §14 |
-| `mind-port-spec.md` | 接口规范（A1） | 实现者 | 随 A1 交付更新 |
-| `architecture-overview.md` | 现状快照 | 实现者 | 重构动工后按阶段重写 |
-| `extend_development/*` | 扩展作者文档 | 扩展作者 / AI | 契约变更时更新，偏差先记在 `architecture-overview.md §10` |
+| `architecture-primer.md` | 已落地的形态 | 产品 / 设计 / 验收 | 随设计稿同步 |
+| `action-runtime-design.md` | 施工依据（已实施） | 实现者 / 评审 | 设计变更时改版本号与 §14 |
+| `mind-port-spec.md` | 接口规范（A1 已交付） | 实现者 | 随交付更新 |
+| `architecture-overview.md` | **过期快照** | 只用于对照历史 | 不再按阶段重写（见 §2.1） |
+| `extend_development/*` | 扩展作者文档 | 扩展作者 / AI | 契约变更时更新 |
 
-两张描述"未来"、一张描述"现在"，不要混用：
-**导读与设计稿写的是重构之后的样子，不是当前版本行为。** 当前版本见仓库根 `README.md`。
+一张描述"现在"（导读 + 设计稿），一张描述"重构前"（架构快照）。读后者时先看它开头的横幅。
+
+---
+
+## 2.1 实施状态（2026-10-29）
+
+重构按设计稿 §12 的轮次推进，`ef5a8ec` 之后 17 个提交全部落在本仓库：
+
+| 阶段 | 提交 | 交付 |
+|---|---|---|
+| 前置 | `6161d30` `3632253` | 文档重整（设计收敛到 v3.1）；技能审计不再依赖本地扩展 |
+| A 期 | `2df1990` `7054dbb` `0950897` `ff6508f` `a09e48b` | 领域端口（三端口 + 空实现）；睡眠/心跳/stay_up 迁移；写工具经 WriterPort；控制台经 AdminPort；无心智装配守门 |
+| 切割 | `d42ea67` | 删除 per-chat 心跳（-186 行），只剩全局唤醒 |
+| B 期 | `05cb6b5` `895c24a` `2b14d01` `624a433` `a3a566a` | 关系版本化；会话反思不再改自我（只写 selfNotes）；全局整合 + 强事件机械判定；意图/尝试/观察三张表 + 冻结 `actions.jsonl`；叙事 + 月度兜底 |
+| C 期 | `bd9b92a` `59d5719` `46b99fa` `05f3f33` | 八步管线；自由时刻换引擎（素材进提示词、动作过管线、留尝试与观察）；编排器零 store 直连；`QQ_AGENT_NO_MIND=1` 领域缺席守门 |
+
+当前规模：55 个测试文件；`src/orchestrator.js` 约 3.5k 行、`src/contract/mind-port.js` 约 800 行、
+`src/runtime/` 两个模块。设计里 A 期的硬指标（删掉 `src/mind/` 仍能启动）**已达成**。
+
+自己验证一遍（不需要读代码）：
+
+```powershell
+npm test                              # 全量 55 个文件
+node test/mind-deleted-test.mjs       # 领域缺席：QQ_AGENT_NO_MIND=1 下启动整个应用
+node test/mind-port-boundary-test.mjs # 边界：谁可以 import / 调用领域
+```
 
 ---
 

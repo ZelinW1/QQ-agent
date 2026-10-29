@@ -1,14 +1,34 @@
-# 现行代码架构（快照 ef5a8ec）
+# 代码架构快照（`ef5a8ec`，重构前）
+
+> **过期警告（2026-10-29）**：行动运行时重构已实施（`ef5a8ec..05f3f33`，17 个提交），
+> 本文描述的是**重构前**的结构。行号、模块清单、装配路径都已变化，
+> 引用它时应以本节下面的"变化清单"为准，而不是以正文的 `path:line` 为准。
+>
+> 需要了解**当前**结构时，读 [导读](./architecture-primer.md) 与
+> [设计稿 §12 进度表](./action-runtime-design.md)；扩展作者接口见
+> [`extend_development/`](./extend_development/)。
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **现状描述**：由通读代码得出，不是设计文档的复述；与扩展文档的偏差见 §10 |
+| 状态 | **重构前快照**：由通读 `ef5a8ec` 得出；与扩展文档的偏差见 §10 |
 | 代码基准 | `ef5a8ec` |
-| 读者 | 要改这个仓库的开发者；先读 [导读](./architecture-primer.md) 建立全局再进本文 |
-| 最后更新 | 2026-10-29 |
-| 注意 | 行动运行时重构（[设计稿](./action-runtime-design.md)）会重排本文描述的装配路径；重构动工后本文需按阶段更新 |
+| 读者 | 需要对照历史、或要读 `ef5a8ec` 那一版代码的人 |
+| 最后更新 | 2026-10-29（只加横幅，正文未重写） |
 
 本文所有结论均带 `path:line`，可直接跳转核对。**行号会随代码漂移**，以符号名为准。
+
+## Δ 重构改变了什么（相对本文）
+
+| 方面 | `ef5a8ec`（本文） | 现在 |
+|---|---|---|
+| 运行时与领域 | 编排器直接持有 `MindStore` 并调用其方法 | 只经三个端口（`src/contract/mind-port.js`：Runtime / Writer / Admin）；编排器里 `this.mind.xxx()` 为 0 |
+| 领域缺席 | 静态 import，删掉 `src/mind/` 就起不来 | 动态加载 + 降级；`QQ_AGENT_NO_MIND=1` 等价于删除（`test/mind-deleted-test.mjs`） |
+| 自由时刻 | `#runGlobalTick`：一次 JSON 决策，按动作注册表执行 | 八步管线（`src/runtime/pipeline.js`）+ 素材层（`src/runtime/materials.js`）：提示词带 self/叙事/意图，每个动作留 attempts 与观察 |
+| 心跳模式 | 全局 + per-chat 两套 | 只剩全局（`d42ea67` 删除 per-chat） |
+| 行动记录 | `actions.jsonl` | 冻结读写分离：新写入进 `attempts.jsonl`，`listActions` 合并新旧；新增 `intentions.jsonl` / `observations.jsonl` / `narratives.jsonl` |
+| 自我改写 | 会话反思可直接改 self | 会话反思只写 `selfNotes`；只有全局整合能改 self（月度兜底） |
+| 控制台 | `routes.js` 直接摸 store | 全部经 AdminPort，`new MindStore` 只在 `app.js` |
+| 扩展接口 | — | **未变**：技能/插件契约保持兼容（有意与上游切割的部分只在内部运行时） |
 
 ## 0. 一句话架构
 

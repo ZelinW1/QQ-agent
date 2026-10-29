@@ -1,10 +1,10 @@
-# 行动运行时设计（v3.1）
+# 行动运行时设计（v3.2）
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **设计定稿，尚未实施**；本文件是施工依据，不是现状描述 |
+| 状态 | **A/B/C 三期已实施**（`ef5a8ec..05f3f33`，17 个提交）；§12 进度表是唯一权威的实施清单 |
 | 目标版本 | 0.6 |
-| 代码基准 | `ef5a8ec` |
+| 代码基准 | `ef5a8ec`（重构起点）→ `05f3f33`（当前） |
 | 读者 | 参与本模块实现与验收的开发者 |
 | 最后更新 | 2026-10-29 |
 | 配套 | [导读（非开发者优先）](./architecture-primer.md) · [领域端口规格](./mind-port-spec.md) · [文档索引](./README.md) |
@@ -18,7 +18,9 @@
 （分层、调用管线、owner 化注册、启动组合），**不追随其路线**；心智部分没有外部参考答案，
 判断依据一律写进正文与 §2 的"被否决方案"。
 
-**本版要点（v3.1）**：兜底事件（§4.2.1）、强事件可机械命中（§4.3.1）、
+**本版要点（v3.2）**：v3.1 的六项已按实施校准（见 §14），结论未变；
+实施进度与"没做的部分"在 §12。
+**v3.1 的要点**：兜底事件（§4.2.1）、强事件可机械命中（§4.3.1）、
 内置工具的场合分配与扩展分配入口（§6.2.1 / §6.2.2）、启动对账（§9.4）、参数分档（§13.1）。
 版本沿革见 §14。
 
@@ -136,13 +138,28 @@ src/mind/         （既有，按层整理）
   migrate.js            心智数据迁移（§9.3）
 ```
 
-`src/orchestrator.js` 的目标：**只剩 chat 的触发与编排**，从 3328 行降到 800 行以内。
+**实际落位（2026-10-29）——只建了这些，其余是计划，别照上面的清单找文件：**
+
+```
+src/contract/mind-port.js     ✅ RuntimePort / WriterPort / AdminPort + 空实现
+src/runtime/pipeline.js       ✅ 八步管线（resolve…audit，超时与身份复核）
+src/runtime/materials.js      ✅ 自由时刻素材（self / 叙事标题 / 到期意图）
+```
+
+没有建的：`tool-registry` 迁入、`permissions`、`capability-bus`、`nested`、
+`profiles` / `project-tools` / `project-menu` / `prompt` / `run-agent` /
+`chat` / `free` / `integrate` / `automate` / `wake` / `automator`。
+
+原因：这一轮的目标是"先把领域边界与自由时刻的行为做对"，没有动工具表投影与运行时数据化。
+`src/orchestrator.js` 现在约 3.5k 行（原目标 800 行以内）——chat 侧还没拆成
+"run-agent + 投影"，等工具表真的需要按场合差异化（例如自由与自动化的菜单不同）时再拆；
+现在就拆，只会得到一层层转发的薄模块。
 
 ### 3.3 MindPort：领域端口
 
 运行时**不允许**直接 `this.mind.appendEvent(...)`。接口详见 [`mind-port-spec.md`](./mind-port-spec.md)，此处只列约束：
 
-- **只有装配根**（`src/app.js`）可以 import 领域模块；`mind-port.js` 不 import mind，只接受鸭子类型。
+- **只有装配根**（`src/app.js`）静态 import 领域模块；`orchestrator` / `tools.js` 改为**动态加载 + 降级**（`QQ_AGENT_NO_MIND=1` 时等价于领域不存在）；`mind-port.js` 不 import mind，只接受鸭子类型。
 - `RuntimePort`：读素材、身体状态、意图、记录尝试/结果。**没有 `reviseSelf` / `patchRelation`**。
 - `WriterPort`：领域写入，`by` 由**管线按调用注入**（工具侧签名里没有这个参数）。
 - `AdminPort`：控制台与迁移专用，一对一包 store。
@@ -1030,13 +1047,13 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 
 | 轮次 | 内容 | 状态 |
 |---|---|---|
-| R1 | A1-1 领域端口 + 空实现 + 单测（74 项） | ✅ |
+| R1 | A1-1 领域端口 + 空实现 + 单测（交付时 74 项，现 99 项） | ✅ |
 | R2 | A1-2 端口接线 + 睡眠/心跳/stay_up 的 body 与行动记录迁移（26 处） | ✅ |
 | R3 | 切割：删除 per-chat 心跳模式，只保留全局唤醒（-186 行，含配置项与两套测试） | ✅ |
 | R4 | A1-3 三个写工具改走 WriterPort（`by` 由管线注入，工具伪造不了） | ✅ |
 | R5 | A1-4 控制台改走 AdminPort；`new MindStore` 收口到 app.js + 静态守门 | ✅ |
 | R6 | A1-5 收尾：`createApp({ mind: null })` 测试缝 + 端到端守门（没有心智时对话照跑、工具消失、接口不 500） | ✅ |
-| —— | **A 期收尾**：chat 侧仍有两处直连（`#buildMindContext` 的采集、`#maybeReflect` 的阈值），它们跟着 `materials.js` / 整合阶梯在 B、C 期一起搬 | 已知 |
+| —— | ~~A 期收尾遗留：chat 侧两处直连~~ | **已解决（R8/R14）**：`#maybeReflect` 改走 `reflectionState` 账本；`#buildMindContext` 的采集仍是领域函数，但存储访问已全部经端口 |
 | R7 | B1 关系版本化：`version` + `changelog`（来源、理由、依据），只补证据不升版本 | ✅ |
 | R8 | B2 前半：会话反思不再改写自我，只产出 `selfNotes`；`#maybeReflect` 改走端口账本 | ✅ |
 | R9 | B2 后半：全局整合（L2b）落地（额度/冷却/材料/消化）；强事件机械判定接入 | ✅ |
@@ -1048,17 +1065,37 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R15 | C4 领域缺席守门：编排器/装配根/工具注册全部改为**动态加载 + 降级**，`QQ_AGENT_NO_MIND=1` 等价于"删掉 `src/mind/`" | ✅ |
 | —— | **A 期硬指标已达成**：没有领域模块时对话照跑、工具表不含心智工具、控制台不 500（`test/mind-deleted-test.mjs` 6 项） | ✅ |
 
+**本期未做（设计里写了、代码里没有）**
+
+按"是否阻塞主线"排序，逐条说明为什么可以晚做：
+
+| 条目 | 设计位置 | 为什么先不做 |
+|---|---|---|
+| 工具 schema v3（`schemaVersion` 缺省 1） | §6.1 | 现有工具没有版本轴；等扩展市场真正需要"旧版工具仍可用"时再加，现在加等于给 26 个工具各编一个号 |
+| Moment 与 `usage` 分桶 | §4.7 / §10 | 纯可观测性，不影响行为；先把行为做对 |
+| 嵌套运行时（`traits.composite`） | §4.7 | 需要子运行时隔离与预算合并，等 D 期自动化一起做 |
+| 启动对账的完整版 | §9.4 | 已做结算/跨天/心跳兜底；"作废过期观察""补一次整合""boot 记录"随观察队列启用一起做 |
+| 强事件"沉默 30 天回归" | §4.3.1 | 需要材料层记"某人上次出现时间"，随 C 期材料一起 |
+| 参数三档预设（安静/标准/活跃） | §13.1 | 配置项已就位，预设只是 UI 与一个 map，等界面改版 |
+| 自动化 / cron 调度 | §8 | D 期 |
+| `delayed_check` 的实际使用 | §4.4 | 三张表已就位；自由时刻还没学会"挂一条到期的意图"，随 D 期一起接 |
+
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 
 ### A 期 · 骨架（成功路径不变，失败路径语义变更）
 
-| 步 | 内容 | 回滚开关 |
-|---|---|---|
-| A1 | `MindPort` + 空实现；**只迁 chat 侧 + routes 侧** | `runtime.mindPort = off` |
-| A2 | 工具 schema v3（只加字段）+ `schemaVersion` 缺省 1 + 唯一可用性口径 | `tools.schemaV3 = off` |
-| A3 | 八步管线，先只对 `kind: write/send` 强制；慢工具声明 `timeoutMs` | `pipeline.enforce = false` |
-| A4 | Moment（含 `usage.self`/`subtree`）+ Usage 按 runtime 分桶 | `runtime.moment = off` |
-| A5 | 配置 schema 分层注册（`config.js` 八个产品段迁出） | `config.layered = off` |
+> **这张表是原计划的分步与开关，实际交付以 §12 为准。** 落地时合并成三刀：
+> 端口化（A1）、领域写入收窄（B2）、自由时刻换引擎（C2）——每一步都**没有留开关**，
+> 因为都不存在"第二套可切"的行为：要么经端口、要么不经，没有中间态。
+> A2（工具 schema v3）/ A4（Moment）/ A5（配置分层）**未做**，见 §12 末尾的"未做"清单。
+
+| 步 | 内容 | 原计划的回滚开关 | 实际 |
+|---|---|---|---|
+| A1 | `MindPort` + 空实现；只迁 chat 侧 + routes 侧 | `runtime.mindPort = off` | ✅ 已做，无开关 |
+| A2 | 工具 schema v3 + `schemaVersion` 缺省 1 | `tools.schemaV3 = off` | 未做 |
+| A3 | 八步管线强制 + 慢工具超时 | `pipeline.enforce = false` | 管线已落地（C1/C2），超时按 execute 统一 60s |
+| A4 | Moment（含 `usage.self`/`subtree`）+ Usage 分桶 | `runtime.moment = off` | 未做 |
+| A5 | 配置 schema 分层注册 | `config.layered = off` | 未做 |
 
 **验收**
 
@@ -1221,6 +1258,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | v2.1 | 唤醒拆两套时钟；节律按动作类型分三套信号；A 期收窄；权限分期；Moment 分层；强事件；意图四态；`by` 注入；CAS；唯一读路径 |
 | **v3** | **嵌套运行时**；**自动化独立调度**；**睡眠×冲动语义**；**`chat-pending` 门禁**；**回声四坑**；**`schemaVersion` 缺省 1**；**eligibility/veto 分离**；迁移与升级指南；延时查看用意图 |
 | **v3.1** | **兜底事件**（解决"模型不自觉记 → 反思永不触发"的死锁）；**强事件改机械判定**；**内置工具场合分配表 + 扩展分配入口**；**启动对账**（重启/崩溃/长时间停机）；**参数分档**（结构常量 / 可调 / 自适应）与三档预设 |
+| **v3.2** | **按实施校准**（不改变结论，只改形状与取值）：① `Narrative` 定为 `{at,title,text,period,materials}`（原字段表里 `eventIds/chats/tags/deleted` 未实现，删掉而不是留着装样子）；② 强事件文本规则取**保守集**（"一定""再见"单独出现不命中——误判代价远高于漏判）；③ `relation.changelog` 存原始来源串（`tool:update_relation`），`self.changelog` 仍是三档 `self/reflection/owner`；④ 整合 `digest` 只认材料内真实存在的笔记 id；⑤ `actions.jsonl` **直接冻结、不双写**（原开放问题已定），`listActions` 合并新旧读；⑥ C 期实施记录：八步管线、素材层、领域缺席守门（`QQ_AGENT_NO_MIND=1`） |
 
 ---
 

@@ -214,14 +214,14 @@ npm run dist       # 打 NSIS 安装包（首次需联网下载 NSIS 工具链�
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
-| [`doc/architecture-overview.md`](doc/architecture-overview.md) | 现行代码架构（含与扩展文档的偏差清单） | 现状快照 |
-| [`doc/architecture-primer.md`](doc/architecture-primer.md) | 行动运行时导读：她何时想事情、看到什么、记在哪里 | 设计导读 |
-| [`doc/action-runtime-design.md`](doc/action-runtime-design.md) | 行动运行时设计 v3.1（施工依据） | 设计定稿，未实施 |
+| [`doc/architecture-overview.md`](doc/architecture-overview.md) | 重构**前**的代码架构（含与扩展文档的偏差清单） | 快照 `ef5a8ec` |
+| [`doc/architecture-primer.md`](doc/architecture-primer.md) | 行动运行时导读：她何时想事情、看到什么、记在哪里 | 已落地，适合先读 |
+| [`doc/action-runtime-design.md`](doc/action-runtime-design.md) | 行动运行时设计 v3.2（施工依据 + §12 进度表） | A/B/C 三期已实施 |
 
 写技能 / 插件请看 [`doc/extend_development/`](doc/extend_development/)。
 
-> 注意区分：根 README 与「现行代码架构」描述**当前版本行为**；
-> 导读与设计稿描述**重构之后的行为**，尚未实施。
+> 注意区分：导读与设计稿描述的是**重构后**的形态，且已落地（A/B/C 期）；
+> 「现行代码架构」是重构**前**（`ef5a8ec`）的快照，读它时以开头的横幅为准。
 
 ---
 

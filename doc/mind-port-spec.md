@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **接口规范，尚未实施**；A1 期的施工依据 |
+| 状态 | **A1 已交付**（`2df1990..a09e48b`）；B 期把意图/观察/叙事/自我笔记的实现补进了同一批端口，规格里的 `not-implemented` 已全部接上 |
 | 对应设计 | [action-runtime-design.md §3.3](./action-runtime-design.md#33-mindport领域端口)、§12 A 期 |
 | 读者 | 实现 A1 的开发者；以及评审"领域层是否真的解耦"的人 |
 | 最后更新 | 2026-10-29 |
@@ -12,6 +12,11 @@
 
 **边界**：本文只定接口与迁移顺序。A 期**成功路径**应与现状一致；
 失败路径会因管线归一而变化，清单见设计稿 §12 A 期。
+
+> **实施现状（2026-10-29）**：下面代码块是**接口形状**，不是当前源码的逐行复刻。
+> 标着 `not-implemented` 的方法都已接上真实现（意图 / 观察 / 叙事 / 自我笔记 / 尝试记录），
+> `RuntimePort.intentions()` / `narratives()` / `integrationState()` 也在 B、C 期补进了读口。
+> 以 `src/contract/mind-port.js` 为准；本文用于对照"当初为什么要这样设计"。
 
 **本次同步的要点**
 
@@ -443,7 +448,7 @@ automate:  { requires: [], … },
 | `needs_reason` | `reviseSelf` 没写理由 | 模型补参数后重试 |
 | `invalid_patch` | `bodyApply` 出现白名单外的键 | 编程错误，拒绝而非静默忽略 |
 | `stale` | `bodyApply` 的 `rev` 与磁盘不一致 | **重读 `bodyRead()` 后重算**，不要原地重试 |
-| `not-implemented` | B 期接口在 A 期被调用 | 编程错误；A 期这些方法只应出现在开关后面 |
+| ~~`not-implemented`~~ | ~~B 期接口在 A 期被调用~~ | **已消失**：B/C 期把这些方法都接上了；如果它再次出现，说明有接口被退回占位 |
 | `store-error` | 底层 IO 失败 | 记日志；本次调用失败但进程继续 |
 
 统一形状：`{ ok:false, code, message }`，`message` 是给模型/用户看的中文一句话。
@@ -566,7 +571,7 @@ B 期会出现 `actions.jsonl` 与 `attempts.jsonl` 并存。规则：
 | **A1-2** | ✅ 已做。`Orchestrator` 注入 `runtimePort`/`writerPort`；睡眠切换、`stay_up`、迁移标记改走端口（per-chat 心跳随后整体删除，见 R3） | `npm run test:mind` 全绿 |
 | **A1-3** | 工具 ctx 从 `mind` 换成 `writer`（`by` 由管线注入）；`mindOf()` 改判 `writer.enabled` | `mind-tools-test` 全绿（12 项） |
 | **A1-4** | ✅ `routes.js` 全部改走 `AdminPort`；`new MindStore` 只出现在 `app.js`（有静态守门） | `mind-state-api` / `mind-ui` / 边界检查全绿 |
-| **A1-5** | ✅ 端到端守门：`createApp({ mind: null })` 下对话照跑、心智工具消失、控制台不 500。chat 侧仍有两处直连（`#buildMindContext`、`#maybeReflect`），随 B/C 期的 `materials.js` 与整合阶梯一起搬 | `test/mind-absent-test.mjs` 5 项 |
+| **A1-5** | ✅ 端到端守门：`createApp({ mind: null })` 下对话照跑、心智工具消失、控制台不 500 | `test/mind-absent-test.mjs` 5 项。C4 起升级为整链路：`QQ_AGENT_NO_MIND=1`（`test/mind-deleted-test.mjs` 6 项） |
 
 **free 侧（`#runGlobalTick` 与 6 个行动实现，约 25 处）不在 A1 做**，
 它随 C 期被重写成 `runFreeAgent` 时一起换端口。理由：那 25 处里有 2 处（`remember` / `recall`
@@ -620,7 +625,9 @@ assert.equal(toolAvailable('remember_event'), false);  // requires:['mind.store'
 assert.equal(session.status, 'done');                  // 没有崩，也没有空回复
 ```
 
-**范围说明**：A1 只迁了 chat 侧，所以这条测试在 A1 **只对 chat 成立**。
+**范围说明**：A1 的守门只覆盖 chat 侧（`createApp({ mind: null })`）。
+C4 起这条判据覆盖**整条链路**：`QQ_AGENT_NO_MIND=1` 会跳过全部领域加载，
+等价于删掉 `src/mind/`，见 `test/mind-deleted-test.mjs`。
 完整的"删掉 mind 仍能跑"（含 free / integrate 不启动）在 **C 期收尾**复验——
 那时 `#runGlobalTick` 已经变成 `runFreeAgent` + 端口。
 
