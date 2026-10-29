@@ -15,6 +15,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { buildBackup, inspectBackup, backupBeforeImport, restoreBackup } from './backup.js';
 import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR, DEFAULT_CONFIG } from './config.js';
+import { createAdminPort } from './contract/mind-port.js';
 import { buildChatProfileFrom, resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
 import { customSearch } from './web-search.js';
 import { listModels, chatCompletion, resolveApiKey, estimateCost, cacheHitRate } from './llm.js';
@@ -976,12 +977,12 @@ export function createRoutes(deps) {
       method: 'GET', pattern: '/api/mind/state',
       handler: async ({ res, json }) => {
         const cfg = getConfig();
-        const mind = orchestrator?.mind || null;
+        const mind = createAdminPort(orchestrator?.mind || null);
         const m = cfg.mind || {};
         const persona = cfg.persona || {};
         const charter = persona.charter || {};
 
-        if (!mind) {
+        if (!mind.enabled) {
           return json(res, 200, {
             ok: true, available: false,
             enabled: m.enabled === true,
@@ -1144,8 +1145,8 @@ export function createRoutes(deps) {
       // 与「最近反思」的区别：反思是压缩后的结论，这里是一手经历。
       method: 'GET', pattern: '/api/mind/events',
       handler: async ({ res, json, url }) => {
-        const mind = orchestrator?.mind || null;
-        if (!mind) return json(res, 200, { ok: true, events: [] });
+        const mind = createAdminPort(orchestrator?.mind || null);
+        if (!mind.enabled) return json(res, 200, { ok: true, events: [] });
         const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 60));
         const chatKey = String(url.searchParams.get('chatKey') || '').trim();
         const actorId = String(url.searchParams.get('actor') || '').trim();
@@ -1212,8 +1213,8 @@ export function createRoutes(deps) {
       // 界面上有伦理提示：这是改写她已经经历过的自我，不建议当基因编辑用。
       method: 'POST', pattern: '/api/mind/self/edit',
       handler: async ({ req, res, json }) => {
-        const mind = orchestrator?.mind || null;
-        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        const mind = createAdminPort(orchestrator?.mind || null);
+        if (!mind.enabled) return json(res, 200, { ok: false, error: '心智未接入' });
         let body = {};
         try { body = await readBody(req); } catch { body = {}; }
 
@@ -1237,8 +1238,8 @@ export function createRoutes(deps) {
       // evidence 记 'owner:manual'，之后看关系档案时能分辨"这是她自己处出来的"还是"主人改的"。
       method: 'POST', pattern: '/api/mind/relation/edit',
       handler: async ({ req, res, json }) => {
-        const mind = orchestrator?.mind || null;
-        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        const mind = createAdminPort(orchestrator?.mind || null);
+        if (!mind.enabled) return json(res, 200, { ok: false, error: '心智未接入' });
         let body = {};
         try { body = await readBody(req); } catch { body = {}; }
 
@@ -1348,8 +1349,8 @@ export function createRoutes(deps) {
       // 但用户排查时又需要看到"她刚才为什么没动"，所以放内存里滚动保留。
       method: 'GET', pattern: '/api/mind/tick-log',
       handler: async ({ res, json, url }) => {
-        const mind = orchestrator?.mind || null;
-        if (!mind) return json(res, 200, { ok: true, recentTicks: [], actions: [], reflections: [], sizes: { actions: 0, reflections: 0, total: 0 } });
+        const mind = createAdminPort(orchestrator?.mind || null);
+        if (!mind.enabled) return json(res, 200, { ok: true, recentTicks: [], actions: [], reflections: [], sizes: { actions: 0, reflections: 0, total: 0 } });
         const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50));
         return json(res, 200, {
           ok: true,
@@ -1367,8 +1368,8 @@ export function createRoutes(deps) {
       handler: async ({ req, res, json }) => {
         let body = {};
         try { body = await readBody(req); } catch { body = {}; }
-        const mind = orchestrator?.mind || null;
-        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        const mind = createAdminPort(orchestrator?.mind || null);
+        if (!mind.enabled) return json(res, 200, { ok: false, error: '心智未接入' });
         const scope = String(body.scope || 'all');
         const r = mind.clearLogs({
           actions: scope === 'all' || scope === 'actions',
@@ -1386,8 +1387,8 @@ export function createRoutes(deps) {
       handler: async ({ req, res, json }) => {
         let body = {};
         try { body = await readBody(req); } catch { body = {}; }
-        const mind = orchestrator?.mind || null;
-        if (!mind) return json(res, 200, { ok: false, error: '心智未接入' });
+        const mind = createAdminPort(orchestrator?.mind || null);
+        if (!mind.enabled) return json(res, 200, { ok: false, error: '心智未接入' });
         // 指定会话优先；否则挑一个私聊（M1 只对私聊反思）
         const explicit = String(body.chatKey || '').trim();
         const chatKey = explicit || (store.listChats?.() || []).find((k) => String(k).startsWith('private:')) || '';
