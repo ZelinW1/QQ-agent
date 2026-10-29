@@ -2488,6 +2488,23 @@ export class Orchestrator {
   }
 
   /**
+   * 手动跑一次指定任务（界面的"立即执行"用）。
+   *
+   * 走与定时调度完全相同的管线：手动 ≠ 绕过检查。用户点"立即执行"想验证的是
+   * "到点会不会成功"，如果手动路径另走一套，那就验证了别的东西。
+   */
+  async runAutomationNow(id, { now = Date.now() } = {}) {
+    const task = (this.automations?.list?.() || []).find((t) => t.id === String(id));
+    if (!task) return { ok: false, code: 'not-found', message: '没有这个任务' };
+    const outcome = await runAutomation({ task: { ...task, enabled: true }, execute: (t) => this.execAutomation(t, now) });
+    // 手动执行不写 task 的 nextRunAt（避免"点一下就把今天的定时吃掉了"）；
+    // 但失败要记在任务上，否则用户看不出这个任务其实一直在失败。
+    if (!outcome.ok) {
+      try { this.automations.markRun(task.id, { ok: false, error: outcome.message || outcome.code || 'manual run failed', at: now }); } catch { /* 记账失败不影响返回 */ }
+    }
+    return { ok: outcome.ok === true, code: outcome.code || '', message: outcome.message || '', value: outcome.value };
+  }
+  /**
    * 执行一个自动化任务的动作。
    *
    * 动作集刻意只留三个：发消息、记事件、挂意图。

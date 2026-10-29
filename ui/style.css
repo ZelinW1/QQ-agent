@@ -1962,3 +1962,36 @@ body.rail-collapsed #tabs .tab { justify-content: center; padding: 0; }
   background: var(--bg0); color: var(--tx); font: inherit; font-size: 13px;
   box-sizing: border-box; width: 100%;
 }
+
+/* ── 自动化任务（设置 → 自动化）──────────────────────────────────────── */
+/* 列表是一行一条：左边是"它是什么、什么时候跑"，右边只有三个动作。
+   不使用表格：任务数量少，表格边框只会让这一屏更重。 */
+.auto-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.auto-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; border: 1px solid var(--bd); border-radius: 10px;
+  background: var(--bg1);
+}
+.auto-row.is-off { opacity: 0.55; }
+.auto-main { flex: 1; min-width: 0; }
+.auto-title { font-size: 13.5px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.auto-cron {
+  font-size: 11.5px; color: var(--tx2);
+  padding: 1px 6px; border-radius: 6px; background: var(--bg0); border: 1px solid var(--bd);
+}
+.auto-meta { font-size: 12px; margin-top: 3px; line-height: 1.6; }
+.auto-bad { color: var(--danger, #d9534f); }
+.auto-ops { display: flex; gap: 6px; flex-shrink: 0; }
+.auto-form { display: flex; flex-direction: column; gap: 10px; }
+.auto-form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.auto-form-row > label {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 12px; color: var(--tx2); flex: 1; min-width: 180px;
+}
+.auto-form-row .input {
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--bd);
+  background: var(--bg0); color: var(--tx); font: inherit; font-size: 13px;
+  box-sizing: border-box; width: 100%;
+}
+.auto-form-ops { display: flex; align-items: center; gap: 10px; }
+.small { font-size: 11.5px; }

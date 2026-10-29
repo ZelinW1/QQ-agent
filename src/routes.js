@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import { buildBackup, inspectBackup, backupBeforeImport, restoreBackup } from './backup.js';
 import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR, DEFAULT_CONFIG } from './config.js';
 import { createAdminPort } from './contract/mind-port.js';
+import { describeCron, nextCronAt, parseCron } from './runtime/cron.js';
 import { buildChatProfileFrom, resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
 import { customSearch } from './web-search.js';
 import { listModels, chatCompletion, resolveApiKey, estimateCost, cacheHitRate } from './llm.js';
@@ -2089,6 +2090,111 @@ export function createRoutes(deps) {
           return json(res, 502, { ok: false, error: `转发失败：${String(e?.cause?.code || e?.message || e).slice(0, 120)}` });
         }
         return undefined;   // 已自行写响应
+      }
+    },
+
+    // ── 自动化任务（D2）────────────────────────────────────────────────
+    //
+    // 任务表存在 data/automations.json，由 orchestrator.automations 持有。
+    // 这里只做 CRUD 与"立即执行"；调度本身在心跳里，不归控制台管。
+
+    {
+      // cron 语法检查与"接下来三次"预览：新建表单边输入边校验，别等保存才报错。
+      method: 'GET', pattern: '/api/automations/preview',
+      handler: async ({ res, json, url }) => {
+        const expr = String(url.searchParams.get('cron') || '').trim();
+        // 语法错与"合法但永不触发"要分开说：前者的处理方式（改表达式）完全不同。
+        const parsed = parseCron(expr);
+        if (!parsed.ok) {
+          return json(res, 200, { ok: false, describe: describeCron(expr), next: [], error: parsed.reason });
+        }
+        const next = [];
+        let at = Date.now();
+        for (let i = 0; i < 3; i++) {
+          const t = nextCronAt(expr, at);
+          if (!t) break;
+          next.push(t);
+          at = t;
+        }
+        return json(res, 200, {
+          ok: next.length > 0,
+          describe: describeCron(expr),
+          next,
+          error: next.length ? '' : '这个表达式永远不会触发'
+        });
+      }
+    },
+    {
+      method: 'GET', pattern: '/api/automations',
+      handler: async ({ res, json }) => {
+        const tasks = orchestrator?.automations?.list?.() || [];
+        return json(res, 200, {
+          ok: true,
+          tasks: tasks.map((t) => ({ ...t, describe: describeCron(t.cron) }))
+        });
+      }
+    },
+    {
+      method: 'POST', pattern: '/api/automations',
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        const action = String(body.action || '').trim();
+        if (!['send', 'remember', 'plan'].includes(action)) {
+          return json(res, 400, { ok: false, error: 'action 只能是 send / remember / plan' });
+        }
+        if (action === 'send' && !String(body.args?.text || '').trim()) {
+          return json(res, 400, { ok: false, error: '发消息任务需要内容' });
+        }
+        if (action === 'send' && !String(body.chatKey || '').trim()) {
+          return json(res, 400, { ok: false, error: '发消息任务需要目标会话' });
+        }
+        const r = orchestrator?.automations?.add?.({
+          name: body.name,
+          cron: body.cron,
+          action,
+          chatKey: body.chatKey,
+          args: body.args
+        });
+        if (!r?.ok) return json(res, 400, { ok: false, error: r?.reason || '创建失败' });
+        return json(res, 200, { ok: true, task: { ...r.task, describe: describeCron(r.task.cron) } });
+      }
+    },
+    {
+      method: 'POST', pattern: /^\/api\/automations\/([\w-]+)$/,
+      handler: async ({ req, res, json, match }) => {
+        const id = match[1];
+        const body = await bodyOf(req);
+        const patch = {};
+        for (const key of ['name', 'cron', 'action', 'chatKey', 'enabled']) {
+          if (body[key] !== undefined) patch[key] = body[key];
+        }
+        if (body.args && typeof body.args === 'object') patch.args = body.args;
+        if (patch.action !== undefined && !['send', 'remember', 'plan'].includes(String(patch.action))) {
+          return json(res, 400, { ok: false, error: 'action 只能是 send / remember / plan' });
+        }
+        const r = orchestrator?.automations?.update?.(id, patch);
+        if (!r?.ok) return json(res, 404, { ok: false, error: r?.reason || '没有这个任务' });
+        return json(res, 200, { ok: true, task: { ...r.task, describe: describeCron(r.task.cron) } });
+      }
+    },
+    {
+      method: 'DELETE', pattern: /^\/api\/automations\/([\w-]+)$/,
+      handler: async ({ res, json, match }) => {
+        const r = orchestrator?.automations?.remove?.(match[1]);
+        if (!r?.ok) return json(res, 404, { ok: false, error: r?.reason || '没有这个任务' });
+        return json(res, 200, { ok: true });
+      }
+    },
+    {
+      // 立即执行一次：走与定时完全相同的管线（手动不等于绕过检查），
+      // 也不改 nextRunAt —— 别让"点一下试试"把今天的定时吃掉。
+      method: 'POST', pattern: /^\/api\/automations\/([\w-]+)\/run$/,
+      handler: async ({ res, json, match }) => {
+        if (typeof orchestrator?.runAutomationNow !== 'function') {
+          return json(res, 503, { ok: false, error: '自动化还没接上' });
+        }
+        const r = await orchestrator.runAutomationNow(match[1]);
+        return json(res, r.ok ? 200 : 400, r.ok ? { ok: true, result: r.value } : { ok: false, error: r.message || r.code });
       }
     },
   ];

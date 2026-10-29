@@ -46,6 +46,7 @@ function renderSettingsSidebar() {
     ['onebot', 'OneBot 连接'],
     ['chat', '发送与群聊'],
     ['tools', '工具与技能'],
+    ['automation', '自动化'],
     ['search', '搜索服务'],
     ['desktop', '桌面端']
   ];
@@ -112,6 +113,11 @@ function renderSettings() {
     // 挂在 #settings-form 上的委托不受影响。放后面绑定则能找到最终结构。
     if (typeof enhanceConcept2UI === 'function') enhanceConcept2UI(box);
     bindSettingsEvents(c);
+    if (state.settingsSection === 'automation' && typeof bindAutomationEvents === 'function') {
+      // 先拉数据（异步），拿到后自己会重渲染；同时把事件绑上，避免首屏点不动。
+      if (typeof ensureAutomationsLoaded === 'function') ensureAutomationsLoaded();
+      bindAutomationEvents(box);
+    }
     if (box && prevScrollTop) box.scrollTop = prevScrollTop;
   } catch (err) {
     // 单个设置区渲染失败不能让整页空白 —— 显示错误占位，其余页签仍可用
@@ -150,7 +156,8 @@ function renderSettingsSection(c) {
     chat: () => renderChatSection(c),
     desktop: () => renderDesktopSection(c),
     onebot: () => renderOnebotSection(c),
-    tools: () => renderToolsSection(c)
+    tools: () => renderToolsSection(c),
+    automation: () => renderAutomationSection(c)
   };
   const render = sections[sec] || sections.api;
   return `
