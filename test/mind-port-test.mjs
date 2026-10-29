@@ -235,6 +235,20 @@ console.log('\n=== 6b. 自我笔记 ===');
   const updater = createWriterPort(store, { by: 'tool:update_relation' });
   check(updater.writeSelfNotes(['越权']).code === 'not_a_writer', '别的来源写不了自我笔记');
 
+  // 意图：写属于整合/自由时刻，读永远可读
+  const iw = createWriterPort(store, { by: 'integrate.chat' });
+  const p1 = iw.proposeIntention({ text: '下次问问他搬家的事', dueAt: Date.now() + 3600000 });
+  check(p1.ok === true && p1.intention.status === 'open', '整合可以挂意图');
+  const p2 = iw.proposeIntention({ text: '下次问问他搬家的事' });
+  check(p2.ok === true && p2.duplicate === true, '同一句话不重复挂');
+  check(createWriterPort(store, { by: 'runtime.chat' }).proposeIntention({ text: '越权' }).code === 'not_a_writer',
+    '会话运行时不能自己挂意图（那是自由时刻的事）');
+
+  const rt = createRuntimePort(store);
+  check(rt.intentions().length === 1, '运行时能读到待办');
+  const closed = iw.closeIntention(p1.intention.id, { status: 'done', note: '问过了' });
+  check(closed.ok === true && closed.intention.status === 'done', '可以了结意图');
+  check(rt.intentions().length === 0, '了结后不再出现在待办里');
   const account = createRuntimePort(store).reflectionState({ chatKey: CHAT });
   check(typeof account.today === 'string', '反思账本带今日键');
   check(account.todayReflections === 0, '反思账本带今日次数');

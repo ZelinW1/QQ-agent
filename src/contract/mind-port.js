@@ -430,11 +430,12 @@ export function createRuntimePort(mind, deps = {}) {
       try { return mind.listActions?.({ limit }) || []; } catch { return []; }
     },
 
-    // ── 意图（B 期接入；A 期显式不可用，而不是悄悄返回空）────────────────
+    // ── 意图（B3 起有存储）──────────────────────────────────────────────
 
-    intentions() { return []; },
-    proposeIntention() { return fail('not-implemented', '意图在 B 期接入'); },
-    closeIntention() { return fail('not-implemented', '意图在 B 期接入'); },
+    /** 她的待办（按到期时间排）。读永远不抛。 */
+    intentions({ status = 'open', dueBefore = 0, limit = 20 } = {}) {
+      try { return mind.listIntentions?.({ status, dueBefore, limit }) || []; } catch { return []; }
+    },
 
     // ── 记录 ──────────────────────────────────────────────────────────
 
@@ -549,6 +550,40 @@ export function createWriterPort(mind, opts = {}) {
     /** 叙事（日记）：B 期才有存储。 */
     writeNarrative() { return fail('not-implemented', '叙事在 B 期接入'); },
 
+    /**
+     * 挂一条意图："我想做某件事，打算什么时候做"。
+     *
+     * 与 recordAttempt 分开：意图是她想做什么，尝试是有没有做成。
+     * 一条意图可以对应多次尝试（失败重试），归因才不会糊在一起。
+     */
+    proposeIntention(input, meta = {}) {
+      if (!allowed('intention')) return deny('intention');
+      try {
+        // 来源按写入句柄推断：工具与整合算"聊天时想到的"，自由时刻自己想的算 free。
+        const source = input?.source
+          || (by === 'user' ? 'user' : (by === 'runtime.free' ? 'free' : 'chat'));
+        const r = mind.addIntention?.({ ...input, source }) || { ok: false, reason: '存储不支持意图' };
+        if (!r?.ok) return fail('invalid_patch', r?.reason || '意图写入失败');
+        return ok({ intention: r.intention, duplicate: r.duplicate === true });
+      } catch (error) {
+        log.error?.(`[mind-port] 写意图失败：${error?.message ?? error}`);
+        return fail('store-error', '意图写入失败');
+      }
+    },
+
+    /** 了结一条意图：done / dropped / expired。 */
+    closeIntention(id, { status = 'done', note = '' } = {}) {
+      if (!allowed('intention')) return deny('intention');
+      try {
+        const r = mind.resolveIntention?.(id, { status, note, now: Date.now() }) || { ok: false };
+        if (!r?.ok) return fail('invalid_patch', r?.reason || '意图了结失败');
+        return ok({ intention: r.intention, unchanged: r.unchanged === true });
+      } catch (error) {
+        log.error?.(`[mind-port] 了结意图失败：${error?.message ?? error}`);
+        return fail('store-error', '意图了结失败');
+      }
+    },
+
     /** 自我笔记：会话级反思的产物，只记为"待整合"，不是改写自我。 */
     writeSelfNotes(notes, meta = {}) {
       if (!allowed('self.notes')) return deny('self.notes');
@@ -609,8 +644,6 @@ export function createNoopRuntimePort() {
     lastAction() { return null; },
     recentActions() { return []; },
     intentions() { return []; },
-    proposeIntention: nothing,
-    closeIntention: nothing,
     recordAction: nothing,
     recordAttempt: nothing,
     recordOutcome: nothing,
@@ -631,7 +664,9 @@ export function createNoopWriterPort() {
     reviseSelf: nothing,
     appendReflection: nothing,
     writeNarrative: nothing,
-    writeSelfNotes: nothing
+    writeSelfNotes: nothing,
+    proposeIntention: nothing,
+    closeIntention: nothing
   };
 }
 

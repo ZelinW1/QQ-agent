@@ -49,6 +49,10 @@ const LIMITS = {
   preoccupations: 5,
   preoccupationItem: 60,
   changelog: 50,
+  // 意图与观察
+  intentionText: 160,
+  observationWindowMs: 72 * 3600 * 1000,   // 一条观察的有效窗口（72 小时）
+  observationCheckMs: 24 * 3600 * 1000,    // 最早什么时候可以复查（24 小时）
   // 自我笔记：只保留最近的，攒够几条就该由全局整合消化一次。
   selfNotes: 20,
   reason: 200
@@ -136,6 +140,20 @@ function writeJsonlAtomic(file, entries) {
   const body = entries.map((e) => JSON.stringify(e)).join('\n');
   fs.writeFileSync(tmp, body ? `${body}\n` : '', 'utf8');
   fs.renameSync(tmp, file);
+}
+
+/**
+ * 一次尝试的结局。
+ *
+ * 没做动作（idle）与"做了但被拒"必须分开：前者说明她决定不做，
+ * 后者说明她想做但世界不允许 —— 这两种情况对"要不要再试"的含义完全相反。
+ */
+function inferOutcome(entry = {}) {
+  if (entry.outcome) return entry.outcome;
+  if (entry.error) return 'failed';
+  if (entry.action === 'idle') return 'idle';
+  if (entry.result && entry.result.blocked) return 'blocked';
+  return 'done';
 }
 
 function appendJsonl(file, entry) {
@@ -306,7 +324,11 @@ export class MindStore {
   #chatEventsDir(chatKey) { return path.join(this.#eventsRoot(), chatDirName(chatKey)); }
   #shardFile(chatKey, ts) { return path.join(this.#chatEventsDir(chatKey), `${monthKey(ts)}.jsonl`); }
   #reflectionsFile() { return path.join(this.root, 'reflections.jsonl'); }
+  // 旧的行动流水账：**已冻结**，只读不写（历史上写进去的记录仍要能看见）。
   #actionsFile() { return path.join(this.root, 'actions.jsonl'); }
+  #attemptsFile() { return path.join(this.root, 'attempts.jsonl'); }
+  #intentionsFile() { return path.join(this.root, 'intentions.jsonl'); }
+  #observationsFile() { return path.join(this.root, 'observations.jsonl'); }
 
   // ── 事件 ──
 
@@ -791,22 +813,172 @@ export class MindStore {
     return record;
   }
 
+  /**
+   * 记一次"她做了什么"。
+   *
+   * 从 B3 起写进 attempts.jsonl，不再写 actions.jsonl（那个文件冻结为只读历史）。
+   * 字段是旧记录的超集：多了 outcome（做成了没）与 intentionId（为了哪件事），
+   * 所以老代码读 listActions 仍拿到一模一样的形状。
+   *
+   * @param {object} entry
+   * @param {'sent'|'blocked'|'failed'|'idle'|'done'} [entry.outcome] 不传则按 error/result 推断
+   */
   appendAction(entry = {}) {
+    const at = Number(entry.at) || Date.now();
     const record = {
-      id: String(entry.id || nowId('a', Date.now())),
-      at: Number(entry.at) || Date.now(),
-      ...entry
+      ...entry,
+      id: String(entry.id || nowId('at', at)),
+      at,
+      outcome: entry.outcome || inferOutcome(entry)
     };
-    appendJsonl(this.#actionsFile(), record);
+    appendJsonl(this.#attemptsFile(), record);
     return record;
+  }
+
+  /** 只读：全部尝试（按写入顺序）。给 UI/统计用。 */
+  listAttempts({ limit = 50, outcome = '' } = {}) {
+    const all = readJsonl(this.#attemptsFile());
+    const filtered = outcome ? all.filter((x) => x.outcome === outcome) : all;
+    return filtered.slice(-Math.max(1, Number(limit) || 50));
+  }
+
+  /**
+   * 增删改意图。
+   *
+   * 意图回答的是"她想做什么、打算什么时候做"，与 `attempts`（做成了没）分开：
+   * 一次意图可以对应多次尝试（失败重试），失败原因也属于尝试而不是意图。
+   *
+   * @param {object} input
+   * @param {string} input.text 她想做的事（一句话）
+   * @param {number} [input.dueAt] 打算什么时候做（到点会进候选）
+   * @param {string} [input.source] 'chat' | 'free' | 'user'
+   * @param {string} [input.chatKey]
+   * @param {string} [input.kind] 自由标记（delayed_check / follow_up / ...）
+   */
+  addIntention(input = {}) {
+    const text = str(input.text, LIMITS.intentionText);
+    if (!text) return { ok: false, reason: '意图不能为空' };
+    const at = Number(input.at) || Date.now();
+    const open = this.listIntentions({ status: 'open', limit: 200 });
+    // 同一句话不重复挂：她经常在相邻两轮想同一件事
+    const dup = open.find((x) => String(x.text) === text);
+    if (dup) return { ok: true, intention: dup, duplicate: true };
+
+    const intention = {
+      id: nowId('in', at),
+      text,
+      at,
+      dueAt: Number(input.dueAt) || 0,
+      source: ['chat', 'free', 'user'].includes(input.source) ? input.source : 'chat',
+      chatKey: String(input.chatKey || ''),
+      kind: str(input.kind, 40) || 'follow_up',
+      status: 'open',
+      resolvedAt: 0,
+      note: ''
+    };
+    appendJsonl(this.#intentionsFile(), intention);
+    return { ok: true, intention, duplicate: false };
+  }
+
+  /** 列意图。同一 id 多行时以最后一行为准（状态机是追加写的）。 */
+  listIntentions({ status = '', limit = 50, dueBefore = 0 } = {}) {
+    const latest = new Map();
+    for (const row of readJsonl(this.#intentionsFile())) {
+      if (!row || !row.id) continue;
+      const prev = latest.get(row.id);
+      if (!prev || Number(row.at) >= Number(prev.at)) latest.set(row.id, { ...(prev || {}), ...row });
+    }
+    let out = [...latest.values()];
+    if (status) out = out.filter((x) => x.status === status);
+    if (dueBefore) out = out.filter((x) => Number(x.dueAt) > 0 && Number(x.dueAt) <= Number(dueBefore));
+    out.sort((a, b) => (Number(a.dueAt) || Number(a.at)) - (Number(b.dueAt) || Number(b.at)));
+    return out.slice(0, Math.max(1, Number(limit) || 50));
+  }
+
+  /**
+   * 了结一条意图。
+   * @param {string} id
+   * @param {{status?: 'done'|'dropped'|'expired', note?: string, now?: number}} [opts]
+   */
+  resolveIntention(id, { status = 'done', note = '', now = Date.now() } = {}) {
+    const cur = this.listIntentions({ limit: 500 }).find((x) => x.id === String(id));
+    if (!cur) return { ok: false, reason: '没有这条意图' };
+    if (cur.status !== 'open') return { ok: true, intention: cur, unchanged: true };
+    if (!['done', 'dropped', 'expired'].includes(status)) return { ok: false, reason: '非法状态' };
+    const next = { ...cur, status, resolvedAt: Number(now) || Date.now(), note: str(note, 200), at: Number(now) || Date.now() };
+    appendJsonl(this.#intentionsFile(), next);
+    return { ok: true, intention: next };
+  }
+
+  /**
+   * 记一条观察：一次尝试之后，世界有没有按预期变化。
+   *
+   * 为什么要等：她发完消息不知道对方看没看、回没回；立刻判定只能判"发出去了"，
+   * 判不了"有没有用"。所以给一个窗口（默认 72 小时），窗口到期才复查。
+   */
+  appendObservation(input = {}) {
+    const at = Number(input.at) || Date.now();
+    const windowMs = Number(input.windowMs) || LIMITS.observationWindowMs;
+    const observation = {
+      id: nowId('ob', at),
+      at,
+      attemptId: String(input.attemptId || ''),
+      intentionId: String(input.intentionId || ''),
+      chatKey: String(input.chatKey || ''),
+      expect: str(input.expect, 200),
+      dueAt: at + windowMs,
+      checkAfterAt: at + Math.min(windowMs, LIMITS.observationCheckMs),
+      verdict: 'pending',
+      note: ''
+    };
+    appendJsonl(this.#observationsFile(), observation);
+    return observation;
+  }
+
+  /** 到期待复查的观察（窗口已过、还没判定）。 */
+  listDueObservations(now = Date.now(), limit = 20) {
+    const latest = new Map();
+    for (const row of readJsonl(this.#observationsFile())) {
+      if (!row || !row.id) continue;
+      const prev = latest.get(row.id);
+      if (!prev || Number(row.at) >= Number(prev.at)) latest.set(row.id, { ...(prev || {}), ...row });
+    }
+    return [...latest.values()]
+      .filter((x) => x.verdict === 'pending' && Number(x.dueAt) <= Number(now))
+      .sort((a, b) => a.dueAt - b.dueAt)
+      .slice(0, Math.max(1, Number(limit) || 20));
+  }
+
+  /**
+   * 判定一条观察。
+   * @param {string} id
+   * @param {{verdict: 'changed'|'unchanged'|'void', note?: string, now?: number}} opts
+   */
+  resolveObservation(id, { verdict = 'void', note = '', now = Date.now() } = {}) {
+    const cur = [...new Map(readJsonl(this.#observationsFile()).map((r) => [r.id, r])).values()]
+      .find((x) => x.id === String(id));
+    if (!cur) return { ok: false, reason: '没有这条观察' };
+    if (!['changed', 'unchanged', 'void'].includes(verdict)) return { ok: false, reason: '非法判定' };
+    const next = { ...cur, verdict, note: str(note, 200), resolvedAt: Number(now) || Date.now(), at: Number(now) || Date.now() };
+    appendJsonl(this.#observationsFile(), next);
+    return { ok: true, observation: next };
   }
 
   listReflections({ limit = 20 } = {}) {
     return tailJsonl(this.#reflectionsFile(), limit);
   }
 
+  /**
+   * 读行动流水（兼容旧文件）。
+   *
+   * 新的写入都进 attempts.jsonl；actions.jsonl 是冻结的历史，仍要能看见，
+   * 否则用户升级后"她昨天做过什么"会突然变空。两边形状一致，直接拼接取尾部。
+   */
   listActions({ limit = 20 } = {}) {
-    return tailJsonl(this.#actionsFile(), limit);
+    const n = Math.max(1, Number(limit) || 20);
+    const legacy = readJsonl(this.#actionsFile());
+    const fresh = readJsonl(this.#attemptsFile());
+    return [...legacy, ...fresh].slice(-n);
   }
 
   /** 日志文件体积（UI 上让用户知道"清掉能省多少"）。 */
@@ -814,9 +986,12 @@ export class MindStore {
     const sizeOf = (file) => {
       try { return fs.statSync(file).size; } catch { return 0; }
     };
-    const actions = sizeOf(this.#actionsFile());
+    const legacy = sizeOf(this.#actionsFile());
+    const attempts = sizeOf(this.#attemptsFile());
     const reflections = sizeOf(this.#reflectionsFile());
-    return { actions, reflections, total: actions + reflections };
+    // UI 上的"行动日志"= 冻结的旧文件 + 新的尝试记录，用户不关心这层拆分。
+    const actions = legacy + attempts;
+    return { actions, legacyActions: legacy, attempts, reflections, total: actions + reflections };
   }
 
   /**
@@ -840,7 +1015,13 @@ export class MindStore {
         return true;
       } catch { return false; }
     };
-    if (actions && truncate(this.#actionsFile())) cleared.push('actions');
+    // "清空行动日志"同时清掉冻结的旧文件与新的尝试记录：对用户来说它们是同一件事。
+    if (actions) {
+      let any = false;
+      if (truncate(this.#actionsFile())) any = true;
+      if (truncate(this.#attemptsFile())) any = true;
+      if (any) cleared.push('actions');
+    }
     if (reflections && truncate(this.#reflectionsFile())) cleared.push('reflections');
     const after = this.logSizes();
     return { ok: true, cleared, freed: Math.max(0, before.total - after.total) };
