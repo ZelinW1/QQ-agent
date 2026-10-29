@@ -1008,6 +1008,20 @@ export class MindStore {
   }
 
   /**
+   * 列出观察（同一 id 以最后一行为准）。
+   * @param {{limit?:number}} [opts]
+   */
+  listObservations({ limit = 20 } = {}) {
+    const latest = new Map();
+    for (const row of readJsonl(this.#observationsFile())) {
+      if (!row || !row.id) continue;
+      const prev = latest.get(row.id);
+      if (!prev || Number(row.at) >= Number(prev.at)) latest.set(row.id, { ...(prev || {}), ...row });
+    }
+    const all = [...latest.values()].sort((a, b) => Number(b.at) - Number(a.at));
+    return all.slice(0, Math.max(1, Number(limit) || 20));
+  }
+  /**
    * 判定一条观察。
    * @param {string} id
    * @param {{verdict: 'changed'|'unchanged'|'void', note?: string, now?: number}} opts

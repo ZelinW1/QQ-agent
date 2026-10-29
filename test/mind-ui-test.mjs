@@ -82,11 +82,25 @@ const STATE = {
   },
   roleTextChars: 0,
   botName: '小鲸鱼',
-  self: { version: 3, narrative: '我是小鲸鱼。最近对熟人话多。', mood: { label: '有点闷', valence: -0.3 }, preoccupations: ['想问裁员的事'], updatedAt: Date.now() },
+  self: {
+    version: 3,
+    narrative: '我是小鲸鱼。最近对熟人话多。',
+    mood: { label: '有点闷', valence: -0.3 },
+    preoccupations: ['想问裁员的事'],
+    updatedAt: Date.now(),
+    notes: [
+      { text: '我好像没那么怕拒绝了', at: Date.now() - 3600000, by: 'integrate.chat', digestedAt: 0 },
+      { text: '已经想明白的旧念头', at: Date.now() - 86400000, by: 'integrate.chat', digestedAt: Date.now() - 3600000 }
+    ],
+    notesPending: 1,
+    notesDropped: 0,
+    changelog: [{ at: Date.now() - 86400000, by: 'integrate.global', reason: '把想到的事收拢了一下' }]
+  },
   relations: [{
     userId: '777', names: ['小王'], nickname: '王哥', stage: 'familiar',
     trust: 62, warmth: 70, knownFor: ['做后端'], tender: ['别问裁员'],
-    openLoops: ['他后来怎么样了'], recentSummary: '聊到裁员', confidence: 0.8, updatedAt: Date.now()
+    openLoops: ['他后来怎么样了'], recentSummary: '聊到裁员', confidence: 0.8, updatedAt: Date.now(),
+    version: 2, changelog: [{ at: Date.now() - 7200000, by: 'integrate.chat', reason: '聊得不错' }]
   }],
   tick: {
     energy: 77, today: '2026-10-25', todayProactive: 1, todayDecisions: 3,
@@ -108,7 +122,21 @@ const STATE = {
   },
   counts: { events: 5, uncompacted: 4, relations: 1, reflections: 1 },
   recentReflections: [{ at: Date.now(), ok: true, empty: false, produced: { self: true, relations: [{ userId: '777' }], compacted: 2 }, rejected: 0 }],
-  recentActions: []
+  recentActions: [],
+  // B/C/D 期新增的记录：界面上必须看得到，否则"她能成长"只存在于代码里。
+  intentions: [
+    { id: 'in_1', text: '问问他搬家的事', dueAt: Date.now() - 1000, kind: 'delayed_check', chatKey: 'private:777', at: Date.now() - 86400000 },
+    { id: 'in_2', text: '换个头像', dueAt: Date.now() + 86400000, kind: 'delayed_check', chatKey: '', at: Date.now() }
+  ],
+  observations: [
+    { id: 'ob_1', chatKey: 'private:777', expect: '他应该会回我一句', at: Date.now() - 3600000, dueAt: Date.now() + 86400000, verdict: 'pending', note: '' }
+  ],
+  narratives: [
+    { id: 'nr_1', title: '安静的一周', text: '这周我过得挺安静的，想清楚了一件小事。', at: Date.now() - 86400000, period: null }
+  ],
+  strongEvents: [
+    { id: 'e_s1', ts: Date.now() - 7200000, kind: 'promise', text: '我保证以后每天给你带咖啡' }
+  ]
 };
 
 // ── 1. 正常渲染 ─────────────────────────────────────────────────────────
@@ -141,6 +169,37 @@ await sandbox.loadMindPage();
   check(!html.includes('开关与作息'), '状态页不混入设定（开关在「身份」页）');
 }
 
+// ── 1a. 新记录（B/C/D 期落地的东西有没有显示出来）──────────────────────
+console.log('\n=== 1a. 新增记录 ===');
+{
+  const { sandbox: s1a, box: b1a } = makeSandbox(STATE);
+  await s1a.loadMindPage();
+  const html = b1a.innerHTML;
+
+  check(html.includes('还没想明白的念头'), '自我卡显示"还没想明白的念头"');
+  check(html.includes('我好像没那么怕拒绝了'), '未消化的念头可见');
+  check(!html.includes('已经想明白的旧念头'), '已消化的念头折叠起来（不占版面）');
+  check(html.includes('这些是她平时零星记下的'), '说明这些念头要等全局整合');
+
+  check(html.includes('最近怎么变成现在这样'), '自我卡显示改编记录');
+  check(html.includes('全局整合'), '改编记录把来源翻译成人话（不是 integrate.global）');
+  check(!html.includes('integrate.global：'), '不直接把端口来源串丢给用户');
+
+  check(html.includes('第 2 次改动'), '关系显示改动次数');
+  check(html.includes('最近改动：会话整合'), '关系显示最近一次改动与来源');
+  check(html.includes('聊得不错'), '关系改动理由可见');
+
+  check(html.includes('她惦记的事'), '新增"她惦记的事"卡');
+  check(html.includes('问问他搬家的事') && html.includes('到点了'), '意图与到期状态可见');
+  check(html.includes('换个头像'), '未到期的意图也列出');
+  check(html.includes('做完还没回头看'), '待复查的观察可见');
+  check(html.includes('他应该会回我一句'), '观察写了在等什么');
+
+  check(html.includes('这几周'), '新增"这几周"卡');
+  check(html.includes('安静的一周') && html.includes('想清楚了一件小事'), '叙事标题与正文可见');
+
+  check(html.includes('会话反思') || html.includes('全局整合'), '反思日志标明是哪一层写的');
+}
 // ── 1b. 身份页（只放身份，开关移到节律）─────────────────────────────────
 console.log('\n=== 1b. 身份页 ===');
 {

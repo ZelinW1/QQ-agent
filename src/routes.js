@@ -997,6 +997,12 @@ export function createRoutes(deps) {
         const events = mind.queryEvents({ limit: 5000 });
         const reflections = mind.listReflections({ limit: 5 });
         const actions = mind.listActions({ limit: 10 });
+        // B/C/D 期新增的四类记录：界面上要看得到，否则"她能成长"只是代码里的事。
+        const narratives = mind.listNarratives?.({ limit: 3 }) || [];
+        const intentions = mind.listIntentions?.({ status: 'open', limit: 20 }) || [];
+        const observations = mind.listObservations?.({ limit: 10 }) || [];
+        const selfNotes = Array.isArray(self.selfNotes) ? self.selfNotes : [];
+        const strongEvents = events.filter((e) => e.strong === true).slice(-10);
 
         // 当前身份来源：roleText 非空 = 旧模式（整段角色卡），否则 charter 模式。
         // 与 prompt.js 判定同口径，UI 才能如实显示"现在到底在用哪套"。
@@ -1058,7 +1064,18 @@ export function createRoutes(deps) {
             narrative: String(self.narrative || ''),
             mood: { label: String(self.mood?.label || ''), valence: Number(self.mood?.valence) || 0 },
             preoccupations: Array.isArray(self.preoccupations) ? self.preoccupations : [],
-            updatedAt: Number(self.updatedAt) || 0
+            updatedAt: Number(self.updatedAt) || 0,
+            // 待整合的"我好像变了"：只有全局整合能消化它们。
+            notes: selfNotes.slice(-8).map((n) => ({
+              text: String(n.text || ''), at: Number(n.at) || 0, by: String(n.by || ''),
+              digestedAt: Number(n.digestedAt) || 0
+            })),
+            notesPending: selfNotes.filter((n) => !Number(n.digestedAt)).length,
+            notesDropped: Number(self.selfNotesDropped) || 0,
+            // 谁改过她、为什么：以前只有版本号，用户看不到"她怎么变成现在这样"。
+            changelog: (Array.isArray(self.changelog) ? self.changelog : []).slice(-5).map((c) => ({
+              at: Number(c.at) || 0, by: String(c.by || ''), reason: String(c.reason || '')
+            }))
           },
           relations: relations.map((r) => ({
             userId: String(r.userId || ''),
@@ -1072,7 +1089,43 @@ export function createRoutes(deps) {
             openLoops: Array.isArray(r.openLoops) ? r.openLoops.map((l) => l?.text ?? String(l)) : [],
             recentSummary: String(r.recentSummary || ''),
             confidence: Number(r.confidence) || 0,
-            updatedAt: Number(r.updatedAt) || 0
+            updatedAt: Number(r.updatedAt) || 0,
+            version: Number(r.version) || 0,
+            changedAt: Number(r.changelog?.at?.(-1)?.at) || 0,
+            changelog: (Array.isArray(r.changelog) ? r.changelog : []).slice(-3).map((c) => ({
+              at: Number(c.at) || 0, by: String(c.by || ''), reason: String(c.reason || '')
+            })),
+            strongAt: Number(r.strongAt) || 0
+          })),
+          // 她惦记的事：意图与观察。以前这两张表只有接口、没有界面。
+          intentions: intentions.map((x) => ({
+            id: String(x.id || ''),
+            text: String(x.text || ''),
+            dueAt: Number(x.dueAt) || 0,
+            kind: String(x.kind || ''),
+            chatKey: String(x.chatKey || ''),
+            at: Number(x.at) || 0
+          })),
+          observations: observations.map((x) => ({
+            id: String(x.id || ''),
+            chatKey: String(x.chatKey || ''),
+            expect: String(x.expect || ''),
+            at: Number(x.at) || 0,
+            dueAt: Number(x.dueAt) || 0,
+            verdict: String(x.verdict || 'pending'),
+            note: String(x.note || '')
+          })),
+          // 这几周她过成什么样：每段都是追加的，不覆盖。
+          narratives: narratives.map((x) => ({
+            id: String(x.id || ''),
+            title: String(x.title || ''),
+            text: String(x.text || ''),
+            at: Number(x.at) || 0,
+            period: x.period || null
+          })),
+          strongEvents: strongEvents.map((e) => ({
+            id: String(e.id || ''), ts: Number(e.ts) || 0,
+            kind: String(e.strongKind || ''), text: String(e.text || '').slice(0, 120)
           })),
           tick: {
             energy: Number(tick.energy) || 0,

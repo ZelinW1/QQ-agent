@@ -15,6 +15,25 @@ const MIND_STAGE = {
   strained: '有隔阂'
 };
 
+/** 谁改了她：端口里的来源串 → 人话。认不出来就原样显示，不吞信息。 */
+const MIND_BY_LABEL = {
+  self: '她自己',
+  reflection: '反思',
+  owner: '主人',
+  user: '主人',
+  'integrate.chat': '会话整合',
+  'integrate.global': '全局整合',
+  'tool:update_relation': '关系工具',
+  'tool:self_revise': '自我改写工具',
+  'tool:remember_event': '记一笔工具',
+  'runtime.free': '自由时间',
+  'runtime.automate': '定时任务'
+};
+function mindByLabel(by) {
+  const key = String(by || '').trim();
+  return MIND_BY_LABEL[key] || key || '未知来源';
+}
+
 const MIND_KIND_LABEL = {
   interaction: '互动',
   observation: '观察',
@@ -151,6 +170,87 @@ function renderMindPage() {
   mindBindEvents(box);
 }
 
+/** 强事件类型 → 人话。 */
+const MIND_STRONG_LABEL = {
+  conflict: '冲突',
+  farewell: '告别',
+  promise: '承诺',
+  'stage-regressed': '关系变远',
+  milestone: '重要的事'
+};
+
+/** 一条反思日志属于哪一层。以前只显示"反思"，分不清是谁写的。 */
+function mindReflectLabel(r = {}) {
+  if (r.kind === 'narrative') return '写了一段';
+  if (r.scope === 'global') return '全局整合';
+  return '会话反思';
+}
+
+/** 还没被整合消化的念头：只显示未消化的，已消化的一律折叠。 */
+function selfNotesSlot(self = {}) {
+  const notes = Array.isArray(self.notes) ? self.notes : [];
+  const pending = notes.filter((n) => !n.digestedAt);
+  if (!pending.length && !self.notesDropped) return '';
+  const chips = pending.map((n) => `<span class="mind-chip">${esc(n.text)}</span>`).join('');
+  return `
+    <div class="mind-slot">
+      <div class="k">还没想明白的念头（${self.notesPending || pending.length} 条）</div>
+      ${chips ? `<div class="mind-chips">${chips}</div>` : '<div class="v">没有</div>'}
+      <div class="hint">这些是她平时零星记下的，要等下一次全局整合才会变成"她对自己的说法"。</div>
+      ${self.notesDropped ? `<div class="hint">另有 ${self.notesDropped} 条太久没被整合，已经丢掉了。</div>` : ''}
+    </div>`;
+}
+
+/** 谁改过她、为什么：版本号背后的故事。 */
+function selfChangelogSlot(self = {}) {
+  const list = (Array.isArray(self.changelog) ? self.changelog : []).slice(-3).reverse();
+  if (!list.length) return '';
+  return `
+    <div class="mind-slot">
+      <div class="k">最近怎么变成现在这样</div>
+      <ul class="mind-rules">
+        ${list.map((c) => `<li>${esc(fmtTime(c.at))} · ${esc(mindByLabel(c.by))}${c.reason ? `：${esc(c.reason)}` : ''}</li>`).join('')}
+      </ul>
+    </div>`;
+}
+
+/** 她惦记的事：意图（打算做）+ 观察（做过之后有没有用）。 */
+function mindIntentionsSection(d = {}) {
+  const intents = Array.isArray(d.intentions) ? d.intentions : [];
+  const obs = Array.isArray(d.observations) ? d.observations : [];
+  const pendingObs = obs.filter((o) => o.verdict === 'pending');
+  const intentRows = intents.length
+    ? intents.map((x) => `<div class="mind-rel-line">
+        ${esc(x.text)}${x.dueAt ? `<span class="mind-rel-meta"> · ${x.dueAt <= Date.now() ? '到点了' : `${fmtTime(x.dueAt)} 提醒`}</span>` : ''}
+      </div>`).join('')
+    : '<div class="mind-empty">暂时没有惦记着要做的事。</div>';
+  const obsRows = obs.length
+    ? obs.slice(0, 4).map((o) => `<div class="mind-rel-line muted">
+        ${esc(fmtTime(o.at))} 做过一件事（${esc(o.expect || '看看有没有变化')}）→
+        ${o.verdict === 'pending' ? `等 ${fmtTime(o.dueAt)} 再看` : esc(o.verdict === 'changed' ? '有变化' : (o.verdict === 'unchanged' ? '没有变化' : '判断不了'))}
+      </div>`).join('')
+    : '';
+  return `
+    <div class="mind-slot">
+      <div class="k">打算做的（${intents.length} 件）</div>
+      ${intentRows}
+      <div class="hint">到点会进她的候选；太久没做的会自动作废。</div>
+    </div>
+    ${pendingObs.length ? `<div class="mind-slot"><div class="k">做完还没回头看（${pendingObs.length} 件）</div>${obsRows}</div>` : (obsRows ? `<div class="mind-slot"><div class="k">做完之后的回看</div>${obsRows}</div>` : '')}`;
+}
+
+/** 这几周她过成什么样：叙事是追加的，所以倒序显示最近的。 */
+function mindNarrativesSection(d = {}) {
+  const list = Array.isArray(d.narratives) ? d.narratives : [];
+  if (!list.length) {
+    return '<div class="mind-empty">还没到写周记的时候。她会在攒够一段时间后自己写。</div>';
+  }
+  return list.slice().reverse().map((n) => `
+    <div class="mind-slot">
+      <div class="k">${esc(fmtTime(n.at))}${n.title ? ` · ${esc(n.title)}` : ''}</div>
+      <div class="v">${esc(String(n.text || '').slice(0, 400))}${String(n.text || '').length > 400 ? '…' : ''}</div>
+    </div>`).join('');
+}
 // ── 头部 ───────────────────────────────────────────────────────────────
 function mindHeader(d) {
   const sleep = d.sleep || {};
@@ -217,6 +317,8 @@ function mindStateSection(d) {
     </div>
     <div class="mind-slot"><div class="k">此刻心情</div><div class="v">${esc(self.mood?.label || '说不清')}</div></div>
     ${(self.preoccupations || []).length ? `<div class="mind-slot"><div class="k">挂心的事</div><div class="mind-chips">${self.preoccupations.map((p) => `<span class="mind-chip">${esc(p)}</span>`).join('')}</div></div>` : ''}
+    ${selfNotesSlot(self)}
+    ${selfChangelogSlot(self)}
     <div class="mind-actions" style="margin-top:10px">
       <button class="btn btn-small" id="mind-edit-self">${mindSelfEditing ? '收起编辑' : '手动修改'}</button>
       <span class="muted">修改会记为「主人修改」；之后的自发反思仍可继续改写</span>
@@ -251,7 +353,7 @@ function mindStateSection(d) {
       <div class="mind-rel">
         <div class="mind-rel-head">
           <span class="mind-rel-name">${esc(r.nickname || r.names?.[0] || r.userId)}</span>
-          <span class="mind-rel-meta">${esc(r.userId)} · ${esc(MIND_STAGE[r.stage] || r.stage)} · 把握 ${Math.round((r.confidence || 0) * 100)}%</span>
+          <span class="mind-rel-meta">${esc(r.userId)} · ${esc(MIND_STAGE[r.stage] || r.stage)} · 把握 ${Math.round((r.confidence || 0) * 100)}%${r.version ? ` · 第 ${r.version} 次改动` : ''}</span>
           <span style="flex:1"></span>
           <button class="btn btn-small" data-rel-edit="${esc(r.userId)}">${editing ? '收起' : '编辑'}</button>
         </div>
@@ -260,6 +362,7 @@ function mindStateSection(d) {
         ${(r.tender || []).length ? `<div class="mind-rel-line">别提：${esc(r.tender.join('；'))}</div>` : ''}
         ${(r.openLoops || []).length ? `<div class="mind-rel-line">还没问完：${esc(r.openLoops.join('；'))}</div>` : ''}
         ${r.recentSummary ? `<div class="mind-rel-line">上次：${esc(r.recentSummary)}</div>` : ''}
+        ${(r.changelog || []).length ? `<div class="mind-rel-line muted">最近改动：${esc(mindByLabel(r.changelog[r.changelog.length - 1].by))}${r.changelog[r.changelog.length - 1].reason ? `（${esc(r.changelog[r.changelog.length - 1].reason)}）` : ''} · ${fmtTime(r.changelog[r.changelog.length - 1].at)}</div>` : ''}
         ${editForm}
       </div>`;
     }).join('')
@@ -299,7 +402,7 @@ function mindStateSection(d) {
         return `<div class="mind-rel">
           <div class="mind-rel-head">
             <span class="mind-rel-name">${fmtTime(r.at)}</span>
-            <span class="mind-rel-meta">${r.ok ? (r.empty ? '想不出什么' : (bits.join(' · ') || '完成')) : `失败：${esc(r.reason || '')}`}</span>
+            <span class="mind-rel-meta">${mindReflectLabel(r)} · ${r.ok ? (r.empty ? '想不出什么' : (bits.join(' · ') || '完成')) : `失败：${esc(r.reason || '')}`}</span>
           </div>
           ${r.rejected ? `<div class="mind-rel-line">丢弃 ${r.rejected} 条无依据的判断</div>` : ''}
         </div>`;
@@ -314,6 +417,10 @@ function mindStateSection(d) {
     <div class="mind-grid">
       ${mindCard('关系', relBody)}
       ${mindCard('节律', rhythmBody)}
+    </div>
+    <div class="mind-grid">
+      ${mindCard('她惦记的事', mindIntentionsSection(d))}
+      ${mindCard('这几周', mindNarrativesSection(d))}
     </div>
     ${mindCard('最近反思', refBody)}
     ${mindCard('备份', mindBackupSection())}`;
@@ -616,7 +723,7 @@ function mindStreamSection() {
     const who = e.actorId && e.actorId !== 'self' ? `${e.actorName || e.actorId}：` : '';
     const tags = (e.tags || []).length ? `<span class="mind-rel-meta">${e.tags.map((t) => esc(t)).join(' / ')}</span>` : '';
     const kind = MIND_KIND_LABEL[e.kind] || e.kind || '';
-    const badge = e.summaryOf?.length ? '<span class="mind-pill">压缩摘要</span>' : '';
+    const badge = `${e.summaryOf?.length ? '<span class="mind-pill">压缩摘要</span>' : ''}${e.strong ? `<span class="mind-pill">强事件${e.strongKind ? ` · ${esc(MIND_STRONG_LABEL[e.strongKind] || e.strongKind)}` : ''}</span>` : ''}`;
     return `<div class="mind-rel">
       <div class="mind-rel-head">
         <span class="mind-rel-name">${fmtTime(e.ts)}</span>

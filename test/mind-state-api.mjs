@@ -52,6 +52,32 @@ fs.writeFileSync(
   'utf8'
 );
 
+// B/C/D 期新增的记录：界面要能显示，接口就得先给出来。
+fs.writeFileSync(path.join(mindDir, 'self.json'), JSON.stringify({
+  version: 3,
+  updatedAt: now,
+  narrative: '我是小鲸鱼。最近我发现自己对熟人话多。',
+  mood: { label: '有点闷', valence: -0.3 },
+  preoccupations: ['想问裁员的事'],
+  selfNotes: [
+    { id: 'sn_1', at: now - 3600000, text: '我好像没那么怕拒绝了', by: 'integrate.chat' },
+    { id: 'sn_2', at: now - 7200000, text: '已经想明白的', by: 'integrate.chat', digestedAt: now - 3600000 }
+  ],
+  changelog: [{ at: now - 86400000, by: 'integrate.global', reason: '把想到的事收拢了一下' }]
+}), 'utf8');
+fs.writeFileSync(path.join(mindDir, 'narratives.jsonl'), `${JSON.stringify({
+  id: 'nr_1', at: now - 86400000, title: '安静的一周', text: '这周我过得挺安静的。',
+  source: 'integrate.global', period: { from: now - 7 * 86400000, to: now - 86400000 }
+})}\n`, 'utf8');
+fs.writeFileSync(path.join(mindDir, 'intentions.jsonl'), [
+  { id: 'in_1', text: '问问他搬家的事', at: now - 86400000, dueAt: now - 1000, source: 'free', chatKey: 'private:777', kind: 'delayed_check', status: 'open' },
+  { id: 'in_2', text: '换个头像', at: now, dueAt: now + 86400000, source: 'free', chatKey: '', kind: 'delayed_check', status: 'open' }
+].map((x) => JSON.stringify(x)).join('\n') + '\n', 'utf8');
+fs.writeFileSync(path.join(mindDir, 'observations.jsonl'), `${JSON.stringify({
+  id: 'ob_1', at: now - 3600000, attemptId: 'at_1', chatKey: 'private:777',
+  expect: '他应该会回我一句', dueAt: now + 86400000, checkAfterAt: now + 82800000, verdict: 'pending'
+})}\n`, 'utf8');
+
 fs.writeFileSync(path.join(mindDir, 'tick.json'), JSON.stringify({
   energy: 77, energyAt: now, nextTickAt: 0, today: '2026-10-25',
   todayProactive: 1, todayDecisions: 3, todayReflections: 1,
@@ -93,6 +119,28 @@ await check('自我：版本、叙事、心情、挂心的事', async () => {
   assert.deepEqual(d.self.preoccupations, ['想问裁员的事']);
 });
 
+await check('新增记录：笔记 / 意图 / 观察 / 叙事 / 强事件都在响应里', async () => {
+  const d = (await env.request('GET', '/api/mind/state')).data;
+
+  assert.equal(d.self.notesPending, 1, '未消化的念头计数');
+  assert.ok(d.self.notes.some((n) => n.text.includes('没那么怕拒绝')), '念头文字可见');
+  assert.equal(d.self.changelog.length, 1, '自我改编记录');
+  assert.equal(d.self.changelog[0].by, 'integrate.global', '记录来源');
+
+  assert.equal(d.relations[0].version, 0, '老关系没有版本时读作 0（读时兜底）');
+  assert.ok(Array.isArray(d.relations[0].changelog), '关系改动记录是数组');
+
+  assert.equal(d.intentions.length, 2, '意图列表');
+  assert.ok(d.intentions.some((x) => x.text.includes('搬家') && x.dueAt < Date.now()), '已到点的意图也在列表里');
+
+  assert.equal(d.observations.length, 1, '观察列表');
+  assert.equal(d.observations[0].verdict, 'pending', '观察还没判定');
+
+  assert.equal(d.narratives.length, 1, '叙事列表');
+  assert.equal(d.narratives[0].title, '安静的一周', '叙事标题');
+
+  assert.ok(Array.isArray(d.strongEvents), '强事件列表存在');
+});
 await check('关系档案：昵称、阶段、信任、雷点、未完结', async () => {
   const d = (await env.request('GET', '/api/mind/state')).data;
   assert.equal(d.relations.length, 1);

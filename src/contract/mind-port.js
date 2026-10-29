@@ -732,7 +732,9 @@ export function createAdminPort(mind) {
   const methods = [
     'getTick', 'updateTick', 'getSelf', 'getRelation', 'listRelations', 'patchRelation', 'reviseSelf',
     'queryEvents', 'countUnreflected', 'listReflections', 'listActions', 'appendEvent',
-    'appendReflection', 'appendAction', 'logSizes', 'clearLogs'
+    'appendReflection', 'appendAction', 'logSizes', 'clearLogs',
+    // B/C/D 期新增的读取：控制台要展示她"惦记什么、做过什么、这几周过成什么样"。
+    'listNarratives', 'listObservations', 'listIntentions', 'listStrongSince', 'undigestedSelfNotes'
   ];
   const port = { apiVersion: MIND_PORT_API, get enabled() { return true; } };
   for (const name of methods) {
