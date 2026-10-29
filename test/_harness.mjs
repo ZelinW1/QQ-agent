@@ -297,7 +297,7 @@ export function createMockLLM() {
 }
 
 // ── 启动一套完整环境（mock 全起 + app） ──────────────────────────────────
-export async function bootApp({ config = {}, script = [] } = {}) {
+export async function bootApp({ config = {}, script = [], mind = undefined } = {}) {
   const dataDir = makeDataDir('qq-agent-cov-');
   const onebotHttp = createMockOneBotHttp();
   const onebotHttpPort = await listen(onebotHttp.server);
@@ -345,7 +345,7 @@ export async function bootApp({ config = {}, script = [] } = {}) {
   writeConfig(dataDir, merged);
 
   const { createApp } = await import('../src/app.js');
-  const app = createApp({ log: () => {} });
+  const app = createApp({ log: () => {}, mind });
   const port = await app.start();
   // OneBot 是异步连接的，必须等它连上再返回，否则 /api/onebot/* 会全部 502
   await waitFor(() => app.onebot.connected, 10000, 'OneBot WS 连接');

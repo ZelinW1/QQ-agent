@@ -1035,7 +1035,8 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R3 | 切割：删除 per-chat 心跳模式，只保留全局唤醒（-186 行，含配置项与两套测试） | ✅ |
 | R4 | A1-3 三个写工具改走 WriterPort（`by` 由管线注入，工具伪造不了） | ✅ |
 | R5 | A1-4 控制台改走 AdminPort；`new MindStore` 收口到 app.js + 静态守门 | ✅ |
-| R6 | A1-5 删除 chat 侧直连（`#buildMindContext` 收口到端口）；补"删掉 mind 仍能启动"的守门测试 | 未开始 |
+| R6 | A1-5 收尾：`createApp({ mind: null })` 测试缝 + 端到端守门（没有心智时对话照跑、工具消失、接口不 500） | ✅ |
+| —— | **A 期收尾**：chat 侧仍有两处直连（`#buildMindContext` 的采集、`#maybeReflect` 的阈值），它们跟着 `materials.js` / 整合阶梯在 B、C 期一起搬 | 已知 |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 

@@ -82,7 +82,10 @@ function compareSemver(a, b) {
    防止监听器链式递归（见 createApp 内的递归护栏注释）。 */
 const appLogFns = new WeakSet();
 
-export function createApp({ log = console.log } = {}) {
+export function createApp({ log = console.log, mind: mindOverride } = {}) {
+  // mind 只在这里决定"有没有心智"：
+  //   undefined（默认）= 创建 MindStore；null = 明确不要（测试与"删掉领域"的守门用）。
+  // 除此之外没有任何地方能替换它——装配根是唯一入口。
   const cfg = getConfig();
 
   // 详尽日志：把 createApp 的 log 接到分级日志系统（落盘 + 内存缓冲 + SSE）。
@@ -636,7 +639,7 @@ export function createApp({ log = console.log } = {}) {
   const memory = new MemoryStore();
   // 心智状态（事件/关系/自我）。默认 config.mind.enabled=false，
   // 关闭时 orchestrator 不会采集、提示词不会插段 —— 行为与没有它时一致。
-  const mind = new MindStore();
+  const mind = mindOverride === null ? null : new MindStore();
   const sessions = new SessionRegistry(cfg.store?.keepSessionFiles ?? 0);   // 0 = 不限
   const onebot = new OneBotClient({
     wsUrl: cfg.snowluma?.wsUrl,

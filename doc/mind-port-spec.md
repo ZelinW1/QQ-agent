@@ -559,7 +559,7 @@ B 期会出现 `actions.jsonl` 与 `attempts.jsonl` 并存。规则：
 | **A1-2** | ✅ 已做。`Orchestrator` 注入 `runtimePort`/`writerPort`；睡眠切换、`stay_up`、迁移标记改走端口（per-chat 心跳随后整体删除，见 R3） | `npm run test:mind` 全绿 |
 | **A1-3** | 工具 ctx 从 `mind` 换成 `writer`（`by` 由管线注入）；`mindOf()` 改判 `writer.enabled` | `mind-tools-test` 全绿（12 项） |
 | **A1-4** | ✅ `routes.js` 全部改走 `AdminPort`；`new MindStore` 只出现在 `app.js`（有静态守门） | `mind-state-api` / `mind-ui` / 边界检查全绿 |
-| **A1-5** | 删除 chat 侧的 `this.mind` 直连；加守门测试与静态检查 | 见 §10.3（只覆盖 chat） |
+| **A1-5** | ✅ 端到端守门：`createApp({ mind: null })` 下对话照跑、心智工具消失、控制台不 500。chat 侧仍有两处直连（`#buildMindContext`、`#maybeReflect`），随 B/C 期的 `materials.js` 与整合阶梯一起搬 | `test/mind-absent-test.mjs` 5 项 |
 
 **free 侧（`#runGlobalTick` 与 6 个行动实现，约 25 处）不在 A1 做**，
 它随 C 期被重写成 `runFreeAgent` 时一起换端口。理由：那 25 处里有 2 处（`remember` / `recall`
