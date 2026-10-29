@@ -227,7 +227,7 @@ function mindIntentionsSection(d = {}) {
   const obsRows = obs.length
     ? obs.slice(0, 4).map((o) => `<div class="mind-rel-line muted">
         ${esc(fmtTime(o.at))} 做过一件事（${esc(o.expect || '看看有没有变化')}）→
-        ${o.verdict === 'pending' ? `等 ${fmtTime(o.dueAt)} 再看` : esc(o.verdict === 'changed' ? '有变化' : (o.verdict === 'unchanged' ? '没有变化' : '判断不了'))}
+        ${o.verdict === 'pending' ? `等 ${fmtTime(o.dueAt)} 再看` : esc(o.verdict === 'hit' ? '对方回了' : (o.verdict === 'missed' ? '没人回' : '判断不了'))}
       </div>`).join('')
     : '';
   return `

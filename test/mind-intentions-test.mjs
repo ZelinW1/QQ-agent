@@ -111,12 +111,59 @@ console.log('\n=== 3. 观察 ===');
   check(store.listDueObservations(now + H).length === 0, '窗口内不算到期');
   check(store.listDueObservations(now + 73 * H).length === 1, '窗口过后进入待复查');
 
-  const r = store.resolveObservation(ob.id, { verdict: 'unchanged', note: '没回' });
-  check(r.ok === true && r.observation.verdict === 'unchanged', '可以判定为 unchanged');
+  const r = store.resolveObservation(ob.id, { verdict: 'missed', note: '没回' });
+  check(r.ok === true && r.observation.verdict === 'missed', '可以判定为 missed');
   check(store.listDueObservations(now + 80 * H).length === 0, '判定后不再待复查');
   check(store.resolveObservation(ob.id, { verdict: '乱写' }).ok === false, '非法判定被拒绝');
 }
 
+// ── 3b. 观察闭环：回话即命中，动作节律据此调频 ──────────────────────────
+console.log('\n=== 3b. 观察闭环与节律 ===');
+{
+  const store = mkStore();
+  const now = Date.now();
+
+  // 对方回话：把所有等待中的观测一次关成 hit
+  store.appendObservation({ chatKey: 'private:1', action: 'send_proactive', expect: '会回', at: now - 3600000 });
+  store.appendObservation({ chatKey: 'private:2', action: 'send_proactive', expect: '会回', at: now - 3600000 });
+  const closed = store.closeObservationsForChat('private:1', { verdict: 'hit', now });
+  check(closed.closed === 1, '只关闭这个会话的观测');
+  const rows = store.listObservations({ limit: 10 });
+  check(rows.some((o) => o.chatKey === 'private:1' && o.verdict === 'hit'), '这个会话的观测变成 hit');
+  check(rows.some((o) => o.chatKey === 'private:2' && o.verdict === 'pending'), '别的会话不受影响');
+
+  // 动作节律：命中缩短间隔，落空拉长间隔
+  const a = store.recordActionStat('send_proactive', { ok: true, now });
+  check(a.stat.meanIntervalMs < 4 * 3600000, `命中后间隔变短（${a.stat.meanIntervalMs}）`);
+  check(a.stat.nextRipeAt > now, '给出下次可做时间');
+  const b = store.recordActionStat('send_proactive', { ok: false, now });
+  check(b.stat.meanIntervalMs > a.stat.meanIntervalMs, `落空后间隔变长（${a.stat.meanIntervalMs} → ${b.stat.meanIntervalMs}）`);
+  check(b.stat.fail === 1 && b.stat.ok === 1, '成/败次数分别累计');
+  check(store.getTick().actionStats.send_proactive.nextRipeAt === b.stat.nextRipeAt, '写进 tick（重启后仍然生效）');
+}
+// ── 3c. 收到消息即命中：不需要等窗口到期 ────────────────────────────────
+console.log('\n=== 3c. 回声命中 ===');
+{
+  const { Orchestrator } = await import(src('src/orchestrator.js'));
+  const { createRuntimePort } = await import(src('src/contract/mind-port.js'));
+  const { updateConfig } = await import(src('src/config.js'));
+  updateConfig({ api: { model: '', baseUrl: '' } });   // 不触发模型：只验证"收到消息"这一步
+
+  const store = mkStore();
+  store.appendObservation({ chatKey: 'private:1', action: 'send_proactive', expect: '会回', at: Date.now() - 3600000 });
+
+  const orch = new Orchestrator({
+    store: { listChats: () => [], getChatMeta: () => ({}), recent: () => [] },
+    memory: {}, stickers: {}, sender: {}, sessions: {}, onebot: {}, mind: store
+  });
+  orch.paused = false;
+  orch.aborted = false;
+  orch.asleep = false;
+  orch.onIncoming('private:1');
+
+  const rows = store.listObservations({ limit: 5 });
+  check(rows[0]?.verdict === 'hit', '收到消息 → 该会话的观测当场命中');
+}
 // ── 4. 静态：写入路径真的换了 ───────────────────────────────────────────
 console.log('\n=== 4. 写入路径 ===');
 {

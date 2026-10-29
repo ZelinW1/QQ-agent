@@ -1618,8 +1618,11 @@ export function createApp({ log = console.log, mind: mindOverride } = {}) {
       try { orchestrator.migrateImpressionsToRelations(); } catch { /* 失败不阻塞启动 */ }
     }
     const mindTickOn = mindCfg.enabled === true && mindCfg.tick?.enabled !== false;
-    if (mindTickOn) orchestrator.startTickLoop();
-    else if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
+    // 自动化有自己的调度需求：只开心智、或只配了定时任务，都要把心跳循环跑起来。
+    // （循环内部会各自判断：没有心智 → 心跳直接跳过；没有任务 → 自动化直接跳过。）
+    const automationOn = getConfig().automation?.enabled !== false;
+    if (mindTickOn || automationOn) orchestrator.startTickLoop();
+    if (!mindTickOn && getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
     orchestrator.startReminderLoop();   // 提醒（闹钟）调度：到点往群里发提醒
     log(`控制台已就绪：http://127.0.0.1:${port}`);
     log(`OneBot（SnowLuma）: ws=${getConfig().snowluma?.wsUrl} http=${getConfig().snowluma?.httpUrl}`);

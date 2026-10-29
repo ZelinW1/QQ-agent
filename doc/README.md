@@ -9,8 +9,8 @@
 
 | 你想做什么 | 读这份 | 状态 |
 |---|---|---|
-| 先弄懂"她到底怎么运转" | [architecture-primer.md](./architecture-primer.md) · 行动运行时导读 | 已落地的形态（先读这个） |
-| 查重构做到哪一步、为什么这样做 | [action-runtime-design.md](./action-runtime-design.md) · 设计 v3.2 | 施工依据；§12 是唯一进度清单 |
+| 先弄懂"她到底怎么运转" | [architecture-primer.md](./architecture-primer.md) · 行动运行时导读 | 设计导读（部分落地，见设计稿 §12） |
+| 查重构做到哪一步、为什么这样做 | [action-runtime-design.md](./action-runtime-design.md) · 设计 v3.2 | 施工依据；§12「验收状态」是唯一权威（部分实施，C 主干未做） |
 | 查端口接口与迁移对照 | [mind-port-spec.md](./mind-port-spec.md) · 领域端口规格 | A1 已交付，B 期补齐 |
 | 读重构**前**的代码结构 | [architecture-overview.md](./architecture-overview.md) · 代码架构快照 | 快照 `ef5a8ec`（已过期，读开头横幅） |
 | 写技能 / 插件 | [extend_development/](./extend_development/) | 扩展作者文档（有已知偏差） |
@@ -23,8 +23,8 @@
 
 | 文件 | 状态 | 读者 | 维护方式 |
 |---|---|---|---|
-| `architecture-primer.md` | 已落地的形态 | 产品 / 设计 / 验收 | 随设计稿同步 |
-| `action-runtime-design.md` | 施工依据（已实施） | 实现者 / 评审 | 设计变更时改版本号与 §14 |
+| `architecture-primer.md` | 设计导读（部分落地） | 产品 / 设计 / 验收 | 随设计稿同步 |
+| `action-runtime-design.md` | 施工依据（部分实施） | 实现者 / 评审 | 设计变更时改版本号与 §14；验收以 §12 为准 |
 | `mind-port-spec.md` | 接口规范（A1 已交付） | 实现者 | 随交付更新 |
 | `architecture-overview.md` | **过期快照** | 只用于对照历史 | 不再按阶段重写（见 §2.1） |
 | `extend_development/*` | 扩展作者文档 | 扩展作者 / AI | 契约变更时更新 |
@@ -44,7 +44,8 @@
 | 切割 | `d42ea67` | 删除 per-chat 心跳（-186 行），只剩全局唤醒 |
 | B 期 | `05cb6b5` `895c24a` `2b14d01` `624a433` `a3a566a` | 关系版本化；会话反思不再改自我（只写 selfNotes）；全局整合 + 强事件机械判定；意图/尝试/观察三张表 + 冻结 `actions.jsonl`；叙事 + 月度兜底 |
 | C 期 | `bd9b92a` `59d5719` `46b99fa` `05f3f33` | 八步管线；自由时刻换引擎（素材进提示词、动作过管线、留尝试与观察）；编排器零 store 直连；`QQ_AGENT_NO_MIND=1` 领域缺席守门 |
-| D 期 | （见 §12 R16–R18） | 延时意图：`plan` 挂意图 → 到期候选 → 做成即了结；观察队列机械消费；自动化：cron + 任务表 + 独立调度 + 失败退避 + 设置页 |
+| D 期 | （见 §12 R16–R18） | 延时意图：`plan` 挂意图 → 到期候选 → 做成即了结；观察队列闭环（hit/missed + 节律调频）；自动化：cron + 任务表 + 独立调度 + 失败退避 + 设置页 |
+| 审查修复 | 2026-10-30 | 提示词/工具循环一致化、自动化独立调度、月度兜底重入、兜底事件、观测回声闭环、账本与额度失效的一批修复；**C 主干仍未做**，见设计稿 §12「验收状态」 |
 
 当前规模：59 个测试文件；`src/orchestrator.js` 约 3.5k 行、`src/contract/mind-port.js` 约 800 行、
 `src/runtime/` 两个模块。设计里 A 期的硬指标（删掉 `src/mind/` 仍能启动）**已达成**。

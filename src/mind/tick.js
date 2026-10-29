@@ -140,18 +140,23 @@ export function collectCandidates({
  */
 export function buildDecisionSystem({ name = '她', actions = [] } = {}) {
   const who = String(name || '她').trim() || '她';
+  // 这些动作是通过**调用工具**执行的（tool calling），不是让模型输出一段 JSON。
+  // 以前这里写"只输出 JSON"，而循环只认 tool_calls —— 模型照提示词做就只会 idle，
+  // 自由时刻等于永远不工作。提示词与执行方式必须说的是同一件事。
+  const usable = actions.filter((a) => a.id !== 'idle');
   return [
     `你是${who}。`,
     '现在没有人找你，你自己待着。根据下面的状态，决定要不要做点什么。',
     '',
     '原则：',
-    '- 优先什么都不做。没有真的想做的事，就选 idle。',
+    '- 优先什么都不做。真的没有想做的事，就**不要调用任何工具**，直接结束（也可以调用 finish 说明理由）。',
     '- 主动找人说话要有理由：有话想说、有件挂心的事、或者真的很久没联系了。',
     '- 不要因为"该做点什么"而做点什么。',
-    '- 只输出 JSON：{"action":"动作id","args":{},"reason":"一句给自己看的理由"}',
+    '- 你要做就**调用对应的工具**，不要在正文里写 JSON 或解释要做什么。',
+    '- 一次最多做几件事；做完就收手，不用勉强。',
     '',
-    '动作：',
-    ...actions.map((a) => `- ${a.id}：${a.label}${a.description ? `。${a.description}` : ''}（消耗 ${a.energy ?? 0} 体力）`)
+    '动作（作为工具提供）：',
+    ...usable.map((a) => `- ${a.id}：${a.label}${a.description ? `。${a.description}` : ''}（消耗 ${a.energy ?? 0} 体力）`)
   ].join('\n');
 }
 

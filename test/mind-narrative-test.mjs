@@ -151,20 +151,32 @@ console.log('\n=== 6. 月度兜底 ===');
   const store = mkStore();
   store.appendSelfNotes(['一条念头', '两条念头'], { by: 'integrate.chat' });
   store.reviseSelf({ narrative: '我是小鲸鱼。' }, { reason: '出生' });
-  // 把自我时间推到 40 天前
+  // 关键点：判断用的是"上次真正整合的时间"，不是 self.updatedAt。
+  // self.updatedAt 每写一条笔记都会变 —— 用它判断，只要她还在反思就永远到不了一个月。
   const self = store.getSelf();
   const file = path.join(store.root, 'self.json');
-  fs.writeFileSync(file, JSON.stringify({ ...self, updatedAt: Date.now() - 40 * DAY }), 'utf8');
+  fs.writeFileSync(file, JSON.stringify({ ...self, updatedAt: Date.now() }), 'utf8');
+  store.updateTick({ lastIntegrateAt: Date.now() - 40 * DAY });
 
   const orch = Object.create(Orchestrator.prototype);
   orch.mind = store;
   orch.mindPort = createRuntimePort(orch.mind, {});
   orch.integrating = false;
   let forced = null;
-  orch.runIntegrate = async (opts) => { forced = opts; return { ok: true }; };
+  let integratingAtCall = null;
+  orch.runIntegrate = async (opts) => {
+    // 关键回归：调用时 integrating 必须是 false。
+    // 以前 maybeMonthlySelf 自己先置 true，又被 runIntegrate 的重入检查挡回去 ——
+    // 月度兜底 100% 走不通，而且只会打一行日志。
+    integratingAtCall = orch.integrating;
+    forced = opts;
+    return { ok: true };
+  };
 
   orch.maybeMonthlySelf();
+  await new Promise((r) => setTimeout(r, 5));
   check(forced && forced.force === true, '超过一个月 → 强制整合一次（不占额度）');
+  check(integratingAtCall === false, '调用时没有把自己挡在重入检查外面');
 }
 
 // ── 7. selfNotes 淘汰保护 ───────────────────────────────────────────────

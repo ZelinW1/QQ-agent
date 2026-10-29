@@ -96,7 +96,11 @@ console.log('\n=== 1. roster 与提示词 ===');
 
   check(!!seen, '全局模式确实调了一次决策模型');
   const user = seen?.[1]?.content || '';
-  check(user.includes('你最近留意到的人'), '提示词带 roster 段');
+  const system = String(seen?.[0]?.content || '');
+  check(!system.includes('只输出 JSON'), 'system 不再要求"只输出 JSON"（那与工具循环矛盾，照做就只会 idle）');
+  check(system.includes('调用对应的工具'), 'system 明确要求用工具调用');
+  check(!system.includes('选 idle'), '菜单里不再让模型"选 idle"（idle 不是工具）');
+  check(user.includes('你最近注意到') || user.includes('你最近留意到的人'), '提示词带 roster 段');
   check(user.includes('王哥') && user.includes('小林'), '两个会话都出现在 roster 里');
   check(user.indexOf('王哥') < user.indexOf('小林'), '有未读的王哥排在前面');
   check(user.includes('2 条未读'), '未读条数可见');
@@ -341,6 +345,8 @@ console.log('\n=== 2i. 到期意图 ===');
   const open = mind.listIntentions({ status: 'open' });
   check(open.length === 0, '做完之后意图被了结');
   check(mind.listIntentions({ limit: 10 })[0].status === 'done', '状态是 done');
+  const attempt = mind.listAttempts({ limit: 3 })[0] || {};
+  check(attempt.intentionId === made.intention.id, '账本记得住这次是为了哪条意图');
 }
 // ── 2j. 她可以自己安排"过会儿再做" ──────────────────────────────────────
 console.log('\n=== 2j. 安排未来 ===');
@@ -361,6 +367,66 @@ console.log('\n=== 2j. 安排未来 ===');
   check(open.length === 1 && open[0].text.includes('搬家'), 'plan 挂出一条意图');
   check(open[0].kind === 'delayed_check', '标记为延时查看');
   check(open[0].dueAt === now0 + 2 * H, '按 inHours 算到期时间');
+}
+// ── 2k. 同一轮里的上限与额度 ────────────────────────────────────────────
+console.log('\n=== 2k. 同轮上限 ===');
+{
+  updateConfig({ mind: { tick: { maxProactivePerDay: 1, maxProactiveGapMs: 3600000 } } });
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 3 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  orch.wake = async () => ({ ok: true });
+  const replies = [
+    { tool_calls: [
+      { id: 'a1', function: { name: 'send_proactive', arguments: '{"chatKey":"private:111"}' } },
+      { id: 'a2', function: { name: 'send_proactive', arguments: '{"chatKey":"private:111"}' } }
+    ] },
+    { tool_calls: [{ id: 'f', function: { name: 'finish', arguments: '{}' } }] }
+  ];
+  const r = await orch.tickOnce({ now: now0, chat: async () => ({ message: replies.shift() }) });
+  const sends = (r.results || []).filter((x) => x.action === 'send_proactive');
+  check(sends.length === 1, `同一轮里主动次数上限仍然有效（实际 ${sends.length} 次）`);
+  check(mind.getTick().todayProactive === 1, '计数只加一次');
+
+  // 失败不占额度：先调一个不存在的动作，再调一个真动作，maxPerWake=1 仍然放行
+  updateConfig({ mind: { actions: { maxPerWake: 1 } } });
+  const { orch: o2 } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 3 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  o2.wake = async () => ({ ok: true });
+  const replies2 = [
+    { tool_calls: [
+      { id: 'x', function: { name: 'not_a_real_action', arguments: '{}' } },
+      { id: 'y', function: { name: 'send_proactive', arguments: '{"chatKey":"private:111"}' } }
+    ] },
+    { tool_calls: [{ id: 'f', function: { name: 'finish', arguments: '{}' } }] }
+  ];
+  const r2 = await o2.tickOnce({ now: now0, chat: async () => ({ message: replies2.shift() }) });
+  check((r2.results || []).some((x) => x.action === 'send_proactive'), '读失败/未知动作不占行动额度');
+}
+// ── 2l. 节律：做砸过的动作要歇一阵 ──────────────────────────────────────
+console.log('\n=== 2l. 动作节律 ===');
+{
+  const { orch, mind } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 3 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  mind.recordActionStat('send_proactive', { ok: false, now: now0 - 1000 });
+  mind.updateTick({ actionStats: { send_proactive: { ok: 0, fail: 1, lastAt: now0 - 1000, meanIntervalMs: 5 * H, nextRipeAt: now0 + 4 * H } } });
+  orch.wake = async () => ({ ok: true });
+  let calls = 0;
+  const replies = [{ tool_calls: [{ id: 's', function: { name: 'send_proactive', arguments: '{"chatKey":"private:111"}' } }] }];
+  const r = await orch.tickOnce({ now: now0, chat: async () => { calls++; return { message: replies.shift() || { content: '' } }; } });
+  check(calls >= 1, '这一轮仍然会调模型（还有别的动作可选）');
+  check(!(r.results || []).some((x) => x.action === 'send_proactive'), '歇着的动作不会被选中执行');
 }
 // ── 3. 同一次唤醒不会重复决策 ───────────────────────────────────────────
 console.log('\n=== 3. 节拍 ===');

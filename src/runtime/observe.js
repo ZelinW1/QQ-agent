@@ -26,13 +26,15 @@ export function verdictFor({ observation = {}, events = [], now = Date.now() } =
 
   const after = (Array.isArray(events) ? events : [])
     .filter((e) => Number(e?.ts) > since);
-  if (!after.length) return { verdict: 'unchanged', note: '窗口内没有新的动静' };
+  // 判定值用 hit / missed / void（设计 §4.5）：能不能被回声命中，
+  // 直接决定这个动作下一次的期望间隔变长还是变短。
+  if (!after.length) return { verdict: 'missed', note: '窗口内没有新的动静' };
 
   const fromOther = after.some((e) => {
     const actor = String(e?.actorId || '');
     return actor && actor !== 'self';
   });
-  if (fromOther) return { verdict: 'changed', note: '对方有回应' };
+  if (fromOther) return { verdict: 'hit', note: '对方有回应' };
   return { verdict: 'void', note: '只有她自己在说话，判断不了' };
 }
 
@@ -45,8 +47,8 @@ export function verdictFor({ observation = {}, events = [], now = Date.now() } =
  * @param {number} [opts.limit]
  * @returns {{checked:number, changed:number, unchanged:number, void:number}}
  */
-export function drainDueObservations({ port, now = Date.now(), limit = 10 } = {}) {
-  const summary = { checked: 0, changed: 0, unchanged: 0, void: 0 };
+export function drainDueObservations({ port, now = Date.now(), limit = 10, onResolved = null } = {}) {
+  const summary = { checked: 0, hit: 0, missed: 0, void: 0, resolved: [] };
   if (!port || typeof port.openObservations !== 'function') return summary;
 
   let due = [];
@@ -64,6 +66,11 @@ export function drainDueObservations({ port, now = Date.now(), limit = 10 } = {}
       port.resolveObservation?.(ob.id, { verdict, note, now });
       summary.checked += 1;
       summary[verdict] += 1;
+      summary.resolved.push({ id: ob.id, action: String(ob.action || ''), chatKey: String(ob.chatKey || ''), verdict });
+      // 就地回写到动作统计：这是观测队列唯一真正"改变下一次行为"的地方。
+      if (typeof onResolved === 'function' && ob.action) {
+        try { onResolved({ action: String(ob.action), verdict, chatKey: String(ob.chatKey || '') }); } catch { /* 记账失败不影响判定 */ }
+      }
     } catch { /* 单条失败不影响其它 */ }
   }
   return summary;

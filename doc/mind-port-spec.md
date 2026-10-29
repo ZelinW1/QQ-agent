@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **A1 已交付**（`2df1990..a09e48b`）；B 期把意图/观察/叙事/自我笔记的实现补进了同一批端口，规格里的 `not-implemented` 已全部接上 |
+| 状态 | **A1 已交付**（`2df1990..a09e48b`）；接口形状达成。但**行为层仍有偏差**：`recordAttempt` 只写 attempts、不按 footprint 自动开观测（观测由编排器显式开）；真实 RuntimePort **没有** `recordOutcome`；事件的 `momentId` 由 store 落盘但尚未被任何调用方填写。 |
 | 对应设计 | [action-runtime-design.md §3.3](./action-runtime-design.md#33-mindport领域端口)、§12 A 期 |
 | 读者 | 实现 A1 的开发者；以及评审"领域层是否真的解耦"的人 |
 | 最后更新 | 2026-10-29 |

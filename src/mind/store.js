@@ -287,6 +287,8 @@ function defaultTick() {
     // 候选打盹：`<chatKey>|<candidateId>` -> 到期时间。
     // 她"想了一下但决定不做"之后，同一个理由不该每 5 分钟重新叫她一次。
     snoozes: {},
+    // 动作节律：每个动作做成/失败多少次、平均多久做一次、下次什么时候可以再试。
+    actionStats: {},
     // 作息：夜里睡着是**状态**，不是静音开关（睡着时不看消息、不做决策）。
     sleep: {
       state: 'awake',   // 'awake' | 'asleep'
@@ -380,6 +382,11 @@ export class MindStore {
       salience: clampNum(input.salience, 0, 1, 0.5),
       tags: strList(input.tags, { maxItems: LIMITS.eventTags, maxLen: LIMITS.tagLen }),
       refs: isPlainObject(input.refs) ? { ...input.refs } : {},
+      // 写入溯源（设计 §4.2）：谁写的、属于哪一次运行 / 哪一次尝试。
+      // 以前这些字段只存在于端口的入参里，落盘时被丢掉 —— 出了事无法回答"这条谁写的"。
+      source: str(input.source, 40),
+      momentId: str(input.momentId, 60),
+      attemptId: str(input.attemptId, 60),
       compacted: false,
       // 摘要事件用它溯源到被压缩的原事件。必须写进磁盘（否则重启后溯源丢失）。
       summaryOf: strList(input.summaryOf, { maxItems: 50, maxLen: 60 })
@@ -443,8 +450,12 @@ export class MindStore {
    */
   countUnreflected(chatKey, since = 0) {
     const from = Number(since) || 0;
+    // 摘要事件是压缩产物，不是"还没反思的经历"：把它算进欠账会虚高，
+    // 触发一次没有材料的反思（还会把 lastReflectAt 推走）。
     return this.queryEvents({ chatKey, includeCompacted: false })
-      .filter((e) => Number(e.ts) > from).length;
+      .filter((e) => Number(e.ts) > from)
+      .filter((e) => !(Array.isArray(e.summaryOf) && e.summaryOf.length))
+      .length;
   }
 
   /**
@@ -983,6 +994,10 @@ export class MindStore {
       attemptId: String(input.attemptId || ''),
       intentionId: String(input.intentionId || ''),
       chatKey: String(input.chatKey || ''),
+      // 哪个动作、什么足迹：没有这两个字段，观测就只是"某件事有没有变化"，
+      // 无法回写到具体动作的节律统计上（成长也就无从谈起）。
+      action: str(input.action, 40),
+      footprint: str(input.footprint, 40),
       expect: str(input.expect, 200),
       dueAt: at + windowMs,
       checkAfterAt: at + Math.min(windowMs, LIMITS.observationCheckMs),
@@ -1008,6 +1023,71 @@ export class MindStore {
   }
 
   /**
+   * 收到对方的真实消息时，把这个会话里"等着看有没有回应"的观测一次关掉。
+   *
+   * 这是回声闭环里最便宜的一环：不用模型，不用等窗口到期 ——
+   * 人回了，就是 hit。窗口到期的判定（drainDueObservations）只处理没人回的那部分。
+   *
+   * @param {string} chatKey
+   * @param {{verdict?:'hit'|'missed'|'void', now?:number}} [opts]
+   * @returns {{ok:boolean, closed:number}}
+   */
+  closeObservationsForChat(chatKey, { verdict = 'hit', now = Date.now() } = {}) {
+    const key = String(chatKey || '');
+    if (!key) return { ok: true, closed: 0 };
+    const latest = new Map();
+    for (const row of readJsonl(this.#observationsFile())) {
+      if (!row || !row.id) continue;
+      const prev = latest.get(row.id);
+      if (!prev || Number(row.at) >= Number(prev.at)) latest.set(row.id, { ...(prev || {}), ...row });
+    }
+    let closed = 0;
+    for (const ob of latest.values()) {
+      if (ob.verdict !== 'pending' || String(ob.chatKey || '') !== key) continue;
+      appendJsonl(this.#observationsFile(), {
+        ...ob,
+        verdict,
+        note: verdict === 'hit' ? '对方回了话' : '手动关闭',
+        resolvedAt: Number(now) || Date.now(),
+        at: Number(now) || Date.now()
+      });
+      closed += 1;
+    }
+    return { ok: true, closed };
+  }
+
+  /**
+   * 记一次动作的节律统计：成/败次数、平均间隔、下次可以再试的时间。
+   *
+   * 这是"成长"落到可观察行为上的地方：做成过的动作间隔变短，失败过的变长。
+   * 没有它，观测队列就只是日志 —— 记了，但不会改变下一次行为。
+   *
+   * @param {string} actionId
+   * @param {{ok?:boolean, now?:number}} [opts]
+   */
+  recordActionStat(actionId, { ok = true, now = Date.now() } = {}) {
+    const id = String(actionId || '').trim();
+    if (!id) return { ok: false, reason: '缺少动作 id' };
+    const tick = this.getTick();
+    const stats = (tick.actionStats && typeof tick.actionStats === 'object') ? { ...tick.actionStats } : {};
+    const cur = stats[id] && typeof stats[id] === 'object' ? { ...stats[id] } : {};
+    const at = Number(now) || Date.now();
+    const HOUR = 3600000;
+    const mean = Math.max(HOUR / 2, Math.min(24 * HOUR, Number(cur.meanIntervalMs) || 4 * HOUR));
+    const nextMean = ok
+      ? Math.max(HOUR / 2, Math.round(mean * 0.9))
+      : Math.min(24 * HOUR, Math.round(mean * 1.2));
+    stats[id] = {
+      ok: (Number(cur.ok) || 0) + (ok ? 1 : 0),
+      fail: (Number(cur.fail) || 0) + (ok ? 0 : 1),
+      lastAt: at,
+      meanIntervalMs: nextMean,
+      nextRipeAt: at + nextMean
+    };
+    this.updateTick({ actionStats: stats });
+    return { ok: true, stat: stats[id] };
+  }
+  /**
    * 列出观察（同一 id 以最后一行为准）。
    * @param {{limit?:number}} [opts]
    */
@@ -1030,7 +1110,7 @@ export class MindStore {
     const cur = [...new Map(readJsonl(this.#observationsFile()).map((r) => [r.id, r])).values()]
       .find((x) => x.id === String(id));
     if (!cur) return { ok: false, reason: '没有这条观察' };
-    if (!['changed', 'unchanged', 'void'].includes(verdict)) return { ok: false, reason: '非法判定' };
+    if (!['hit', 'missed', 'void'].includes(verdict)) return { ok: false, reason: '非法判定' };
     const next = { ...cur, verdict, note: str(note, 200), resolvedAt: Number(now) || Date.now(), at: Number(now) || Date.now() };
     appendJsonl(this.#observationsFile(), next);
     return { ok: true, observation: next };

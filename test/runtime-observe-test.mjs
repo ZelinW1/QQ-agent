@@ -29,14 +29,14 @@ console.log('\n=== 1. 判定 ===');
 {
   const ob = { id: 'ob_1', at: NOW - 80 * H, chatKey: 'private:1' };
 
-  check(verdictFor({ observation: ob, events: [], now: NOW }).verdict === 'unchanged', '什么都没发生 → unchanged');
+  check(verdictFor({ observation: ob, events: [], now: NOW }).verdict === 'missed', '什么都没发生 → missed');
 
   const other = verdictFor({
     observation: ob,
     events: [{ ts: NOW - 10 * H, actorId: '456', text: '刚看到' }],
     now: NOW
   });
-  check(other.verdict === 'changed' && other.note.includes('回应'), '对方有回应 → changed');
+  check(other.verdict === 'hit' && other.note.includes('回应'), '对方有回应 → hit');
 
   const self = verdictFor({
     observation: ob,
@@ -50,7 +50,7 @@ console.log('\n=== 1. 判定 ===');
     events: [{ ts: ob.at - 1000, actorId: '456', text: '窗口之前的事' }],
     now: NOW
   });
-  check(before.verdict === 'unchanged', '窗口之前的事件不算数');
+  check(before.verdict === 'missed', '窗口之前的事件不算数');
 
   check(verdictFor({ observation: { at: 0 }, events: [], now: NOW }).verdict === 'void', '记录不完整 → void');
 }
@@ -71,8 +71,9 @@ console.log('\n=== 2. 批量处理 ===');
   };
   const summary = drainDueObservations({ port, now: NOW });
   check(summary.checked === 2, '两条都处理了');
-  check(summary.changed === 1 && summary.unchanged === 1, '一条 changed 一条 unchanged');
+  check(summary.hit === 1 && summary.missed === 1, '一条 hit 一条 missed');
   check(resolved.length === 2 && resolved.every((r) => r.note), '判定带备注（界面上能解释）');
+  check(summary.resolved.length === 2, '判定结果会回传给调用方（用于回写动作节律）');
 
   const broken = drainDueObservations({ port: { openObservations: () => { throw new Error('炸'); } }, now: NOW });
   check(broken.checked === 0, '端口抛错时安静返回（不影响心跳）');

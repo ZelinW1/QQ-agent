@@ -257,6 +257,8 @@ export class Orchestrator {
     if (this.asleep) return;
     // 醒着收到消息 = 有活动。用于睡眠的"安静宽限"：刚还在聊天就不会立刻睡着。
     this.lastActivityAt = Date.now();
+    // 对方回话了：把这个会话里等回应的观测一次关成 hit（回声闭环）。
+    try { this.mindPort.markObservationsHit?.(chatKey); } catch { /* 不影响收消息 */ }
     // 运行中 / 倒计时中：消息保持未读（不判定、不重置），由会话结束的
     // drain 路径补判定（见 wake 末尾的 drain 注释）。
     if (this.runningChats.has(chatKey)) return;
@@ -825,6 +827,42 @@ export class Orchestrator {
   }
 
   /**
+   * 兜底事件：这一轮对话没写任何事件时，补一条"聊过了"。
+   *
+   * 为什么必须由系统补：模型不调 `remember_event` 是常态。如果只靠它自觉，
+   * 反思的"未反思事件数"永远到不了阈值，L2a → L2b → L3 → L4 全部饿死。
+   *
+   * 内容取"对方说的最后一句 + 我说了什么"，零额外模型调用；
+   * 单轮最多补 1 条，不会把事件流灌满。
+   */
+  #ensureChatEvent({ chatKey, sinceTs, triggerEntries = [], session = null }) {
+    try {
+      if (!this.mind || !chatKey) return;
+      const recent = this.mindPort.recentEvents({ chatKey, limit: 30 }) || [];
+      const wrote = recent.some((e) => Number(e.ts) >= Number(sinceTs));
+      if (wrote) return;
+
+      const mine = (Array.isArray(session?.sent) ? session.sent : [])
+        .map((x) => String(x?.text || '').trim()).filter(Boolean).slice(0, 2);
+      const theirs = (Array.isArray(triggerEntries) ? triggerEntries : [])
+        .map((x) => String(x?.text || '').trim()).filter(Boolean).pop() || '';
+      const parts = [];
+      if (theirs) parts.push(`对方说：${theirs.slice(0, 120)}`);
+      if (mine.length) parts.push(`我说：${mine.join('；').slice(0, 200)}`);
+      const text = parts.join(' / ') || '聊了几句，没有留下具体内容';
+
+      createWriterPort(this.mind, { by: 'runtime.chat' }).appendEvent({
+        chatKey,
+        actorId: 'self',
+        kind: 'interaction',
+        text: text.slice(0, 500),
+        source: 'runtime.chat',
+        salience: 0.35,
+        tags: ['兜底']
+      });
+    } catch { /* 兜底失败不影响对话 */ }
+  }
+  /**
    * 为会话重试清理累积状态。
    *
    * 调用前必须确保 session.sent 为空（没发出过任何消息），否则重试会重复发言。
@@ -915,6 +953,8 @@ export class Orchestrator {
 
   async #runAgent(session, { kind, chatId, chatKey, triggerEntries, proactive, seq, contextLimit = null, tierInfo = null, activeTopic = null }) {
     const cfg = getConfig();
+    // 本次运行的起点：收尾时用它判断"这一轮有没有留下任何记录"。
+    const runStartedAt = Date.now();
     // ── 会话级配置快照（一次运行解析一次）────────────────────────────────
     // 这是"一处解析 + 边界注入"的注入点：下面所有需要"分会话判据"的地方
     // （能否看图/联网、工具启停、技能启停、上下文条数）都从它取，
@@ -1506,6 +1546,11 @@ export class Orchestrator {
       // 给 UI 的简化消息流（跳过纯 tool 结果的重复展示）
     }
 
+    // 兜底事件（设计 §4.2.1）：一次对话时刻至少要留下一条记录。
+    // 模型不主动记是常态，没有这条，反思的"欠账"永远不会涨 ——
+    // 整条整合链在真实对话里会长期空转。
+    this.#ensureChatEvent({ chatKey, sinceTs: runStartedAt, triggerEntries, session });
+
     // 收尾：发过话 = done；没发 = noreply（这是正常选项）
     const status = session.error ? 'error' : (session.sent.length > 0 ? 'done' : 'noreply');
     this.sessionAbortControllers.delete(session.id);
@@ -1801,8 +1846,14 @@ export class Orchestrator {
     const maxEvents = Math.max(5, Number(m.reflectMaxEvents) || 60);
 
     // 摘要事件本身不再参与反思：它是压缩产物，重复消化只会让记忆越滚越薄。
-    const events = store.queryEvents({ chatKey, fromTs: since + 1, limit: maxEvents })
+    //
+    // 取**最早**的一批，不是最新的一批：queryEvents 会按时间升序后 slice(-limit)，
+    // 传 limit 等于丢掉老事件。积压超过 maxEvents 时，那些老事件既没被反思，
+    // 又会因为 lastReflectAt 前移而永远轮不到 —— 静默丢记忆。
+    // 这里改成先取全窗口、再取最早的一批，剩下的下一轮继续。
+    const all = store.queryEvents({ chatKey, fromTs: since + 1 })
       .filter((e) => !(Array.isArray(e.summaryOf) && e.summaryOf.length));
+    const events = all.slice(0, maxEvents);
     if (!events.length) return { ok: false, reason: '没有需要整理的事' };
 
     const actorIds = [...new Set(events
@@ -2074,20 +2125,21 @@ export class Orchestrator {
       if (this.paused || this.aborted) return;
       if (!cfg.api?.model || !cfg.api?.baseUrl) return;
 
-      const self = this.mindPort.self() || {};
-      const updatedAt = Number(self.updatedAt) || 0;
-      if (!updatedAt) return;   // 还没出生过，交给出生仪式
-      if (Date.now() - updatedAt < 30 * 24 * 3600 * 1000) return;
+      // 用什么判断"一个月没整合过"：上次**真正整合**的时间，不是 self.updatedAt。
+      // self.updatedAt 每写一条自我笔记都会变，用它判断等于永远到不了一个月。
+      const ledger = this.mindPort.integrationState();
+      const lastAt = Number(ledger.lastIntegrateAt) || 0;
+      const bornAt = Number((this.mindPort.self() || {}).updatedAt) || 0;
+      const since = lastAt || bornAt;
+      if (!since) return;   // 还没出生过，交给出生仪式
+      if (Date.now() - since < 30 * 24 * 3600 * 1000) return;
       if (!this.mindPort.selfNotes().length) return;
 
-      this.integrating = true;
+      // 这里**不**自己置 integrating：runIntegrate 用它做重入保护，
+      // 在外面置位会让每一次调用都被自己挡回去（月度兜底曾经 100% 走不通）。
       this.runIntegrate({ force: true })
-        .then((r) => {
-          // runIntegrate 内部也会置位；这里补一次兜底，避免异常路径卡住
-          if (!r.ok) console.error('[mind] 月度自我更新未完成:', r.reason);
-        })
-        .catch((error) => console.error('[mind] 月度自我更新失败:', error?.message ?? error))
-        .finally(() => { this.integrating = false; });
+        .then((r) => { if (!r.ok && r.reason !== 'quota') console.error('[mind] 月度自我更新未完成:', r.reason); })
+        .catch((error) => console.error('[mind] 月度自我更新失败:', error?.message ?? error));
     } catch { /* 兜底失败不影响聊天 */ }
   }
   /**
@@ -2285,14 +2337,18 @@ export class Orchestrator {
   /** 启动心跳主循环。心智未启用时什么都不做（与没有这个子系统时一致）。 */
   startTickLoop() {
     this.stopTickLoop();
-    if (!this.mind) return;
     const cfg = getConfig();
     const m = cfg.mind || {};
-    if (m.enabled !== true || m.tick?.enabled !== true) return;
+    const mindOn = Boolean(this.mind) && m.enabled === true && m.tick?.enabled !== false;
+    const automationOn = cfg.automation?.enabled !== false;
+    // 两者都不需要就什么都不做；只开其中一个也照样跑 —— 循环里的两条支路各管各的。
+    if (!mindOn && !automationOn) return;
 
     // 顺手做一次旧印象迁移（幂等，已迁过就跳过）。
     // 放在这里而不是启动流程里：运行期开心智时也能补上。
-    try { this.migrateImpressionsToRelations(); } catch { /* 迁移失败不影响心跳 */ }
+    if (this.mind) {
+      try { this.migrateImpressionsToRelations(); } catch { /* 迁移失败不影响心跳 */ }
+    }
 
     this.tickTimer = setInterval(() => {
       this.tickOnce().catch((error) => console.error('[mind] 心跳失败:', error?.message ?? error));
@@ -2461,11 +2517,17 @@ export class Orchestrator {
    * 但共用同一条管线：开关、参数、执行、审计，一步不少 —— 自动化是最该被约束的那块，
    * 因为它是"配置一次、之后无人看管"的。
    */
-  async runDueAutomations({ now = Date.now(), limit = 3 } = {}) {
+  async runDueAutomations({ now = Date.now(), limit = null } = {}) {
     const summary = { ran: 0, results: [] };
     if (typeof this.automations?.list !== 'function') return summary;
+    // 暂停 / 已中止 / 被配置关掉时，自动化也不该偷偷跑：
+    // "独立调度"指的是不受体力作息限制，不是不受用户掌控。
+    const cfg = getConfig();
+    if (this.paused || this.aborted) return summary;
+    if (cfg.automation?.enabled === false) return summary;
+    const maxPerTick = Math.max(1, Number(limit ?? cfg.automation?.maxPerTick) || 3);
 
-    const due = dueTasks(this.automations.list(), now, limit);
+    const due = dueTasks(this.automations.list(), now, maxPerTick);
     for (const task of due) {
       let outcome;
       try {
@@ -2565,7 +2627,15 @@ export class Orchestrator {
     let tick = this.mindPort.bodyRead();
 
     // ①b 顺手把到期的观察判掉（机械判定，不调模型）：她需要知道做过的事有没有用。
-    try { drainDueObservations({ port: this.mindPort, now }); } catch { /* 观察失败不影响心跳 */ }
+    try {
+      drainDueObservations({
+        port: this.mindPort,
+        now,
+        // 判定回写到动作节律：命中 → 间隔变短，落空 → 变长。
+        // 这是"她会成长"唯一落到下一次行为上的地方，不然观测只是日志。
+        onResolved: ({ action, verdict }) => this.mindPort.recordActionStat(action, { ok: verdict === 'hit', now })
+      });
+    } catch { /* 观察失败不影响心跳 */ }
 
     // ② 全局唤醒自身的节拍（不再按会话各排一次）
     if (this.globalNextWakeAt && now < this.globalNextWakeAt) {
@@ -2655,7 +2725,9 @@ export class Orchestrator {
       todayProactive: Number(tick.todayProactive) || 0,
       maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
       minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
-      lastProactiveAt: 0,
+      // 最近一次主动找人是什么时候：取所有会话里最新的一条。
+      // 以前硬编码 0，导致 minProactiveGapMs 永远通过（想连发就连发）。
+      lastProactiveAt: Math.max(0, ...roster.top.map((r) => Number(this.lastProactiveAt.get(r.chatKey)) || 0)),
       unreflected: candidates.filter((c) => c.id === 'reflect_pending').length,
       organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
       lastReflectAttemptAt: Number(tick.lastReflectAttemptAt) || 0,
@@ -2675,6 +2747,13 @@ export class Orchestrator {
     const allActions = [...coreActions, ...extActions];
     const showBlocked = Math.max(0, Math.min(5, Number(m.actions?.showBlocked) || 2));
     let actions = D.availableActions(state, allActions);
+    // 节律修剪：每个动作有自己的"下次可以再试"。做砸过的动作间隔变长，
+    // 做成过的变短；没有统计的动作不受限。
+    const actionStats = (this.mindPort.bodyRead()?.actionStats) || {};
+    actions = actions.filter((a) => {
+      const stat = actionStats[a.id];
+      return !stat || !Number(stat.nextRipeAt) || Number(stat.nextRipeAt) <= now;
+    });
     const blocked = D.blockedActions(state, allActions).slice(0, showBlocked);
     if (!actions.some((a) => a.id === 'organize')) {
       candidates = candidates.filter((c) => c.id !== 'reflect_pending');
@@ -2750,7 +2829,7 @@ export class Orchestrator {
         // 不能叫 call：for (const call of calls) 的循环变量在同一作用域，
         // 同名会触发 TDZ（Cannot access before initialization），报错位置还很远。
         const argsRaw = String(call.function?.arguments || '{}');
-        const attempt = { name, action: null, args: {}, target: '', exec: null, error: '' };
+        const attempt = { name, action: null, args: {}, target: '', exec: null, error: '', intentionId: '' };
         const pipe = createPipeline({
           steps: {
             eligibility: () => {
@@ -2773,6 +2852,8 @@ export class Orchestrator {
             },
             execute: async () => {
               attempt.target = this.#pickTargetChat({ args: attempt.args }, candidates, roster.top);
+              // 这次动作是不是为了某条意图：候选上带着 intentionId，账本要记得住。
+              attempt.intentionId = String(candidates.find((c) => c.intentionId && c.chatKey === attempt.target)?.intentionId || '');
               const exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now });
               attempt.exec = exec;
               if (exec && exec.ok === false) {
@@ -2789,6 +2870,7 @@ export class Orchestrator {
                 action: attempt.name,
                 reason: String(attempt.args.reason || '').slice(0, 120),
                 candidates: candidates.map((c) => c.id),
+                intentionId: attempt.intentionId || undefined,
                 energySpent: ok ? (Number(attempt.action?.energy) || 0) : 0,
                 result: attempt.exec,
                 error: ok ? undefined : (attempt.error || result.message),
@@ -2797,14 +2879,18 @@ export class Orchestrator {
                 reasonCode: ok ? '' : (result.code || ''),
                 usage: res?.usage || null
               });
-              // 发出话之后开一个观察窗口：她不知道对方看没看、回没回，
-              // 立刻判定只能判"发出去了"。72 小时后才复查。
-              if (ok && attempt.name === 'send_proactive' && attempt.target) {
+              // 每个**做成了**的动作都开一个观察窗口（设计 §4.5.3）：
+              // 她不知道对方看没看、回没回；立刻判定只能判"发出去了"。
+              // 窗口到期由 drainDueObservations 判，对方回话则由 onIncoming 直接判 hit。
+              if (ok) {
                 try {
                   this.mindPort.openObservation({
                     attemptId: record?.id || '',
-                    chatKey: attempt.target,
-                    expect: '她应该会回我一句',
+                    intentionId: attempt.intentionId || '',
+                    chatKey: attempt.target || '',
+                    action: attempt.name,
+                    footprint: attempt.target ? 'chat' : 'self',
+                    expect: attempt.name === 'send_proactive' ? '对方应该会回一句' : `${attempt.name} 之后会有点变化`,
                     now
                   });
                 } catch { /* 观察是锦上添花 */ }
@@ -2843,15 +2929,21 @@ export class Orchestrator {
           const applied = this.mindPort.bodyApply(bodyPatch);
           if (applied.ok) {
             state.energy = Number(applied.body?.energy) || 0;
-            if (attempt.target && name === 'send_proactive') this.lastProactiveAt.set(attempt.target, now);
-            // 对那个人做成了事，就把跟他相关的到期意图了结掉：
-            // 否则下次心跳她还会被同一件事叫起来。
-            if (attempt.target) {
-              for (const it of openIntents) {
-                if (String(it.chatKey || '') !== attempt.target) continue;
-                if (!(Number(it.dueAt) || 0) || Number(it.dueAt) > now) continue;
-                intentWriter.closeIntention(it.id, { status: 'done', note: `已处理：${attempt.name}` });
-              }
+            // 同一轮里她可能接着做下一件事：这些计数必须当场更新，
+            // 否则"今日主动次数""主动间隔""再撑次数"在同一轮内都是旧值，
+            // 上限形同虚设（连点两次 send_proactive 都通过）。
+            if (name === 'send_proactive') {
+              state.todayProactive = Number(state.todayProactive) + 1;
+              state.lastProactiveAt = now;
+              if (attempt.target) this.lastProactiveAt.set(attempt.target, now);
+            }
+            if (name === 'stay_up') state.stayUps = Number(state.stayUps) + 1;
+
+            // 只了结"这次做的正是那条意图"：
+            // 否则 recall / remember / stay_up 成功都会把"问问他搬家的事"关掉 ——
+            // 事没做，却记成做过了。
+            if (attempt.intentionId) {
+              intentWriter.closeIntention(attempt.intentionId, { status: 'done', note: `已处理：${attempt.name}` });
             }
           }
         }
@@ -2863,7 +2955,9 @@ export class Orchestrator {
             ? { ok: true, result: attempt.exec ?? null }
             : { ok: false, error }).slice(0, 1500)
         });
-        executed.push({ chatKey: attempt.target, action: name });
+        // 只有真的做成了才占本次唤醒的行动额度：读失败 / 被拒的动作不该让她
+        // 少做一件本来能做的事（§7.4 "读失败不扣行动数"）。
+        if (outcome.ok) executed.push({ chatKey: attempt.target, action: name });
       }
 
       if (finishCall) {

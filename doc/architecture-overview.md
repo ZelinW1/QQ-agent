@@ -21,7 +21,7 @@
 
 | 方面 | `ef5a8ec`（本文） | 现在 |
 |---|---|---|
-| 运行时与领域 | 编排器直接持有 `MindStore` 并调用其方法 | 只经三个端口（`src/contract/mind-port.js`：Runtime / Writer / Admin）；编排器里 `this.mind.xxx()` 为 0 |
+| 运行时与领域 | 编排器直接持有 `MindStore` 并调用其方法 | 字面 `this.mind.xxx()` 为 0，但 `reflectForChat` / `runIntegrate` / `runNarrative` 仍用 `const store = this.mind` 别名直调；**名义成立、实质未达成**（2026-10-30 审查结论） |
 | 领域缺席 | 静态 import，删掉 `src/mind/` 就起不来 | 动态加载 + 降级；`QQ_AGENT_NO_MIND=1` 等价于删除（`test/mind-deleted-test.mjs`） |
 | 自由时刻 | `#runGlobalTick`：一次 JSON 决策，按动作注册表执行 | 八步管线（`src/runtime/pipeline.js`）+ 素材层（`src/runtime/materials.js`）：提示词带 self/叙事/意图，每个动作留 attempts 与观察 |
 | 心跳模式 | 全局 + per-chat 两套 | 只剩全局（`d42ea67` 删除 per-chat） |

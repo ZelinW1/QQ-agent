@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **A/B/C 三期已实施**（`ef5a8ec..05f3f33`，17 个提交）；§12 进度表是唯一权威的实施清单 |
+| 状态 | **部分实施**：A1（端口化/领域缺席）已达；B 只落地数据表与部分反思整合；**C 主干未做**；D 自动化已落地。以 §12 的「验收状态」为准——那里按审查结论逐条标注，不看标题 |
 | 目标版本 | 0.6 |
-| 代码基准 | `ef5a8ec`（重构起点）→ `05f3f33`（当前） |
+| 代码基准 | `ef5a8ec`（重构起点）→ 当前 HEAD（含 2026-10-30 审查后的修复） |
 | 读者 | 参与本模块实现与验收的开发者 |
 | 最后更新 | 2026-10-29 |
 | 配套 | [导读（非开发者优先）](./architecture-primer.md) · [领域端口规格](./mind-port-spec.md) · [文档索引](./README.md) |
@@ -1072,20 +1072,69 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R18 | D2 自动化界面：设置 → 自动化（列表 / 新建 / 启停 / 立即执行 / 删除 / cron 预览） | ✅ |
 | —— | **A 期硬指标已达成**：没有领域模块时对话照跑、工具表不含心智工具、控制台不 500（`test/mind-deleted-test.mjs` 6 项） | ✅ |
 
+**验收状态（2026-10-30 源码审查后）**
+
+审查结论：按本文验收**不通过**。上面进度表的 `✅` 是"做过一轮"的意思，不是"达到本文标准"。逐条对照如下：
+
+| 编号 | 文档要求 | 实际 | 状态 |
+|---|---|---|---|
+| A1-1…A1-5 | 三端口、CAS、领域缺席、工具经 WriterPort、控制台经 AdminPort | 已交付，`QQ_AGENT_NO_MIND=1` 下整应用可启动 | ✅ |
+| R2/R3 | 删 per-chat、睡眠与心跳走端口 | 已交付 | ✅ |
+| R7 | 关系版本化 | 已交付；`Evidence` 未进 changelog | 🟡 |
+| R8 | 会话反思只写 selfNotes | 已交付 | ✅ |
+| R9 | 全局整合（L2b） | 有实现，但把 L2b 与 L4 合成一个函数：没有独立 L4 材料、没有"同日最多一次"、月度判断曾用 `self.updatedAt`（已修） | 🟡 |
+| R10 | 意图/尝试/观察三表 | 表与读写已交付；`Intention` 缺 `createdBy/expiresAt/priority`，`Observation` 缺 `toolId/kind/state` | 🟡 |
+| R11 | 叙事 + 月度兜底 | 叙事已交付；月度兜底曾有重入 bug（已修） | 🟡 |
+| R12 | C1 八步管线 | 只有通用壳；生产自由侧只注入 5 步，聊天工具完全绕过管线 | 🟡 |
+| R13 | C2 自由时刻换引擎 | 素材只到 self/叙事/意图；没有 scene/recent/relations；工具表仍是手写 7 个动作 | 🟡 |
+| R14 | 编排器零 store 直连 | 字面正则通过，但 `reflectForChat` / `runIntegrate` / `runNarrative` 用 `const store = this.mind` 别名直调 | ⛔（名义成立） |
+| R15 | C4 领域缺席 | 已交付 | ✅ |
+| R16 | D1 延时意图 | 已交付；`plan` 动作、到期唤醒、做成即了结 | ✅ |
+| R17 | D2 自动化 | 已交付；2026-10-30 修复了"默认配置下不调度" | ✅ |
+| R18 | 自动化界面 | 已交付 | ✅ |
+| §4.2.1 兜底事件 | 一次对话时刻至少一条事件 | 2026-10-30 补上（`runtime.chat`）；此前完全没实现 | ✅（新） |
+| §4.5 观测回声 | 每个成功动作开观测、回话即命中、按结局调频 | 2026-10-30 补上 hit/missed + `closeObservationsForChat` + `actionStats/nextRipeAt`；footprint 仅 chat/self | 🟡（新） |
+| §5.3 聊天工具过管线 | 八步管线覆盖所有工具调用 | 未做 | ⛔ |
+| §5.4 权限 scopes | 无 | 未做 | ⛔ |
+| §5.2 工具 schema v3 | 无 `schemaVersion/traits/kind/scopes/owner` | 未做 | ⛔ |
+| §6.1/6.2 profiles / projectTools / 菜单投影 | 无 | 未做 | ⛔ |
+| §6.2.1 自由时间读工具 | 无 | 未做 | ⛔ |
+| §7.1/7.2 统一执行器 | 无 `runAgent` / `runFreeAgent` | 未做 | ⛔ |
+| §7.3 唤醒时钟 | 无 `impulseAt` 持久化、无 `nextWakeAt = min(...)`、无 chat-pending 等门禁 | 未做 | ⛔ |
+| §4.7 嵌套 / traits.composite | 无 | 未做 | ⛔ |
+| §8 Moment / usage 分桶 | 无 | 未做 | ⛔ |
+| §9 迁移与启动对账 | 无 schemaVersion/备份/回滚/过期观测清理 | 未做 | ⛔ |
+
+**2026-10-30 已修（审查发现的硬伤）**
+
+1. 自由时刻提示词要求"只输出 JSON"、执行侧只认 `tool_calls` —— 已改成工具调用语义（模型照提示词做不再必然 idle）。
+2. 自动化绑在 `mind.tick` 上 —— 已改为独立启停；暂停/中止时也不跑。
+3. 月度兜底被自己的 `integrating` 挡回、且用 `self.updatedAt` 判 30 天 —— 已修。
+4. 兜底事件缺失 —— 已补（`runtime.chat`），并加端到端测试。
+5. 观测只有表没有闭环 —— 已补 hit/missed、回话关闭、`actionStats` + `nextRipeAt`（菜单按它过滤）。
+6. 账本正确性：`bodyRead()` 缺 `today/lastReflectAt/actionStats` 等字段（额度与冷却静默失效）、反思只取最新 60 条会丢事件、`countUnreflected` 把摘要算进去、意图被无关动作误关、`lastAction` 读 `undefined`、同一轮内计数不更新、失败也占行动额度 —— 已逐条修。
+
+**仍未修（本轮没动的）**：上面标 ⛔ 的全部，以及 R14 的 store 别名直调。
+
 **本期未做（设计里写了、代码里没有）**
 
 按"是否阻塞主线"排序，逐条说明为什么可以晚做：
 
 | 条目 | 设计位置 | 为什么先不做 |
 |---|---|---|
-| 工具 schema v3（`schemaVersion` 缺省 1） | §6.1 | 现有工具没有版本轴；等扩展市场真正需要"旧版工具仍可用"时再加，现在加等于给 26 个工具各编一个号 |
-| Moment 与 `usage` 分桶 | §4.7 / §10 | 纯可观测性，不影响行为；先把行为做对 |
-| 嵌套运行时（`traits.composite`） | §4.7 | 需要子运行时隔离与预算合并，等 D 期自动化一起做 |
-| 启动对账的完整版 | §9.4 | 已做结算/跨天/心跳兜底；"作废过期观察""补一次整合""boot 记录"随观察队列启用一起做 |
-| 强事件"沉默 30 天回归" | §4.3.1 | 需要材料层记"某人上次出现时间"，随 C 期材料一起 |
-| 参数三档预设（安静/标准/活跃） | §13.1 | 配置项已就位，预设只是 UI 与一个 map，等界面改版 |
-| ~~自动化 / cron 调度~~ | §8 | **已做（R17）**：见 `src/runtime/{cron,automation-store,automator}.js`；动作集只留 send/remember/plan |
-| ~~`delayed_check` 的实际使用~~ | §4.4 | **已做（R16）**：`plan` 动作挂意图、到期提前唤醒、做成即了结 |
+| 工具 schema v3（`schemaVersion` 缺省 1） | §6.1 | 现有工具没有版本轴；等扩展市场真正需要"旧版工具仍可用"时再加 |
+| **统一执行器** `runAgent` / `runFreeAgent` | §7.1/7.2 | 目前 chat 是 `#runAgent`、free 是 `#runGlobalTick`、integrate 是一次 `#memoryChat` —— 四种策略没有共享骨架。这是 C 期的主干 |
+| **唤醒时钟** `impulseAt` / `nextWakeAt = min(...)` | §7.3 | 仍是固定 interval + jitter；没有 chat-pending / chat-running / too-soon / cost-cap 门禁 |
+| **traits / profiles / projectTools / 菜单投影** | §5.2 / §6.1 / §6.2 | 工具表还是手写的自由动作 + finish；自由时间仍读不到消息 |
+| **聊天工具过管线 + 权限 scopes** | §5.3 / §5.4 | 工具调用仍绕过八步管线；`tool.guard` 还在 eligibility |
+| **Moment / usage 分桶 / 嵌套 `traits.composite`** | §4.7 / §8 | 未做 |
+| **迁移与启动对账** | §9 | 无 schemaVersion/备份/回滚/过期观测清理 |
+| 强事件"沉默 30 天回归" | §4.3.1 | 需要材料层记"某人上次出现时间" |
+| 参数三档预设（安静/标准/活跃） | §13.1 | 配置项已就位，预设只是 UI 与一个 map |
+| ~~自动化 / cron 调度~~ | §8 | **已做（R17）** |
+| ~~`delayed_check` 的实际使用~~ | §4.4 | **已做（R16）** |
+| ~~兜底事件~~ | §4.2.1 | **已做（2026-10-30）**：`runtime.chat` + 端到端测试 |
+| ~~观测回声闭环~~ | §4.5 | **已做（2026-10-30）**：hit/missed、回话关闭、`actionStats/nextRipeAt` |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 

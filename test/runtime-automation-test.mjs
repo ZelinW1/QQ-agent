@@ -158,5 +158,49 @@ console.log('\n=== 7. 编排器调度 ===');
   const again = await orch.runDueAutomations({ now: Date.now() });
   check(again.ran === 0, '同一分钟不会重复跑');
 }
+// ── 8. 独立调度：心智关着也要跑；暂停要停 ───────────────────────────────
+console.log('\n=== 8. 独立调度 ===');
+{
+  const { Orchestrator } = await import(src('src/orchestrator.js'));
+  const { updateConfig } = await import(src('src/config.js'));
+
+  // 默认配置下心智是关着的：自动化不能跟着一起不跑
+  const mkBare = () => new Orchestrator({
+    store: { listChats: () => [], getChatMeta: () => ({}), recent: () => [] },
+    memory: {}, stickers: {}, sender: {}, sessions: {}, onebot: {}, mind: null,
+    automationDir: fs.mkdtempSync(path.join(dataDir, 'loop-'))
+  });
+
+  updateConfig({ mind: { enabled: false }, automation: { enabled: true } });
+  const bare = mkBare();
+  bare.startTickLoop();
+  check(Boolean(bare.tickTimer), '心智关着、自动化开着 → 心跳循环仍然启动（定时任务才有机会跑）');
+  bare.stopTickLoop();
+
+  updateConfig({ mind: { enabled: false }, automation: { enabled: false } });
+  const off = mkBare();
+  off.startTickLoop();
+  check(!off.tickTimer, '两者都关时不启动循环');
+  off.stopTickLoop();
+  updateConfig({ automation: { enabled: true } });
+}
+
+// ── 9. 暂停时不执行 ─────────────────────────────────────────────────────
+console.log('\n=== 9. 暂停 ===');
+{
+  const { Orchestrator } = await import(src('src/orchestrator.js'));
+  const dir = fs.mkdtempSync(path.join(dataDir, 'pause-'));
+  const store = createAutomationStore({ dir });
+  const made = store.add({ name: '暂停测试', cron: '* * * * *', action: 'send', chatKey: 'private:1', args: { text: 'x' } });
+  store.update(made.task.id, { nextRunAt: Date.now() - 1000 });
+  const orch = new Orchestrator({
+    store: { listChats: () => [], getChatMeta: () => ({}), recent: () => [] },
+    memory: {}, stickers: {}, sender: { sendTextBatch: async () => ({ sent: [{ text: 'x' }], failed: [] }) },
+    sessions: {}, onebot: {}, mind: null, automationDir: dir
+  });
+  orch.paused = true;
+  const r = await orch.runDueAutomations({ now: Date.now() });
+  check(r.ran === 0, '暂停时到点也不跑（用户掌控优先于定时）');
+}
 console.log(`\n自动化：通过 ${pass}，失败 ${fail}`);
 if (fail > 0) process.exit(1);

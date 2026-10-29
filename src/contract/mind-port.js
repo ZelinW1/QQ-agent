@@ -83,7 +83,21 @@ function toBody(tick = {}) {
     },
     snoozes: { ...snoozes },
     proactiveAt: { ...proactiveAt },
-    impulseAt: pickNumber(tick.impulseAt)
+    impulseAt: pickNumber(tick.impulseAt),
+    // 账本字段：运行时做额度/冷却判断要用。
+    // 以前这些没进 body，调用方读到的是 undefined ——
+    // "今日决策次数""反思冷却""主动间隔"全部形同虚设（不是报错，是静默失效）。
+    today: String(tick.today ?? ''),
+    todayProactive: pickNumber(tick.todayProactive),
+    todayDecisions: pickNumber(tick.todayDecisions),
+    todayReflections: pickNumber(tick.todayReflections),
+    todayIntegrates: pickNumber(tick.todayIntegrates),
+    lastReflectAt: pickNumber(tick.lastReflectAt),
+    lastReflectAttemptAt: pickNumber(tick.lastReflectAttemptAt),
+    lastIntegrateAt: pickNumber(tick.lastIntegrateAt),
+    lastNarrativeAt: pickNumber(tick.lastNarrativeAt),
+    // 动作节律：每个动作的下次可做时间与平均间隔。
+    actionStats: plainObject(tick.actionStats) ? { ...tick.actionStats } : {}
   };
 }
 
@@ -433,7 +447,11 @@ export function createRuntimePort(mind, deps = {}) {
         return {
           at: pickNumber(item.at),
           actionId: String(item.action || ''),
+          // 字段名对齐 listActions 的记录形状：以前只给 actionId，
+          // 调用方写 a.action 就永远拿到 undefined（提示词里显示"你做了「undefined」"）。
+          action: String(item.action || ''),
           reason: String(item.reason || ''),
+          outcome: String(item.outcome || ''),
           ok: !item.error
         };
       } catch { return null; }
@@ -516,6 +534,31 @@ export function createRuntimePort(mind, deps = {}) {
     /** 到期待复查的观察。读永远不抛。 */
     openObservations(now = now()) {
       try { return mind.listDueObservations?.(now) || []; } catch { return []; }
+    },
+
+    /**
+     * 对方回话了：把这个会话里所有"等着看有没有回应"的观测一次关成 hit。
+     * 这是回声闭环里最便宜的一环，不需要模型也不需要等窗口到期。
+     */
+    markObservationsHit(chatKey, nowAt = now()) {
+      try {
+        const r = mind.closeObservationsForChat?.(chatKey, { verdict: 'hit', now: nowAt });
+        return ok({ closed: Number(r?.closed) || 0 });
+      } catch (error) {
+        log.error?.(`[mind-port] 关闭观测失败：${error?.message || error}`);
+        return fail('store-error', '关闭观测失败');
+      }
+    },
+
+    /** 记一次动作的成/败，用于重算节律（间隔与 nextRipeAt）。 */
+    recordActionStat(actionId, { ok: okResult = true, now: at = now() } = {}) {
+      try {
+        const r = mind.recordActionStat?.(actionId, { ok: okResult, now: at });
+        return r?.ok ? ok({ stat: r.stat }) : fail('invalid_patch', r?.reason || '节律记录失败');
+      } catch (error) {
+        log.error?.(`[mind-port] 节律记录失败：${error?.message || error}`);
+        return fail('store-error', '节律记录失败');
+      }
     },
 
     /** 给一条观察下判定（机械判定，不调模型）。 */
@@ -773,6 +816,8 @@ export function createNoopRuntimePort() {
     recordOutcome: nothing,
     openObservation: nothing,
     resolveObservation: nothing,
+    markObservationsHit: nothing,
+    recordActionStat: nothing,
     openObservations() { return []; },
     integrationState() { return { lastIntegrateAt: 0, todayIntegrates: 0, today: '', lastNarrativeAt: 0 }; },
     self() { return null; },

@@ -236,6 +236,40 @@ console.log('\n=== 6. reflectForChat 全链路 ===');
   check(logs[0].usage?.prompt_tokens === 1200, '日志记录用量（可统计成本）');
 }
 
+// ── 6b. 积压超过单批上限：先反思最早的，不许静默丢 ──────────────────────
+console.log('\n=== 6b. 大批积压 ===');
+{
+  const store = mkStore();
+  const orch = Object.create(Orchestrator.prototype);
+  orch.mind = store;
+  orch.mindPort = createRuntimePort(orch.mind, {});
+
+  // 65 条：超过默认单批 60 条
+  const base = Date.now() - 65 * 60000;
+  for (let i = 0; i < 65; i++) {
+    store.appendEvent({ chatKey: CHAT, actorId: '456', text: `第 ${i} 条`, ts: base + i * 60000 });
+  }
+  const config = await import(src('src/config.js'));
+  config.updateConfig({ mind: { reflectMaxEvents: 60, reflectMaxEvents2: undefined, reflectAfterEvents: 8 } });
+
+  let seen = null;
+  const fakeChat = async (messages) => {
+    seen = messages;
+    return { message: { content: '{"relations":[]}' } };
+  };
+  await orch.reflectForChat(CHAT, { chat: fakeChat });
+  const prompt = String(seen?.[1]?.content || '');
+  check(prompt.includes('第 0 条'), '第一批包含最早的事件');
+  check(!prompt.includes('第 64 条'), '第一批不包含最新的事件（说明取的是最早一批）');
+  const tick = store.getTick();
+  check(tick.lastReflectAt === base + 59 * 60000, 'lastReflectAt 停在第一批的末尾');
+
+  await orch.reflectForChat(CHAT, { chat: fakeChat });
+  const prompt2 = String(seen?.[1]?.content || '');
+  check(prompt2.includes('第 60 条'), '第二批接着处理剩下的');
+  check(prompt2.includes('第 64 条'), '第二批包含最新的事件');
+  check(store.queryEvents({ chatKey: CHAT }).every((e) => Number(e.ts) <= store.getTick().lastReflectAt), '没有事件被跳过');
+}
 // ── 7. 解析失败：一条都不写，但记下尝试时间 ─────────────────────────────
 console.log('\n=== 7. 解析失败的处理 ===');
 {
