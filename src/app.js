@@ -11,7 +11,10 @@ import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNo
 import { isAtMe } from './prompt.js';
 import { ChatStore } from './store.js';
 import { MemoryStore } from './memory.js';
-import { MindStore } from './mind/index.js';
+// 心智存储按需加载：设 QQ_AGENT_NO_MIND=1 可以模拟"整个 src/mind/ 被删掉"，
+// 这是设计里那条硬指标的守门开关（见 test/mind-absent-test.mjs）。
+const MIND_DOMAIN_SKIP = process.env.QQ_AGENT_NO_MIND === '1';
+const { MindStore } = MIND_DOMAIN_SKIP ? { MindStore: null } : await import('./mind/index.js');
 import { StickerManager } from './sticker-manager.js';
 import { SendQueue } from './sender.js';
 import { SessionRegistry } from './sessions.js';
@@ -639,7 +642,7 @@ export function createApp({ log = console.log, mind: mindOverride } = {}) {
   const memory = new MemoryStore();
   // 心智状态（事件/关系/自我）。默认 config.mind.enabled=false，
   // 关闭时 orchestrator 不会采集、提示词不会插段 —— 行为与没有它时一致。
-  const mind = mindOverride === null ? null : new MindStore();
+  const mind = (mindOverride === null || !MindStore) ? null : new MindStore();
   const sessions = new SessionRegistry(cfg.store?.keepSessionFiles ?? 0);   // 0 = 不限
   const onebot = new OneBotClient({
     wsUrl: cfg.snowluma?.wsUrl,

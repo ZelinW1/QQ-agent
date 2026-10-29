@@ -10,33 +10,18 @@
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import { getConfig } from './config.js';
 import { resolveChatProfile, skillsViewForProfile } from './chat-profile.js';
-import {
-  collectMindContext,
-  buildReflectPrompt,
-  parseReflectOutput,
-  applyReflection,
-  buildIntegratePrompt,
-  parseIntegrateOutput,
-  applyIntegrate,
-  buildNarrativePrompt,
-  parseNarrativeOutput,
-  settleEnergy,
-  resetDaily,
-  collectCandidates,
-  buildGlobalDecisionPrompt,
-  scoreRosterEntry,
-  nextTickAt,
-  getAction,
-  actionBlocked,
-  availableActions,
-  blockedActions,
-  actionsWithCosts,
-  extensionActions,
-  resolveSleepWindow,
-  classifySleep,
-  buildBirthPrompt,
-  parseBirthDrafts
-} from './mind/index.js';
+// 领域函数（提示词、反思/整合、动作表、作息判定…）**不在模块顶层静态 import**。
+//
+// 设计里的硬指标是"删掉 src/mind/ 之后应用照常启动"。静态 import 会让整个模块
+// 加载失败，所以这里改成动态加载 + 兜底：正常启动一定成功；领域被删掉时降级为空，
+// 依赖它的功能安静地不工作，而不是把应用带崩。
+//
+// 真正决定"有没有内心生活"的是装配根（app.js）：它注入 mind / 端口 / 结算函数。
+const MIND_DOMAIN_SKIP = process.env.QQ_AGENT_NO_MIND === '1';
+let D = {};
+if (!MIND_DOMAIN_SKIP) {
+  try { D = await import('./mind/index.js'); } catch { D = {}; }
+}
 import { vendorOfConfig } from './model-prices.js';
 import { randInt, todayKey, extractJson } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
@@ -94,12 +79,12 @@ export class Orchestrator {
       // 上次主动找某人的时间（内存态，不落盘）：端口不该自己猜，由这里注入。
       proactiveAt: (chatKey) => Number(this.lastProactiveAt?.get?.(chatKey)) || 0,
       // 体力结算与跨天清零属于领域逻辑：这里绑定配置后注入，端口不复制公式。
-      settle: (tick, at) => resetDaily(
-        settleEnergy(tick, at, getConfig().mind?.energy || {}),
+      settle: (tick, at) => D.resetDaily(
+        D.settleEnergy(tick, at, getConfig().mind?.energy || {}),
         todayKey(at)
       ),
       chatStore: store,
-      scoreEntry: scoreRosterEntry
+      scoreEntry: (entry) => D.scoreRosterEntry?.(entry) ?? 0
     });
     // 控制台/迁移专用（直通 store）。A1-5 之前只给迁移标记这类维护操作使用。
     this.mindPortAdmin = createAdminPort(mind);
@@ -453,7 +438,7 @@ export class Orchestrator {
         if (m?.senderId && !m.self) participants.push(String(m.senderId));
       }
 
-      return collectMindContext({
+      return D.collectMindContext({
         store: this.mind,
         chatKey,
         options: opts,
@@ -1823,7 +1808,7 @@ export class Orchestrator {
       .map((id) => store.getRelation(id))
       .filter((r) => r.updatedAt || r.names.length || r.knownFor.length || r.openLoops.length);
 
-    const messages = buildReflectPrompt({
+    const messages = D.buildReflectPrompt({
       botName: cfg.persona?.botName,
       self: store.getSelf(),
       relations,
@@ -1832,7 +1817,7 @@ export class Orchestrator {
 
     const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
     const raw = String(res?.message?.content ?? '');
-    const parsed = parseReflectOutput(raw);
+    const parsed = D.parseReflectOutput(raw);
     const now = Date.now();
     const newestTs = Math.max(...events.map((e) => Number(e.ts) || 0));
 
@@ -1850,7 +1835,7 @@ export class Orchestrator {
 
     const { applied, rejected } = parsed.empty
       ? { applied: { self: false, relations: [], compacted: 0, summaryId: null }, rejected: [] }
-      : applyReflection({ store, chatKey, output: parsed.data, inputEvents: events, now });
+      : D.applyReflection({ store, chatKey, output: parsed.data, inputEvents: events, now });
 
     const today = todayKey();
     const sameDay = tick.today === today;
@@ -1916,7 +1901,7 @@ export class Orchestrator {
 
     const reflections = this.mindPort.reflections({ limit: 30, scope: 'chat' })
       .filter((r) => r.scope === 'chat' && r.ok === true);
-    const messages = buildIntegratePrompt({
+    const messages = D.buildIntegratePrompt({
       botName: cfg.persona?.botName,
       self: store.getSelf(),
       notes,
@@ -1928,7 +1913,7 @@ export class Orchestrator {
     try {
       const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
       const raw = String(res?.message?.content ?? '');
-      const parsed = parseIntegrateOutput(raw);
+      const parsed = D.parseIntegrateOutput(raw);
       const now = Date.now();
 
       if (!parsed.ok) {
@@ -1941,7 +1926,7 @@ export class Orchestrator {
 
       const { applied, rejected } = parsed.empty
         ? { applied: { self: false, digested: 0 }, rejected: [] }
-        : applyIntegrate({ store, output: parsed.data, noteIds: notes.map((n) => n.id), now });
+        : D.applyIntegrate({ store, output: parsed.data, noteIds: notes.map((n) => n.id), now });
 
       store.updateTick({
         today,
@@ -1998,7 +1983,7 @@ export class Orchestrator {
     }
 
     const previous = store.latestNarrative?.()?.text || '';
-    const messages = buildNarrativePrompt({
+    const messages = D.buildNarrativePrompt({
       botName: cfg.persona?.botName,
       self: store.getSelf(),
       period: { from, to: now },
@@ -2011,7 +1996,7 @@ export class Orchestrator {
     try {
       const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
       const raw = String(res?.message?.content ?? '');
-      const parsed = parseNarrativeOutput(raw);
+      const parsed = D.parseNarrativeOutput(raw);
       if (!parsed.ok) return { ok: false, reason: parsed.reason };
       if (parsed.empty) {
         // 没写出东西也算成功：不重试，只是这段时间确实没什么可写的。
@@ -2152,13 +2137,13 @@ export class Orchestrator {
    */
   async draftCharter(seed = {}, { chat = null } = {}) {
     const cfg = getConfig();
-    const messages = buildBirthPrompt({
+    const messages = D.buildBirthPrompt({
       botName: cfg.persona?.botName,
       keywords: seed.keywords,
       vision: seed.vision
     });
     const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
-    const parsed = parseBirthDrafts(String(res?.message?.content ?? ''), 3);
+    const parsed = D.parseBirthDrafts(String(res?.message?.content ?? ''), 3);
     return { ...parsed, usage: res?.usage || null };
   }
 
@@ -2234,9 +2219,9 @@ export class Orchestrator {
 
     // 睡眠状态是"身体"的一部分，走端口读；不再直接碰 MindStore。
     const st = this.mindPort.bodyRead().sleep;
-    const window = resolveSleepWindow(now, sleepCfg);
+    const window = D.resolveSleepWindow(now, sleepCfg);
     const quietForMs = this.lastActivityAt > 0 ? now - this.lastActivityAt : Infinity;
-    const d = classifySleep({ now, window, state: st, quietForMs, cfg: sleepCfg });
+    const d = D.classifySleep({ now, window, state: st, quietForMs, cfg: sleepCfg });
 
     let changed = false;
     if (d.asleep && !prev) {
@@ -2426,7 +2411,7 @@ export class Orchestrator {
         ...entry,
         relation,
         running: this.runningChats?.has?.(entry.chatKey) === true,
-        score: scoreRosterEntry({
+        score: D.scoreRosterEntry({
           unread: entry.unread,
           openLoopsDue: entry.openLoopsDue,
           hoursSince: entry.hoursSince ?? 0,
@@ -2480,7 +2465,7 @@ export class Orchestrator {
     if (this.globalNextWakeAt && now < this.globalNextWakeAt) {
       return { results: [], skipped: 'not-due' };
     }
-    this.globalNextWakeAt = nextTickAt(now, tickCfg.intervalMs, tickCfg.jitter);
+    this.globalNextWakeAt = D.nextTickAt(now, tickCfg.intervalMs, tickCfg.jitter);
 
     const results = [];
     const roster = this.#buildRoster(now);
@@ -2502,7 +2487,7 @@ export class Orchestrator {
     let candidates = [];
     for (const r of roster.top) {
       if (r.running || r.recent || r.suppressed) continue;
-      const cs = collectCandidates({
+      const cs = D.collectCandidates({
         now,
         energy,
         lastInteractionAt: Number(r.lastTs) || 0,
@@ -2548,16 +2533,16 @@ export class Orchestrator {
     };
     // 内置动作的成本改成从配置读（energy.cost 以前是死配置）；
     // 再把扩展里声明了 mindAction 的工具并入菜单。
-    const coreActions = actionsWithCosts(m);
-    const extActions = extensionActions({ tools: listTools(), cfg: m.actions || {} })
+    const coreActions = D.actionsWithCosts(m);
+    const extActions = D.extensionActions({ tools: listTools(), cfg: m.actions || {} })
       .map((a) => ({
         ...a,
         run: (ctx, args) => this.#runExtensionTool(a.toolId, ctx, args)
       }));
     const allActions = [...coreActions, ...extActions];
     const showBlocked = Math.max(0, Math.min(5, Number(m.actions?.showBlocked) || 2));
-    let actions = availableActions(state, allActions);
-    const blocked = blockedActions(state, allActions).slice(0, showBlocked);
+    let actions = D.availableActions(state, allActions);
+    const blocked = D.blockedActions(state, allActions).slice(0, showBlocked);
     if (!actions.some((a) => a.id === 'organize')) {
       candidates = candidates.filter((c) => c.id !== 'reflect_pending');
     }
@@ -2571,7 +2556,7 @@ export class Orchestrator {
     // 素材：她现在怎么看自己、最近写下过什么、还惦记着什么事。
     // 全部经端口读，端口返回空就整段不出现（自由时刻不该凭空多出一段空标题）。
     const materials = buildFreeMaterials({ port: this.mindPort, now });
-    const messages = buildGlobalDecisionPrompt({
+    const messages = D.buildGlobalDecisionPrompt({
       botName: cfg.persona?.botName,
       state,
       roster: roster.top,
@@ -2649,7 +2634,7 @@ export class Orchestrator {
               return undefined;
             },
             veto: () => {
-              const why = actionBlocked(attempt.action, state);
+              const why = D.actionBlocked(attempt.action, state);
               if (why) return { ok: false, code: 'blocked', message: `现在做不了：${why}` };
               return undefined;
             },

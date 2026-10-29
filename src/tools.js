@@ -18,7 +18,11 @@ import { holidayOn, upcomingHoliday } from './holidays.js';
 import { compressImage } from './image-compress.js';
 import { localStickerPath } from './sticker-manager.js';
 import { isGifBuffer, gifToVideoDataUrl, resolveGifRoute } from './gif-to-video.js';
-import { registerMindTools } from './mind/tools.js';
+// 心智工具按需注册：设 QQ_AGENT_NO_MIND=1 时整块跳过（模拟领域被删掉）。
+const MIND_DOMAIN_SKIP = process.env.QQ_AGENT_NO_MIND === '1';
+const { registerMindTools } = MIND_DOMAIN_SKIP
+  ? { registerMindTools: () => {} }
+  : await import('./mind/tools.js').catch(() => ({ registerMindTools: () => {} }));
 
 /** 当前配置的 GIF 选路（vision/video 开关组合，规则矩阵见 resolveGifRoute 注释）。 */
 function currentGifRoute() {

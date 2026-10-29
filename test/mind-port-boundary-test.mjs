@@ -83,6 +83,21 @@ console.log('\n=== 3b. 编排器只经端口 ===');
   // 但不能自己调方法 —— 那才是绕过写入规程的入口。
   check(/this\.mindPort\./.test(orch), '确实在用端口（反向确认这条不是空转）');
 }
+// ── 3c. 运行时不得静态依赖领域 ──────────────────────────────────────────
+console.log('\n=== 3c. 领域缺席也能启动 ===');
+{
+  const orch = read('src/orchestrator.js');
+  check(!/from\s+['"]\.\/mind\//.test(orch), 'orchestrator 没有静态 import 领域');
+  check(/await import\('\.\/mind\/index\.js'\)/.test(orch), '领域由动态 import 加载（可降级）');
+  check(orch.includes('QQ_AGENT_NO_MIND'), '留了"模拟删除"的开关');
+
+  const app = read('src/app.js');
+  check(!/^import .*from '\.\/mind\//m.test(app), 'app.js 也没有静态 import 领域');
+  check(app.includes('QQ_AGENT_NO_MIND'), 'app.js 认这个开关');
+
+  const tools = read('src/tools.js');
+  check(!/^import .*from '\.\/mind\//m.test(tools), 'tools.js 也没有静态 import 领域');
+}
 // ── 4. 端口的两条硬约束 ─────────────────────────────────────────────────
 console.log('\n=== 4. 端口契约 ===');
 {

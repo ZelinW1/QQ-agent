@@ -1045,7 +1045,8 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R12 | C1 运行时地基：八步管线（`src/runtime/pipeline.js`）+ 现场收口到端口 `scene()` | ✅ |
 | R13 | C2 自由时刻换引擎：素材层进提示词、每个动作过管线、写 attempts/observations | ✅ |
 | R14 | C3 收口：编排器零 `this.mind.xxx()` 直连（读走 RuntimePort、写走 recordAttempt/bodyApply、迁移走 AdminPort）+ 静态守门 | ✅ |
-| —— | **剩余耦合（已知）**：`applyReflection` / `applyIntegrate` 仍以 `store` 为参数（领域函数签名如此），要等它们改成"接端口"才能真正做到"只有装配根 import 领域" | 已知 |
+| R15 | C4 领域缺席守门：编排器/装配根/工具注册全部改为**动态加载 + 降级**，`QQ_AGENT_NO_MIND=1` 等价于"删掉 `src/mind/`" | ✅ |
+| —— | **A 期硬指标已达成**：没有领域模块时对话照跑、工具表不含心智工具、控制台不 500（`test/mind-deleted-test.mjs` 6 项） | ✅ |
 
 每期必须：可独立合并、可独立回滚、验收里不出现"行为变了"（除显式列出的失败路径变更）。
 
