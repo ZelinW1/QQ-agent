@@ -21,6 +21,9 @@ export const ACTIONS = [
     label: '主动找她说句话',
     description: '有话想说、有件挂心的事、或者真的很久没联系了才用',
     energy: 25,
+    // 嵌套运行（设计 §4.7）：这个动作会叫起一次完整的聊天运行。
+    // 深度上限 1：她可以在自由时刻找人说话，但那场对话里不能再套一层。
+    composite: { runtime: 'chat', maxDepth: 1 },
     when: (s) => {
       if (Number(s.todayProactive) >= Number(s.maxProactive)) return { ok: false, reason: '今天已经说过几次了' };
       const now = Number(s.now) || Date.now();

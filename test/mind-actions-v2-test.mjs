@@ -164,5 +164,20 @@ console.log('\n=== 5. 编排器接入 ===');
   unregisterTool('qzone_post');
 }
 
+// ── 9. 嵌套声明与工具契约版本 ───────────────────────────────────────────
+console.log('\n=== 9. 契约 ===');
+{
+  const { getAction } = await import(src('src/mind/actions.js'));
+  const send = getAction('send_proactive');
+  check(send?.composite?.runtime === 'chat', '主动说话声明了嵌套运行（chat）');
+  check(Number(send?.composite?.maxDepth) === 1, '嵌套深度上限 1（她可以在自由时刻找人，但那场对话里不能再套）');
+  const others = ['organize', 'remember', 'recall', 'plan', 'stay_up'].map((id) => getAction(id));
+  check(others.every((a) => !a?.composite), '其它动作不嵌套（避免预算层层叠加）');
+
+  const { getTool } = await import(src('src/tool-registry.js'));
+  const tool = getTool('send_message');
+  check(Number(tool?.schemaVersion) === 2, '工具契约带上 schemaVersion');
+  check(Array.isArray(tool?.traits?.modes) && tool.traits.modes.includes('chat'), '工具声明适用场合');
+}
 console.log(`\n动作注册表 v2：通过 ${pass}，失败 ${fail}`);
 if (fail) process.exit(1);

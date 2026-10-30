@@ -279,6 +279,13 @@ function defaultTick() {
     todayIntegrates: 0,
     lastIntegrateAt: 0,
     lastNarrativeAt: 0,
+    // L2b（全局反思）的时间与当日次数
+    lastGlobalReflectAt: 0,
+    todayGlobalReflects: 0,
+    // 唤醒时钟：impulseAt 是"她自己想醒来的时刻"（指数分布采样）；
+    // lastFreeWakeAt 只用于"刚醒过"的节流与观测，不参与下一次计算。
+    impulseAt: 0,
+    lastFreeWakeAt: 0,
     lastInteractionAt: 0,
     lastReflectAt: 0,
     // 上次**尝试**反思的时间（无论成败）。冷却用它而不是 lastReflectAt：
@@ -333,6 +340,7 @@ export class MindStore {
   #intentionsFile() { return path.join(this.root, 'intentions.jsonl'); }
   #observationsFile() { return path.join(this.root, 'observations.jsonl'); }
   #narrativesFile() { return path.join(this.root, 'narratives.jsonl'); }
+  #momentsFile() { return path.join(this.root, 'moments.jsonl'); }
 
   // ── 事件 ──
 
@@ -904,7 +912,42 @@ export class MindStore {
     return this.listNarratives({ limit: 1 })[0] || null;
   }
 
-  /** 只读：全部尝试（按写入顺序）。给 UI/统计用。 */
+  /**
+   * 记一次"时刻"：一次模型调用及其子运行。
+   *
+   * 为什么单独存：attempts 记"做了什么"，moments 记"这一次想了多久、花了多少"。
+   * 两者分开，才能回答"她一天想几次、每次多贵"这种问题。
+   *
+   * @param {object} input
+   * @param {string} [input.runtime] 'free' | 'chat' | 'integrate' | 'automate'
+   * @param {object} [input.usage]   `{ self, subtree }`（子树 = 她叫起来的子运行合计）
+   * @param {string} [input.configDigest]
+   */
+  appendMoment(input = {}) {
+    const at = Number(input.at) || Date.now();
+    const moment = {
+      id: String(input.id || nowId('mo', at)),
+      at,
+      runtime: String(input.runtime || 'free'),
+      outcome: String(input.outcome || 'done'),
+      usage: {
+        self: Number(input.usage?.self) || 0,
+        subtree: Number(input.usage?.subtree) || 0
+      },
+      configDigest: String(input.configDigest || ''),
+      parentMomentId: String(input.parentMomentId || ''),
+      attempts: Array.isArray(input.attempts) ? input.attempts.slice(0, 50) : [],
+      actions: Array.isArray(input.actions) ? input.actions.slice(0, 20) : []
+    };
+    appendJsonl(this.#momentsFile(), moment);
+    return moment;
+  }
+
+  listMoments({ limit = 20 } = {}) {
+    return tailJsonl(this.#momentsFile(), limit);
+  }
+
+  /** 只读：全部尝试（按写入顺序）。给 UI/统计用。 */  /** 只读：全部尝试（按写入顺序）。给 UI/统计用。 */
   listAttempts({ limit = 50, outcome = '' } = {}) {
     const all = readJsonl(this.#attemptsFile());
     const filtered = outcome ? all.filter((x) => x.outcome === outcome) : all;
@@ -1086,6 +1129,43 @@ export class MindStore {
     };
     this.updateTick({ actionStats: stats });
     return { ok: true, stat: stats[id] };
+  }
+  /**
+   * 作废过期观测：窗口过太久还没判的，直接 void。
+   *
+   * 为什么要作废而不是补判：那时候的"有没有变化"已经无法从现有事件里判准；
+   * 留一条 pending 只会让队列越积越长。
+   */
+  voidStaleObservations({ olderThanMs = 7 * 86400000, now = Date.now() } = {}) {
+    const deadline = Number(now) - Math.max(86400000, Number(olderThanMs) || 0);
+    const latest = new Map();
+    for (const row of readJsonl(this.#observationsFile())) {
+      if (!row || !row.id) continue;
+      const prev = latest.get(row.id);
+      if (!prev || Number(row.at) >= Number(prev.at)) latest.set(row.id, { ...(prev || {}), ...row });
+    }
+    let voided = 0;
+    for (const ob of latest.values()) {
+      if (ob.verdict !== 'pending' || Number(ob.dueAt) > deadline) continue;
+      appendJsonl(this.#observationsFile(), {
+        ...ob, verdict: 'void', note: '放太久，判不准了', resolvedAt: Number(now), at: Number(now)
+      });
+      voided += 1;
+    }
+    return { ok: true, voided };
+  }
+
+  /** 存储结构版本：升级时用它判断要不要迁移/对账。 */
+  getStoreVersion() {
+    const raw = readJson(path.join(this.root, '.schema.json'), null);
+    return Number(raw?.storeVersion) || 0;
+  }
+
+  setStoreVersion(version, extra = {}) {
+    const file = path.join(this.root, '.schema.json');
+    const cur = readJson(file, {}) || {};
+    writeJsonAtomic(file, { ...cur, ...extra, storeVersion: Number(version) || 0, updatedAt: Date.now() });
+    return { ok: true };
   }
   /**
    * 列出观察（同一 id 以最后一行为准）。

@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **部分实施**：A1（端口化/领域缺席）已达；B 只落地数据表与部分反思整合；**C 主干未做**；D 自动化已落地。以 §12 的「验收状态」为准——那里按审查结论逐条标注，不看标题 |
+| 状态 | **C 期主干已落地**（唤醒时钟 / 统一循环 / 工具投影 / Moment / 嵌套 / 启动对账 / L2b 与 L4 拆分）。仍未做：权限 scopes、完整的 traits 字段、R14 的 store 别名收口。以 §12「验收状态」为准 |
 | 目标版本 | 0.6 |
 | 代码基准 | `ef5a8ec`（重构起点）→ 当前 HEAD（含 2026-10-30 审查后的修复） |
 | 读者 | 参与本模块实现与验收的开发者 |
@@ -148,6 +148,9 @@ src/runtime/observe.js        ✅ 观察队列的机械判定（不调模型）
 src/runtime/cron.js           ✅ 五段 cron 求值（无依赖）
 src/runtime/automation-store.js ✅ 任务表（JSON，含失败退避）
 src/runtime/automator.js      ✅ 任务执行（走同一条八步管线）
+src/runtime/wake.js           ✅ 唤醒时钟：冲动采样、nextWakeAt、八种门禁（纯函数）
+src/runtime/project-tools.js  ✅ 工具投影：traits.modes、菜单与工具表同源
+src/runtime/agent-loop.js     ✅ 统一模型循环 + 配置摘要
 ```
 
 没有建的：`tool-registry` 迁入、`permissions`、`capability-bus`、`nested`、
@@ -1094,16 +1097,17 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R18 | 自动化界面 | 已交付 | ✅ |
 | §4.2.1 兜底事件 | 一次对话时刻至少一条事件 | 2026-10-30 补上（`runtime.chat`）；此前完全没实现 | ✅（新） |
 | §4.5 观测回声 | 每个成功动作开观测、回话即命中、按结局调频 | 2026-10-30 补上 hit/missed + `closeObservationsForChat` + `actionStats/nextRipeAt`；footprint 仅 chat/self | 🟡（新） |
-| §5.3 聊天工具过管线 | 八步管线覆盖所有工具调用 | 未做 | ⛔ |
-| §5.4 权限 scopes | 无 | 未做 | ⛔ |
-| §5.2 工具 schema v3 | 无 `schemaVersion/traits/kind/scopes/owner` | 未做 | ⛔ |
-| §6.1/6.2 profiles / projectTools / 菜单投影 | 无 | 未做 | ⛔ |
-| §6.2.1 自由时间读工具 | 无 | 未做 | ⛔ |
-| §7.1/7.2 统一执行器 | 无 `runAgent` / `runFreeAgent` | 未做 | ⛔ |
-| §7.3 唤醒时钟 | 无 `impulseAt` 持久化、无 `nextWakeAt = min(...)`、无 chat-pending 等门禁 | 未做 | ⛔ |
-| §4.7 嵌套 / traits.composite | 无 | 未做 | ⛔ |
-| §8 Moment / usage 分桶 | 无 | 未做 | ⛔ |
-| §9 迁移与启动对账 | 无 schemaVersion/备份/回滚/过期观测清理 | 未做 | ⛔ |
+| §5.3 聊天工具过管线 | 八步管线覆盖所有工具调用 | 2026-10-30 已接：validate / permission / execute / audit 四步，工具调用落 attempts（`kind:'tool'`） | ✅ |
+| §5.4 权限 scopes | 按范围授权 | 只做了 `traits.modes` 的场合控制；scopes 未实现 | 🟡 |
+| §5.2 工具 schema v3 | `schemaVersion` / `traits` / `kind` / `scopes` / `owner` | `schemaVersion=2` + `traits.modes/scopes[]` 已落地；`kind/owner` 未做 | 🟡 |
+| §6.1/6.2 profiles / projectTools / 菜单投影 | 运行时数据化 | 用 `src/runtime/project-tools.js` 投影菜单与工具表（同源）；没有独立的 profiles 表 | 🟡 |
+| §6.2.1 自由时间读工具 | 能读消息/搜索 | 已接 4 个只读工具（`get_recent_messages` 等），按 `traits.modes` 过滤 | ✅ |
+| §7.1/7.2 统一执行器 | 一个 `runAgent` 四种策略 | `src/runtime/agent-loop.js` 统一循环；free 已接，chat 仍是自己的循环（未完全合并） | 🟡 |
+| §7.3 唤醒时钟 | `impulseAt` + `nextWakeAt = min(...)` + 门禁 | 已落地：`src/runtime/wake.js`；tick 持久化 `impulseAt`，醒来重抽；门禁 8 种 | ✅ |
+| §4.7 嵌套 / traits.composite | depth/ancestry/预算合并 | `send_proactive` 声明 `composite:{runtime:'chat',maxDepth:1}`；父 moment 记 `usage.subtree`；ancestry 未做（只有 depth） | 🟡 |
+| §8 Moment / usage 分桶 | moments + usage.self/subtree + configDigest | 已落地：chat/free/boot 三类 moment；attempts 带 `momentId` | ✅ |
+| §9 迁移与启动对账 | schemaVersion/备份/回滚/过期观测清理 | 已做：`.schema.json`、过期观测作废、冲动重抽、欠账补偿、boot moment；完整迁移工具（§9.3）未做 | 🟡 |
+| R14 store 别名 | 编排器零直连 | `this.mind.xxx()` 为 0，但 reflect/integrate/narrative 仍用 `const store = this.mind` 别名 | 🟡 |
 
 **2026-10-30 已修（审查发现的硬伤）**
 
@@ -1122,13 +1126,12 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 
 | 条目 | 设计位置 | 为什么先不做 |
 |---|---|---|
-| 工具 schema v3（`schemaVersion` 缺省 1） | §6.1 | 现有工具没有版本轴；等扩展市场真正需要"旧版工具仍可用"时再加 |
-| **统一执行器** `runAgent` / `runFreeAgent` | §7.1/7.2 | 目前 chat 是 `#runAgent`、free 是 `#runGlobalTick`、integrate 是一次 `#memoryChat` —— 四种策略没有共享骨架。这是 C 期的主干 |
-| **唤醒时钟** `impulseAt` / `nextWakeAt = min(...)` | §7.3 | 仍是固定 interval + jitter；没有 chat-pending / chat-running / too-soon / cost-cap 门禁 |
-| **traits / profiles / projectTools / 菜单投影** | §5.2 / §6.1 / §6.2 | 工具表还是手写的自由动作 + finish；自由时间仍读不到消息 |
-| **聊天工具过管线 + 权限 scopes** | §5.3 / §5.4 | 工具调用仍绕过八步管线；`tool.guard` 还在 eligibility |
-| **Moment / usage 分桶 / 嵌套 `traits.composite`** | §4.7 / §8 | 未做 |
-| **迁移与启动对账** | §9 | 无 schemaVersion/备份/回滚/过期观测清理 |
+| **权限 scopes** | §5.4 | 只做了场合控制（`traits.modes`），没有按范围授权与 require-ask |
+| **完整 traits 字段** | §5.2 | 缺 `kind` / `owner`；`act` 目前只有能量与 snooze |
+| **profiles 数据表** | §6.1 | 菜单投影有了，但没有"运行时数据化"的 profiles 表 |
+| **chat / integrate / automate 的循环合并** | §7.1/7.2 | `agent-loop.js` 已抽出，free 先用；其它三处仍各写一套 |
+| **嵌套 ancestry 与预算合并** | §4.7 | 只有深度 1 与子用量计数；没有祖先链与预算合并 |
+| **完整迁移工具（§9.3）** | §9 | 只有启动对账，没有 `mind.tmp` / 备份 / 回滚 / 条数校验 |
 | 强事件"沉默 30 天回归" | §4.3.1 | 需要材料层记"某人上次出现时间" |
 | 参数三档预设（安静/标准/活跃） | §13.1 | 配置项已就位，预设只是 UI 与一个 map |
 | ~~自动化 / cron 调度~~ | §8 | **已做（R17）** |

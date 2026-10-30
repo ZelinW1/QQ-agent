@@ -60,7 +60,16 @@ export function registerTool(def) {
     // requires：需要的能力名（如 'knowledge.search'）。
     // 与 skillId 的区别：skillId 是"谁注册的"，requires 是"运行时必须有什么能力"。
     requires: [],
-    ...def
+    // schemaVersion：工具契约版本。1 = 旧（无 traits）；2 = 带 traits。
+    // 加上它而不是改旧字段：旧插件按 v1 写的东西不能因为内核升级就失效。
+    schemaVersion: 2,
+    // traits：这个工具在哪些场合出现、有什么前置条件（设计 §5.2）。
+    //   modes   —— 'chat' | 'free'；缺省只给聊天（最保守）
+    //   scopes  —— 额外权限范围（缺省空 = 不需要额外授权）
+    //   timeoutMs —— 单次执行超时（缺省由调用方给）
+    ...def,
+    // def.traits 覆盖默认值时，保证两个字段都在
+    traits: { modes: ['chat'], scopes: [], ...(def.traits || {}) }
   }));
 }
 

@@ -39,6 +39,9 @@ import { createRuntimePort, createWriterPort, createAdminPort } from './contract
 import { createPipeline } from './runtime/pipeline.js';
 import { buildFreeMaterials, renderMaterials } from './runtime/materials.js';
 import { drainDueObservations } from './runtime/observe.js';
+import { checkGates, describeGate, sampleImpulseAt, nextWakeAt } from './runtime/wake.js';
+import { projectFreeTools } from './runtime/project-tools.js';
+import { runAgentLoop, digestConfig } from './runtime/agent-loop.js';
 import { createAutomationStore, dueTasks } from './runtime/automation-store.js';
 import { runAutomation } from './runtime/automator.js';
 
@@ -110,6 +113,9 @@ export class Orchestrator {
     this.reflecting = new Set();       // 正在反思的 chatKey（心智，防重入）
     this.integrating = false;          // 正在做全局整合（防重入）
     this.narrating = false;            // 正在写叙事（防重入）
+    this.globalReflecting = false;     // 正在做全局反思（L2b，防重入）
+    this.bootReconciled = false;       // 启动对账每进程只跑一次
+    this.activeChatMomentId = '';      // 当前聊天运行所属的 moment（工具记账用）
     // 自动化任务表：与心智数据同级，但**不属于领域**（它是配置，不是她的经历）。
     this.automations = createAutomationStore({ dir: automationDir || DATA_DIR });
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
@@ -819,6 +825,8 @@ export class Orchestrator {
       sessionId: session?.id || '',
       status: session?.status || '',
       rounds: Number(session?.rounds) || 0,
+      // 用量带上：嵌套运行（自由时刻叫人说话）要把子运行的消耗算进父级 moment。
+      usage: session?.usage || null,
       sent: (Array.isArray(session?.sent) ? session.sent : [])
         .filter((x) => x?.type === 'text' && String(x.text || '').trim())
         .map((x) => String(x.text).slice(0, 300))
@@ -955,6 +963,10 @@ export class Orchestrator {
     const cfg = getConfig();
     // 本次运行的起点：收尾时用它判断"这一轮有没有留下任何记录"。
     const runStartedAt = Date.now();
+    // 聊天也落 moment：一次运行 = 一次时刻，工具调用与用量都挂在它下面。
+    const chatMomentId = `mo_${runStartedAt}_${randInt(1000, 9999)}`;
+    const prevMomentId = this.activeChatMomentId || '';
+    this.activeChatMomentId = chatMomentId;
     // ── 会话级配置快照（一次运行解析一次）────────────────────────────────
     // 这是"一处解析 + 边界注入"的注入点：下面所有需要"分会话判据"的地方
     // （能否看图/联网、工具启停、技能启停、上下文条数）都从它取，
@@ -1433,11 +1445,68 @@ export class Orchestrator {
         } catch (error) {
           skillManager.recordError('before-tool', error);
         }
-        const result = blocked
-          ? { content: `错误：${blocked.reason || '该工具调用被 Skill 拒绝'}`, isError: true }
-          // 写入句柄按“这一次调用”绑定：`by` 由这里注入，工具自己给不出来。
-          // 越权因此在结构上不可能，而不是靠工具作者自觉。
-          : await executeTool(toolDefs, { ...ctx, writer: this.#writerFor(name) }, name, argsRaw);
+        // 聊天里的工具调用也走八步管线（设计 §5.3）：
+        // 以前这里是一次裸调用 —— 拒绝、超时、记账全靠调用点自觉，四处各写一遍。
+        // 现在最少也有 validate / permission / execute / audit 四步，
+        // 失败会留下带原因码的 attempt（与自由时刻同一套账本）。
+        let result = null;
+        {
+          const startedAt = Date.now();
+          const toolAttempt = { name, def: null, result: null };
+          const toolPipe = createPipeline({
+            steps: {
+              validate: () => {
+                const def = toolDefs.find((d) => d.id === name || d.name === name) || null;
+                if (!def) return { ok: false, code: 'unknown-tool', message: `没有这个工具：${name}` };
+                toolAttempt.def = def;
+                return undefined;
+              },
+              permission: () => {
+                // 场合权限：工具的 traits.modes 里没有 chat 就不许在聊天里调用。
+                const modes = toolAttempt.def?.traits?.modes;
+                if (Array.isArray(modes) && modes.length && !modes.includes('chat')) {
+                  return { ok: false, code: 'not-permitted', message: '这个工具不在聊天场合开放' };
+                }
+                if (blocked) return { ok: false, code: 'blocked-by-skill', message: blocked.reason || '该工具调用被 Skill 拒绝' };
+                return undefined;
+              },
+              execute: async () => {
+                toolAttempt.result = await executeTool(
+                  toolDefs,
+                  // 写入句柄按"这一次调用"绑定：by 由这里注入，工具自己给不出来。
+                  { ...ctx, writer: this.#writerFor(name) },
+                  name,
+                  argsRaw
+                );
+                return undefined;
+              },
+              audit: (_c, r) => {
+                const ok = r.ok === true && toolAttempt.result?.isError !== true;
+                try {
+                  this.mindPort.recordAttempt({
+                    momentId: this.activeChatMomentId || '',
+                    chatKey,
+                    at: Date.now(),
+                    action: name,
+                    kind: 'tool',
+                    reason: '',
+                    energySpent: 0,
+                    result: { content: String(toolAttempt.result?.content || '').slice(0, 200) },
+                    outcome: ok ? 'done' : (r.ok === false ? 'blocked' : 'failed'),
+                    reasonCode: ok ? '' : (r.code || 'tool-error'),
+                    elapsedMs: Date.now() - startedAt,
+                    usage: session?.usage || null
+                  });
+                } catch { /* 记账失败不影响工具结果 */ }
+              }
+            },
+            executeTimeoutMs: Math.max(1000, Number(toolAttempt.def?.timeoutMs) || 120000)
+          });
+          const outcome = await toolPipe.run({});
+          result = outcome.ok && toolAttempt.result
+            ? toolAttempt.result
+            : { content: `错误：${outcome.message || '工具调用没有完成'}`, isError: true };
+        }
         try {
           await skillManager.runHook('after-tool', {
             ...skillContext, toolName: name, argsRaw, result, session
@@ -1545,6 +1614,21 @@ export class Orchestrator {
       messages.push(...imageUserMessages);
       // 给 UI 的简化消息流（跳过纯 tool 结果的重复展示）
     }
+
+    // 时刻记账：用量、配置摘要、动作数。失败不影响对话收尾。
+    try {
+      this.mindPort.recordMoment({
+        id: chatMomentId,
+        at: runStartedAt,
+        runtime: 'chat',
+        outcome: session.sent.length > 0 ? 'acted' : 'idle',
+        usage: { self: Number(session.usage?.totalTokens) || 0, subtree: 0 },
+        configDigest: digestConfig(cfg),
+        attempts: [],
+        actions: (Array.isArray(session.sent) ? session.sent : []).map((x) => x?.type || '').filter(Boolean).slice(0, 20)
+      });
+    } catch { /* 记账失败不影响对话 */ }
+    this.activeChatMomentId = prevMomentId;
 
     // 兜底事件（设计 §4.2.1）：一次对话时刻至少要留下一条记录。
     // 模型不主动记是常态，没有这条，反思的"欠账"永远不会涨 ——
@@ -1919,6 +2003,74 @@ export class Orchestrator {
   }
 
   /**
+   * L2b：全局反思。
+   *
+   * 看的是**所有会话**的反思，产出是"我好像在不同人面前是/不是同一个人"这类
+   * 跨会话观察，写进自我笔记（notes）；**不改自我**——改自我是 L4 的事。
+   *
+   * 为什么要单独一层：会话反思天然偏向单个语境；直接拿它写自我，
+   * 等于让"最近聊得最多的那个人"决定她是谁。
+   */
+  async runGlobalReflection({ chat = null, force = false } = {}) {
+    const store = this.mind;
+    if (!store) return { ok: false, reason: '心智未接入' };
+    if (this.globalReflecting) return { ok: false, reason: '正在做全局反思' };
+
+    const cfg = getConfig();
+    const ic = cfg.mind?.integrate || {};
+    if (ic.enabled === false) return { ok: false, reason: '整合已关闭' };
+    const l2b = ic.l2b || {};
+    const ledger = this.mindPort.integrationState();
+    const today = todayKey();
+    const usedToday = ledger.today === today ? ledger.todayGlobalReflects : 0;
+    if (!force) {
+      if (usedToday >= Math.max(1, Number(l2b.maxPerDay) || 2)) return { ok: false, reason: 'quota' };
+      const cooldown = Number.isFinite(Number(l2b.cooldownMs)) ? Number(l2b.cooldownMs) : 21600000;
+      if (Date.now() - ledger.lastGlobalReflectAt < Math.max(0, cooldown)) return { ok: false, reason: 'cooldown' };
+    }
+
+    const since = ledger.lastGlobalReflectAt;
+    const reflections = this.mindPort.reflections({ limit: 50, scope: 'chat' })
+      .filter((r) => r.ok === true && Number(r.at) >= since);
+    const need = Math.max(1, Number(l2b.afterChatReflections) || 12);
+    if (!force && reflections.length < need) return { ok: false, reason: 'not-enough' };
+
+    const messages = D.buildGlobalReflectPrompt({
+      botName: cfg.persona?.botName,
+      self: this.mindPort.self() || {},
+      reflections,
+      relations: this.mindPort.relations()
+    });
+
+    this.globalReflecting = true;
+    try {
+      const res = await (typeof chat === 'function' ? chat(messages) : this.#memoryChat(messages));
+      const parsed = D.parseGlobalReflectOutput(String(res?.message?.content ?? ''));
+      const now = Date.now();
+      if (!parsed.ok) {
+        store.appendReflection({ scope: 'global', kind: 'l2b', at: now, ok: false, reason: parsed.reason });
+        return { ok: false, reason: parsed.reason };
+      }
+
+      let added = 0;
+      if (parsed.data.notes.length) {
+        const writer = createWriterPort(this.mind, { by: 'integrate.global' });
+        const r = writer.writeSelfNotes(parsed.data.notes, { momentId: '' });
+        added = Number(r?.added) || 0;
+      }
+      store.appendReflection({
+        scope: 'global', kind: 'l2b', at: now, ok: true, empty: parsed.empty === true,
+        produced: { notes: added }, summary: parsed.data.summary || '',
+        reflectionCount: reflections.length,
+        usage: res?.usage || null
+      });
+      store.updateTick({ today, todayGlobalReflects: usedToday + 1, lastGlobalReflectAt: now });
+      return { ok: true, notes: added, empty: parsed.empty === true };
+    } finally {
+      this.globalReflecting = false;
+    }
+  }
+  /**
    * 全局整合：把会话级攒下的自我笔记，收拢成"她对自己的说法"。
    *
    * 与 reflectForChat 的分工：
@@ -2165,17 +2317,26 @@ export class Orchestrator {
       if (!cfg.api?.model || !cfg.api?.baseUrl) return;
 
       const ic = m.integrate || {};
+      const ledger = this.mindPort.integrationState();
       const notes = this.mindPort.selfNotes();
-      const tick = this.mindPort.bodyRead();
-      const since = this.mindPort.integrationState().lastIntegrateAt;
-      const strong = this.mindPort.strongSince(since);
-      const chats = this.mindPort.reflections({ limit: 40, scope: 'chat' })
-        .filter((r) => r.scope === 'chat' && r.ok === true && Number(r.at) > since).length;
 
-      const enoughChats = chats >= Math.max(1, Number(ic.afterChatReflections) || 12);
-      const daily = !since || (Date.now() - since) > 24 * 3600 * 1000;
-      const dailyDue = daily && notes.length >= Math.max(1, Number(ic.minNotes) || 3);
-      if (!enoughChats && !strong.length && !dailyDue) return;
+      // ① 先看 L2b：会话反思攒够了就做一次"跨会话反省"（产出笔记，不碰自我）。
+      const l2b = ic.l2b || {};
+      const chatReflections = this.mindPort.reflections({ limit: 60, scope: 'chat' })
+        .filter((r) => r.ok === true && Number(r.at) > Number(ledger.lastGlobalReflectAt));
+      if (chatReflections.length >= Math.max(1, Number(l2b.afterChatReflections) || 12)) {
+        this.runGlobalReflection()
+          .then((r) => { if (!r.ok && r.reason !== 'quota' && r.reason !== 'cooldown') console.error('[mind] 全局反思未完成:', r.reason); })
+          .catch((error) => console.error('[mind] 全局反思失败:', error?.message ?? error));
+        return;   // 这一轮先做 L2b；L4 等笔记攒够再说
+      }
+
+      // ② L4：只有"笔记够了 / 强事件 / 隔了一个月"才改自我。
+      const since = ledger.lastIntegrateAt;
+      const strong = this.mindPort.strongSince(since);
+      const enoughNotes = notes.length >= Math.max(1, Number(ic.minNotes) || 3);
+      const monthly = !since || (Date.now() - since) > 30 * 24 * 3600 * 1000;
+      if (!enoughNotes && !strong.length && !monthly) return;
 
       this.runIntegrate()
         .then((r) => { if (!r.ok && r.reason !== 'quota' && r.reason !== 'cooldown') console.error('[mind] 全局整合未完成:', r.reason); })
@@ -2335,6 +2496,75 @@ export class Orchestrator {
   }
 
   /** 启动心跳主循环。心智未启用时什么都不做（与没有这个子系统时一致）。 */
+  /**
+   * 启动对账（设计 §9.4）：把"文件里的是旧世界"这件事处理掉。
+   *
+   * 只做四件便宜但重要的事：
+   *   1. 过期观测作废（窗口过太久，判不准了）；
+   *   2. 冲动时刻缺失或严重过期 → 重抽（否则升级后她要等好几天才醒）；
+   *   3. 反思欠账太多 → 补一次（长时间停机的补偿）；
+   *   4. 写一条 boot moment + 存储版本，方便排查"从哪次启动开始不对"。
+   * 每进程只跑一次。
+   */
+  async bootReconcile({ now = Date.now() } = {}) {
+    if (this.bootReconciled) return { ok: true, skipped: true };
+    this.bootReconciled = true;
+    if (!this.mind) return { ok: true, skipped: true, reason: 'no-mind' };
+
+    const cfg = getConfig();
+    const m = cfg.mind || {};
+    const meanMs = Math.max(900000, (Number(m.wake?.impulseMeanHours) || 4) * 3600000);
+    const out = { ok: true, voided: 0, impulseResampled: false, reflected: false, storeVersion: 0 };
+
+    try {
+      out.voided = this.mindPortAdmin.voidStaleObservations?.({ olderThanMs: 7 * 86400000, now })?.voided || 0;
+    } catch { /* 单步失败不影响其它 */ }
+
+    let body = this.mindPort.bodyRead();
+    const impulseAt = Number(body.impulseAt) || 0;
+    // 缺失，或已经过期超过两个均值：说明这台机器停了很久（或刚从旧版本升上来）。
+    if (!impulseAt || impulseAt < now - 2 * meanMs) {
+      try {
+        this.mindPort.bodyApply({ rev: body.rev, impulseAt: now });
+        out.impulseResampled = true;
+        body = this.mindPort.bodyRead();
+      } catch { /* 写失败下次启动再说 */ }
+    }
+
+    // 欠账补偿：停机期间攒下太多没反思的事件，先补一次（异步，不阻塞启动）。
+    try {
+      const chats = (this.store?.listChats?.() || []).filter((k) => String(k).startsWith('private:'));
+      const since = Number(body.lastReflectAt) || 0;
+      const need = Math.max(1, Number(m.reflectAfterEvents) || 8);
+      const backlog = chats.reduce((n, k) => n + (this.mindPort.reflectionDebt({ chatKey: k, since })), 0);
+      if (backlog >= 3 * need && chats.length) {
+        out.reflected = true;
+        const target = chats[0];
+        this.reflectForChat(target).catch(() => { /* 补偿失败不重试 */ });
+      }
+    } catch { /* 补偿失败不影响启动 */ }
+
+    try {
+      const prev = Number(this.mindPortAdmin.getStoreVersion?.()) || 0;
+      this.mindPortAdmin.setStoreVersion?.(2, { upgradedFrom: prev });
+      out.storeVersion = 2;
+      this.mindPort.recordMoment({
+        id: `mo_boot_${now}`,
+        at: now,
+        runtime: 'boot',
+        outcome: 'ok',
+        usage: { self: 0, subtree: 0 },
+        configDigest: digestConfig(cfg),
+        attempts: [],
+        actions: []
+      });
+    } catch { /* 记录失败不影响启动 */ }
+
+    if (out.voided || out.impulseResampled || out.reflected) {
+      console.log(`[mind] 启动对账：作废观测 ${out.voided} 条${out.impulseResampled ? '、重抽冲动时刻' : ''}${out.reflected ? '、补一次反思' : ''}`);
+    }
+    return out;
+  }
   startTickLoop() {
     this.stopTickLoop();
     const cfg = getConfig();
@@ -2348,6 +2578,8 @@ export class Orchestrator {
     // 放在这里而不是启动流程里：运行期开心智时也能补上。
     if (this.mind) {
       try { this.migrateImpressionsToRelations(); } catch { /* 迁移失败不影响心跳 */ }
+      // 启动对账：异步跑，失败只记日志（不能在启动路径上抛）。
+      this.bootReconcile().catch((error) => console.error('[mind] 启动对账失败:', error?.message ?? error));
     }
 
     this.tickTimer = setInterval(() => {
@@ -2440,7 +2672,7 @@ export class Orchestrator {
     if (!cfg.api?.model || !cfg.api?.baseUrl) return { results: [], skipped: 'no-model' };
     if (m.tick?.enabled === false) return { results: [], skipped: 'tick-disabled' };
 
-    return this.#runGlobalTick({ now, chat });
+    return this.#runFreeAgent({ now, chat });
   }
 
   // ── 全局唤醒（唯一的心跳路径）─────────────────────────────────────────
@@ -2611,67 +2843,111 @@ export class Orchestrator {
 
     return { ok: false, reason: `不认识的自动化动作：${action}` };
   }
-  async #runGlobalTick({ now = Date.now(), chat = null } = {}) {
+  /**
+   * 自由时刻（C 期主干）。
+   *
+   * 一次唤醒的完整路径：
+   *   作息 → 结算 → 观测回收 → 现场 → 唤醒时钟（impulse/意图/节律/社交）
+   *   → 门禁 → 采样下一次冲动 → 候选（提示）→ 工具投影 → 模型循环
+   *   （每次工具调用走八步管线）→ 记账（attempts / observations / moment）→ 结果
+   *
+   * 与原实现的四个区别：
+   *   1. 不再用固定间隔决定"要不要醒"，而是 min(冲动, 到期意图, 动作节律, 该联系的人)；
+   *   2. 候选为空不再直接返回 —— 目录保证总有可做的事，模型有权决定不做；
+   *   3. 工具表与提示词来自**同一份投影**，不会出现"提示词说能做、工具表没有"；
+   *   4. 每次唤醒落一条 moment（含用量与配置摘要），回答"她一天想几次、每次多贵"。
+   */
+  async #runFreeAgent({ now = Date.now(), chat = null } = {}) {
     const cfg = getConfig();
     const m = cfg.mind || {};
     const tickCfg = m.tick || {};
 
-    // ⓪ 作息
+    // ⓪ 作息：睡着时什么都不做（醒来由 #refreshSleep 的状态机负责）
     const sleep = this.#refreshSleep(now);
     if (sleep.asleep) {
       return { results: [{ chatKey: '', action: 'sleep', reason: sleep.reason }], skipped: 'asleep' };
     }
 
-    // ① 结算：体力公式只在装配根注入的那一份，端口不复制。
+    // ① 结算（体力公式只在装配根注入的那一份）
     this.mindPort.bodySettle({ now });
-    let tick = this.mindPort.bodyRead();
+    let body = this.mindPort.bodyRead();
 
-    // ①b 顺手把到期的观察判掉（机械判定，不调模型）：她需要知道做过的事有没有用。
+    // ①b 观测回收：到期的机械判定，判定结果回写动作节律
     try {
       drainDueObservations({
         port: this.mindPort,
         now,
-        // 判定回写到动作节律：命中 → 间隔变短，落空 → 变长。
-        // 这是"她会成长"唯一落到下一次行为上的地方，不然观测只是日志。
         onResolved: ({ action, verdict }) => this.mindPort.recordActionStat(action, { ok: verdict === 'hit', now })
       });
-    } catch { /* 观察失败不影响心跳 */ }
+      body = this.mindPort.bodyRead();
+    } catch { /* 观测失败不影响心跳 */ }
 
-    // ② 全局唤醒自身的节拍（不再按会话各排一次）
-    if (this.globalNextWakeAt && now < this.globalNextWakeAt) {
-      return { results: [], skipped: 'not-due' };
-    }
-    this.globalNextWakeAt = D.nextTickAt(now, tickCfg.intervalMs, tickCfg.jitter);
-    // 有到期的意图就提前醒：不然"她说 24 小时后问"要等到下一个心跳周期才可能发生。
-    const nextIntentAt = this.mindPort.intentions({ status: 'open', limit: 50 })
-      .map((x) => Number(x.dueAt) || 0)
-      .filter((at) => at > now)
-      .sort((a, b) => a - b)[0];
-    if (nextIntentAt) this.globalNextWakeAt = Math.min(this.globalNextWakeAt, nextIntentAt);
-
-    const results = [];
+    // ② 现场：先拿，因为"该联系谁"本身也是唤醒源之一
     const roster = this.#buildRoster(now);
-    if (!roster.top.length) {
-      results.push({ chatKey: '', action: 'idle', reason: 'no-chat' });
-      return { results, skipped: '' };
+    const openIntents = this.mindPort.intentions({ status: 'open', limit: 50 });
+
+    // ②b 门禁：睡着/暂停/正在聊/刚醒过/额度。候选为空**不是**门禁。
+    const wakeCfg = m.wake || {};
+    // 门禁在时钟之前判：否则"刚醒过"会被 not-due 先截走，日志里就看不出真实原因。
+    const gate = checkGates({
+      now,
+      paused: this.paused,
+      aborted: this.aborted,
+      energy: Number(body.energy) || 0,
+      energyFloor: Number(m.energy?.floor) || 10,
+      todayDecisions: Number(body.todayDecisions) || 0,
+      maxDecisionsPerDay: Number(tickCfg.maxDecisionsPerDay) || 24,
+      lastWakeAt: Number(body.lastFreeWakeAt) || 0,
+      tooSoonMs: Number(wakeCfg.tooSoonMs) || 300000,
+      chatPending: (this.pendingWake?.size || 0) > 0,
+      chatRunning: (this.runningChats?.size || 0) > 0,
+      hasModel: Boolean(cfg.api?.model && cfg.api?.baseUrl)
+    });
+    if (!gate.ok) {
+      const results = (gate.code === 'tired' || gate.code === 'decision-cap')
+        ? [{ chatKey: '', action: 'idle', reason: gate.code }]
+        : [];
+      return { results, skipped: gate.code, gateReason: describeGate(gate) };
     }
 
-    const energy = Number(this.mindPort.bodyRead().energy) || 0;
-    const floor = Number(m.energy?.floor) || 10;
-    if (energy < floor) {
-      results.push({ chatKey: '', action: 'idle', reason: 'tired' });
-      return { results, skipped: '' };
+    // ②c 唤醒时钟：min(冲动, 到期意图, 动作节律, 该联系的人)
+    // impulseAt 为 0 说明"刚出生或刚升级"：当作现在就该醒，而不是等一个兜底间隔。
+    if (!Number(body.impulseAt)) {
+      this.mindPort.bodyApply({ rev: body.rev, impulseAt: now });
+      body = this.mindPort.bodyRead();
+    }
+    const due = nextWakeAt({
+      now,
+      impulseAt: Number(body.impulseAt) || 0,
+      intentionDueAts: openIntents.map((x) => Number(x.dueAt) || 0),
+      actionRipeAts: Object.values(body.actionStats || {}).map((s) => Number(s?.nextRipeAt) || 0),
+      socialDueAts: roster.top.map((r) => (Number(r.lastTs) > 0
+        ? Number(r.lastTs) + Math.max(3600000, Number(tickCfg.proactiveIdleMs) || 6 * 3600000)
+        : 0)),
+      maxGapMs: Math.max(3600000, (Number(wakeCfg.maxGapHours) || 6) * 3600000)
+    });
+    if (now < due.at) {
+      return { results: [], skipped: 'not-due', dueAt: due.at, dueReason: due.reason };
     }
 
-    // ③ 候选：把每个人的候选汇总成一份
-    const snoozes = (tick.snoozes && typeof tick.snoozes === 'object') ? { ...tick.snoozes } : {};
-    const lastReflectAt = Number(tick.lastReflectAt) || 0;
+    // ③ 醒来后立刻采样下一次冲动：不补偿、不累积（设计 §4.5.1）
+    const meanMs = Math.max(900000, (Number(wakeCfg.impulseMeanHours) || 4) * 3600000);
+    this.mindPort.bodyApply({
+      rev: body.rev,
+      impulseAt: sampleImpulseAt(now, meanMs),
+      lastFreeWakeAt: now
+    });
+    body = this.mindPort.bodyRead();
+
+    // ④ 候选：只是提示，不是门禁
+    const snoozes = (body.snoozes && typeof body.snoozes === 'object') ? { ...body.snoozes } : {};
+    const lastReflectAt = Number(body.lastReflectAt) || 0;
     let candidates = [];
     for (const r of roster.top) {
       if (r.running || r.recent || r.suppressed) continue;
       const cs = D.collectCandidates({
         now,
-        energy,
+        energy: Number(body.energy) || 0,
         lastInteractionAt: Number(r.lastTs) || 0,
         lastEventAt: Number(r.lastEventAt) || 0,
         openLoops: r.relation?.openLoops || [],
@@ -2683,10 +2959,7 @@ export class Orchestrator {
         candidates.push({ ...c, chatKey: r.chatKey, name: r.name });
       }
     }
-    // 到期的意图进候选：她自己安排的事，比任何"想找人说话"的理由都更该排在前面。
-    // 逾期太久（默认 7 天）的直接作废 —— 一直提醒一件早就不该做的事只会变成噪音。
     const intentWriter = createWriterPort(this.mind, { by: 'runtime.free' });
-    const openIntents = this.mindPort.intentions({ status: 'open', limit: 50 });
     for (const it of openIntents) {
       const dueAt = Number(it.dueAt) || 0;
       if (!dueAt) continue;
@@ -2703,41 +2976,28 @@ export class Orchestrator {
         intentionId: it.id
       });
     }
-
     if (sleep.inWindow && !sleep.asleep) {
       candidates.push({ id: 'bedtime', text: '夜深了，该睡了，还是再待一会儿？', chatKey: '', name: '' });
     }
-    if (!candidates.length) {
-      results.push({ chatKey: '', action: 'idle', reason: 'no-candidate' });
-      return { results, skipped: '' };
-    }
 
-    // ④ 预算
-    const maxDecisions = Math.max(1, Number(tickCfg.maxDecisionsPerDay) || 24);
-    if ((Number(tick.todayDecisions) || 0) >= maxDecisions) {
-      results.push({ chatKey: '', action: 'idle', reason: 'decision-cap' });
-      return { results, skipped: '' };
-    }
-
+    // ⑤ 菜单：可用动作（目录），按动作节律过滤。永远允许"什么都不做"。
+    const energy = Number(body.energy) || 0;
     const state = {
       now,
       energy,
-      todayProactive: Number(tick.todayProactive) || 0,
+      todayProactive: Number(body.todayProactive) || 0,
       maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
       minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
-      // 最近一次主动找人是什么时候：取所有会话里最新的一条。
-      // 以前硬编码 0，导致 minProactiveGapMs 永远通过（想连发就连发）。
       lastProactiveAt: Math.max(0, ...roster.top.map((r) => Number(this.lastProactiveAt.get(r.chatKey)) || 0)),
       unreflected: candidates.filter((c) => c.id === 'reflect_pending').length,
       organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
-      lastReflectAttemptAt: Number(tick.lastReflectAttemptAt) || 0,
+      lastReflectAttemptAt: Number(body.lastReflectAttemptAt) || 0,
       reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000),
       inSleepWindow: sleep.inWindow === true ? 1 : 0,
-      stayUps: Number((tick.sleep && tick.sleep.stayUps) || 0),
+      stayUps: Number((body.sleep && body.sleep.stayUps) || 0),
       maxStayUp: Math.max(0, Number(m.sleep?.maxStayUp) || 2)
     };
-    // 内置动作的成本改成从配置读（energy.cost 以前是死配置）；
-    // 再把扩展里声明了 mindAction 的工具并入菜单。
+
     const coreActions = D.actionsWithCosts(m);
     const extActions = D.extensionActions({ tools: listTools(), cfg: m.actions || {} })
       .map((a) => ({
@@ -2746,259 +3006,291 @@ export class Orchestrator {
       }));
     const allActions = [...coreActions, ...extActions];
     const showBlocked = Math.max(0, Math.min(5, Number(m.actions?.showBlocked) || 2));
-    let actions = D.availableActions(state, allActions);
-    // 节律修剪：每个动作有自己的"下次可以再试"。做砸过的动作间隔变长，
-    // 做成过的变短；没有统计的动作不受限。
-    const actionStats = (this.mindPort.bodyRead()?.actionStats) || {};
-    actions = actions.filter((a) => {
+    const actionStats = body.actionStats || {};
+    // 节律修剪：做砸过的动作间隔变长，做成过的变短；没统计的不受限。
+    const menuActions = D.availableActions(state, allActions).filter((a) => {
+      if (a.id === 'idle') return false;   // 什么都不做 = 不调工具，不需要一个动作
       const stat = actionStats[a.id];
       return !stat || !Number(stat.nextRipeAt) || Number(stat.nextRipeAt) <= now;
     });
-    const blocked = D.blockedActions(state, allActions).slice(0, showBlocked);
-    if (!actions.some((a) => a.id === 'organize')) {
-      candidates = candidates.filter((c) => c.id !== 'reflect_pending');
-    }
-    if (!actions.length) {
-      results.push({ chatKey: '', action: 'idle', reason: 'no-action' });
-      return { results, skipped: '' };
-    }
+    const blockedMenu = D.blockedActions(state, allActions)
+      .filter((b) => b?.action?.id !== 'idle')
+      .slice(0, showBlocked);
 
-    // ⑤ 自由行动会话（工具循环）
-    // 一次上下文里连续做 ≤maxActions 件事：每个结果回灌，她自己决定继续还是收手。
-    // 素材：她现在怎么看自己、最近写下过什么、还惦记着什么事。
-    // 全部经端口读，端口返回空就整段不出现（自由时刻不该凭空多出一段空标题）。
+    // ⑥ 投影：工具表、菜单、提示词来自同一份数据
+    const readTools = this.#freeReadTools();
+    const { tools } = projectFreeTools({
+      actions: menuActions,
+      readTools,
+      traits: m.traits || {},
+      includeFinish: true
+    });
     const materials = buildFreeMaterials({ port: this.mindPort, now });
+    const promptActions = [
+      ...menuActions,
+      ...readTools.map((t) => ({ id: t.id, label: t.name || t.id, description: '（只读）', energy: 0 }))
+    ];
     const messages = D.buildGlobalDecisionPrompt({
       botName: cfg.persona?.botName,
       state,
       roster: roster.top,
       candidates,
-      actions,
+      actions: promptActions,
       now,
       restCount: roster.restCount,
       lastAction: this.#lastActionText(),
-      blocked,
+      blocked: blockedMenu,
       materials: renderMaterials(materials)
     });
+
+    // ⑦ 模型循环：每次工具调用都走八步管线
     const maxActions = Math.max(1, Math.min(6, Number(m.actions?.maxPerWake) || 3));
-    const tools = this.#freeActionTools(actions);
-    const convo = messages.slice();
+    const momentId = `mo_${now}_${randInt(1000, 9999)}`;
+    const selfDepth = this.momentDepth || 0;
+    this.momentDepth = selfDepth + 1;
     const executed = [];
     let idleReason = '';
-    let sessionUsage = null;
+    let childUsage = 0;
+    const attemptIds = [];
     const callModel = typeof chat === 'function'
       ? (msgs, tls) => chat(msgs, tls)
       : (msgs, tls) => chatCompletion({ messages: msgs, tools: tls, toolChoice: 'auto', temperature: 0.2 });
 
-    for (let step = 0; step < maxActions + 2; step++) {
-      const res = await callModel(convo, tools);
-      sessionUsage = res?.usage || sessionUsage;
-      const msg = res?.message || {};
-      const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
-      const content = typeof msg.content === 'string' ? msg.content.trim() : '';
-
-      // 没有工具调用 = 结束（只写正文时也照这里收尾）
-      if (!calls.length) {
-        idleReason = content || (executed.length ? '' : '没有调用任何动作');
-        break;
-      }
-
-      convo.push({
-        role: 'assistant',
-        content: msg.content ?? null,
-        tool_calls: calls.map((c) => ({
-          id: c.id,
-          type: 'function',
-          function: { name: c.function?.name, arguments: c.function?.arguments ?? '{}' }
-        }))
-      });
-
-      const finishCall = calls.find((c) => c.function?.name === 'finish');
-      for (const call of calls) {
-        const name = String(call.function?.name || '');
-        const callId = call.id;
-        if (name === 'finish') continue;
-
-        if (executed.length >= maxActions) {
-          convo.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify({ ok: false, error: '这次自由时间已经做够几件事了，先到这里' }) });
-          continue;
-        }
-        // 每个动作走一遍管线：校验 → 否决 → 执行 → 记账。
-        // 记账放在 audit 里，所以"没做成"也有 outcome 与稳定原因码 ——
-        // 这正是 attempts 表能统计"她为什么不行动"的前提。
-        // 不能叫 call：for (const call of calls) 的循环变量在同一作用域，
-        // 同名会触发 TDZ（Cannot access before initialization），报错位置还很远。
-        const argsRaw = String(call.function?.arguments || '{}');
-        const attempt = { name, action: null, args: {}, target: '', exec: null, error: '', intentionId: '' };
-        const pipe = createPipeline({
-          steps: {
-            eligibility: () => {
-              if (executed.length >= maxActions) {
-                return { ok: false, code: 'cap', message: '这次自由时间已经做够几件事了，先到这里' };
-              }
-              return undefined;
-            },
-            validate: () => {
-              const found = actions.find((a) => a.id === attempt.name);
-              if (!found) return { ok: false, code: 'unknown-action', message: `没有这个动作：${attempt.name}` };
-              attempt.action = found;
-              try { attempt.args = JSON.parse(argsRaw) || {}; } catch { attempt.args = {}; }
-              return undefined;
-            },
-            veto: () => {
-              const why = D.actionBlocked(attempt.action, state);
-              if (why) return { ok: false, code: 'blocked', message: `现在做不了：${why}` };
-              return undefined;
-            },
-            execute: async () => {
-              attempt.target = this.#pickTargetChat({ args: attempt.args }, candidates, roster.top);
-              // 这次动作是不是为了某条意图：候选上带着 intentionId，账本要记得住。
-              attempt.intentionId = String(candidates.find((c) => c.intentionId && c.chatKey === attempt.target)?.intentionId || '');
-              const exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now });
-              attempt.exec = exec;
-              if (exec && exec.ok === false) {
-                attempt.error = String(exec.reason || '没有做成');
-                return { ok: false, code: 'not-done', message: attempt.error };
-              }
-              return undefined;
-            },
-            audit: (_c, result) => {
-              const ok = result.ok === true;
-              const record = this.mindPort.recordAttempt({
-                chatKey: attempt.target,
-                at: now,
-                action: attempt.name,
-                reason: String(attempt.args.reason || '').slice(0, 120),
-                candidates: candidates.map((c) => c.id),
-                intentionId: attempt.intentionId || undefined,
-                energySpent: ok ? (Number(attempt.action?.energy) || 0) : 0,
-                result: attempt.exec,
-                error: ok ? undefined : (attempt.error || result.message),
-                // 结局与原因码：'none' = 没轮到她做（超上限/不认识），与"失败"分开
-                outcome: ok ? 'done' : (['cap', 'blocked'].includes(result.code) ? 'blocked' : 'failed'),
-                reasonCode: ok ? '' : (result.code || ''),
-                usage: res?.usage || null
-              });
-              // 每个**做成了**的动作都开一个观察窗口（设计 §4.5.3）：
-              // 她不知道对方看没看、回没回；立刻判定只能判"发出去了"。
-              // 窗口到期由 drainDueObservations 判，对方回话则由 onIncoming 直接判 hit。
-              if (ok) {
-                try {
-                  this.mindPort.openObservation({
-                    attemptId: record?.id || '',
-                    intentionId: attempt.intentionId || '',
+    try {
+      const loop = await runAgentLoop({
+        callModel,
+        messages,
+        tools,
+        maxSteps: maxActions + 2,
+        onCall: async ({ name, args, id: callId }) => {
+          const attempt = { name, action: null, readTool: null, args: args || {}, target: '', exec: null, error: '', intentionId: '' };
+          const pipe = createPipeline({
+            steps: {
+              eligibility: () => {
+                if (executed.length >= maxActions) {
+                  return { ok: false, code: 'cap', message: '这次自由时间已经做够几件事了，先到这里' };
+                }
+                return undefined;
+              },
+              permission: () => {
+                const allow = Array.isArray(m.traits?.act) && m.traits.act.length ? m.traits.act : null;
+                if (allow && attempt.action && !allow.includes(attempt.action.id)) {
+                  return { ok: false, code: 'not-permitted', message: '这个场合不允许做这件事' };
+                }
+                return undefined;
+              },
+              validate: () => {
+                attempt.action = menuActions.find((a) => a.id === attempt.name) || null;
+                attempt.readTool = attempt.action ? null : (readTools.find((t) => t.id === attempt.name) || null);
+                if (!attempt.action && !attempt.readTool) {
+                  return { ok: false, code: 'unknown-action', message: `没有这个动作：${attempt.name}` };
+                }
+                return undefined;
+              },
+              veto: () => {
+                if (!attempt.action) return undefined;
+                const why = D.actionBlocked(attempt.action, state);
+                if (why) return { ok: false, code: 'blocked', message: `现在做不了：${why}` };
+                // 嵌套深度：上限从动作自己的 composite 声明里读（默认 1 层）。
+                // 父级只扣一次体力；子运行的用量记进父 moment 的 subtree。
+                const composite = attempt.action.composite;
+                if (composite) {
+                  const maxDepth = Math.max(1, Number(composite.maxDepth) || 1);
+                  if ((this.momentDepth || 0) > maxDepth) {
+                    return { ok: false, code: 'depth', message: '已经在一次唤醒里了，不能再套一层' };
+                  }
+                  const runtime = String(composite.runtime || 'chat');
+                  if (!['chat', 'free', 'integrate', 'automate'].includes(runtime)) {
+                    return { ok: false, code: 'bad-composite', message: `不认识的嵌套运行时：${runtime}` };
+                  }
+                }
+                return undefined;
+              },
+              execute: async () => {
+                if (attempt.readTool) {
+                  const ctx = {
+                    store: this.store,
+                    memory: this.memory,
                     chatKey: attempt.target || '',
-                    action: attempt.name,
-                    footprint: attempt.target ? 'chat' : 'self',
-                    expect: attempt.name === 'send_proactive' ? '对方应该会回一句' : `${attempt.name} 之后会有点变化`,
-                    now
-                  });
-                } catch { /* 观察是锦上添花 */ }
+                    session: { pastStateCount: 0, sent: [] },
+                    config: cfg,
+                    onebot: this.onebot,
+                    emit: this.emit,
+                    chatProfile: resolveChatProfile(attempt.target || roster.top[0]?.chatKey || 'private:0')
+                  };
+                  attempt.exec = await attempt.readTool.execute(ctx, attempt.args);
+                  return undefined;
+                }
+                attempt.target = this.#pickTargetChat({ args: attempt.args }, candidates, roster.top);
+                attempt.intentionId = String(candidates.find((c) => c.intentionId && c.chatKey === attempt.target)?.intentionId || '');
+                const exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now });
+                attempt.exec = exec;
+                if (exec && exec.ok === false) {
+                  attempt.error = String(exec.reason || '没有做成');
+                  return { ok: false, code: 'not-done', message: attempt.error };
+                }
+                if (Number(exec?.usage?.total_tokens) > 0) childUsage += Number(exec.usage.total_tokens);
+                return undefined;
+              },
+              audit: (_c, result) => {
+                const ok = result.ok === true;
+                const record = this.mindPort.recordAttempt({
+                  momentId,
+                  chatKey: attempt.target,
+                  at: now,
+                  action: attempt.name,
+                  kind: attempt.readTool ? 'read' : 'act',
+                  reason: String(attempt.args.reason || '').slice(0, 120),
+                  candidates: candidates.map((c) => c.id),
+                  intentionId: attempt.intentionId || undefined,
+                  energySpent: ok && attempt.action ? (Number(attempt.action.energy) || 0) : 0,
+                  result: attempt.exec,
+                  error: ok ? undefined : (attempt.error || result.message),
+                  outcome: ok ? 'done' : (['cap', 'blocked', 'depth', 'not-permitted', 'unknown-action'].includes(result.code) ? 'blocked' : 'failed'),
+                  reasonCode: ok ? '' : (result.code || '')
+                });
+                if (record?.id) attemptIds.push(record.id);
+
+                // 每个做成了的动作开一条观测；只读工具与"没做成"不开
+                if (ok && attempt.action) {
+                  try {
+                    this.mindPort.openObservation({
+                      attemptId: record?.id || '',
+                      momentId,
+                      intentionId: attempt.intentionId || '',
+                      chatKey: attempt.target || '',
+                      action: attempt.name,
+                      footprint: attempt.target ? 'chat' : 'self',
+                      expect: attempt.name === 'send_proactive' ? '对方应该会回一句' : `${attempt.name} 之后会有点变化`,
+                      now
+                    });
+                  } catch { /* 观察是锦上添花 */ }
+                }
+
+                if (ok && attempt.action) {
+                  // 体力/计数/打盹一次写完；同一轮里的后续动作看到的是新值。
+                  const snoozeFor = Math.max(0, Number(attempt.action.snoozeMs) || 0);
+                  const nextSnoozes = {};
+                  for (const [k, v] of Object.entries(snoozes)) {
+                    if (Number(v) > now) nextSnoozes[k] = v;
+                  }
+                  if (snoozeFor > 0) {
+                    for (const c of candidates) {
+                      if (c.chatKey === attempt.target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
+                    }
+                  }
+                  const bodyPatch = {
+                    rev: this.mindPort.bodyRead().rev,
+                    spend: Number(attempt.action.energy) || 0,
+                    snooze: nextSnoozes
+                  };
+                  if (attempt.name === 'send_proactive') {
+                    bodyPatch.counterDelta = { todayProactive: 1 };
+                    if (attempt.target) bodyPatch.proactiveAt = { chatKey: attempt.target, at: now };
+                  }
+                  const applied = this.mindPort.bodyApply(bodyPatch);
+                  if (applied.ok) {
+                    state.energy = Number(applied.body?.energy) || 0;
+                    if (attempt.name === 'send_proactive') {
+                      state.todayProactive += 1;
+                      state.lastProactiveAt = now;
+                      if (attempt.target) this.lastProactiveAt.set(attempt.target, now);
+                    }
+                    if (attempt.name === 'stay_up') state.stayUps += 1;
+                    if (attempt.intentionId) {
+                      intentWriter.closeIntention(attempt.intentionId, { status: 'done', note: `已处理：${attempt.name}` });
+                    }
+                  }
+                }
+                if (ok && !attempt.readTool) executed.push({ chatKey: attempt.target, action: attempt.name });
+                return record;
               }
-              return record;
-            }
-          },
-          executeTimeoutMs: 60000
-        });
+            },
+            executeTimeoutMs: 90000
+          });
 
-        const outcome = await pipe.run({});
-        const error = outcome.ok ? '' : (attempt.error || outcome.message || '没有做成');
-
-        if (outcome.ok) {
-          // 体力、主动计数、打盹一次写完：端口负责 rev 与原子性，
-          // 这里不再"先读 tick、算好、再整体写回"（那正是并发丢更新的来源）。
-          const snoozeFor = Math.max(0, Number(attempt.action.snoozeMs) || 0);
-          const nextSnoozes = {};
-          for (const [k, v] of Object.entries(snoozes)) {
-            if (Number(v) > now) nextSnoozes[k] = v;
-          }
-          if (snoozeFor > 0) {
-            for (const c of candidates) {
-              if (c.chatKey === attempt.target) nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeFor;
-            }
-          }
-          const bodyPatch = {
-            rev: this.mindPort.bodyRead().rev,
-            spend: Number(attempt.action.energy) || 0,
-            snooze: nextSnoozes
+          const outcome = await pipe.run({});
+          return {
+            ok: outcome.ok,
+            result: attempt.exec ?? null,
+            error: outcome.ok ? '' : (attempt.error || outcome.message || '没有做成')
           };
-          if (name === 'send_proactive') {
-            bodyPatch.counterDelta = { todayProactive: 1 };
-            if (attempt.target) bodyPatch.proactiveAt = { chatKey: attempt.target, at: now };
-          }
-          const applied = this.mindPort.bodyApply(bodyPatch);
-          if (applied.ok) {
-            state.energy = Number(applied.body?.energy) || 0;
-            // 同一轮里她可能接着做下一件事：这些计数必须当场更新，
-            // 否则"今日主动次数""主动间隔""再撑次数"在同一轮内都是旧值，
-            // 上限形同虚设（连点两次 send_proactive 都通过）。
-            if (name === 'send_proactive') {
-              state.todayProactive = Number(state.todayProactive) + 1;
-              state.lastProactiveAt = now;
-              if (attempt.target) this.lastProactiveAt.set(attempt.target, now);
-            }
-            if (name === 'stay_up') state.stayUps = Number(state.stayUps) + 1;
-
-            // 只了结"这次做的正是那条意图"：
-            // 否则 recall / remember / stay_up 成功都会把"问问他搬家的事"关掉 ——
-            // 事没做，却记成做过了。
-            if (attempt.intentionId) {
-              intentWriter.closeIntention(attempt.intentionId, { status: 'done', note: `已处理：${attempt.name}` });
-            }
-          }
         }
-
-        convo.push({
-          role: 'tool',
-          tool_call_id: callId,
-          content: JSON.stringify(outcome.ok
-            ? { ok: true, result: attempt.exec ?? null }
-            : { ok: false, error }).slice(0, 1500)
-        });
-        // 只有真的做成了才占本次唤醒的行动额度：读失败 / 被拒的动作不该让她
-        // 少做一件本来能做的事（§7.4 "读失败不扣行动数"）。
-        if (outcome.ok) executed.push({ chatKey: attempt.target, action: name });
-      }
-
-      if (finishCall) {
-        try {
-          const fa = JSON.parse(String(finishCall.function?.arguments || '{}')) || {};
-          idleReason = String(fa.reason || idleReason || '').slice(0, 120);
-        } catch { /* 忽略 */ }
-        convo.push({ role: 'tool', tool_call_id: finishCall.id, content: JSON.stringify({ ok: true }) });
-        break;
-      }
-      // 到达上限后不再 break：让模型知道"做够了"并自己收尾。
-      // 多出的轮次由 step 上限兜底（maxActions + 2），不会失控。
-    }
-
-    // 记账：无论做了几件事，这次唤醒都算一次决策
-    this.mindPort.bodyApply({ rev: this.mindPort.bodyRead().rev, counterDelta: { todayDecisions: 1 } });
-    tick = this.mindPort.bodyRead();
-
-    if (!executed.length) {
-      const snoozeMs = Math.max(60000, Number(tickCfg.idleSnoozeMs) || 3600000);
-      const nextSnoozes = { ...snoozes };
-      for (const c of candidates) {
-        if (!c.chatKey) continue;
-        nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeMs;
-      }
-      for (const [k, v] of Object.entries(nextSnoozes)) {
-        if (!(Number(v) > now)) delete nextSnoozes[k];
-      }
-      this.mindPort.bodyUpdate(() => ({ snooze: nextSnoozes }));
-      this.mindPort.recordAttempt({
-        chatKey: '', at: now, action: 'idle',
-        reason: idleReason || '想不出要做什么',
-        candidates: candidates.map((c) => c.id),
-        usage: sessionUsage
       });
-      results.push({ chatKey: '', action: 'idle', reason: 'chose-idle' });
-      return { results, skipped: '' };
-    }
 
-    for (const item of executed) results.push({ chatKey: item.chatKey, action: item.action, reason: '' });
-    return { results, skipped: '' };
+      if (loop.ok === false) {
+        return { results: [{ chatKey: '', action: 'idle', reason: 'model-error' }], skipped: 'error', error: loop.error };
+      }
+      idleReason = loop.idleReason || '';
+
+      // ⑧ 收尾：决策计数、moment、idle 记账
+      this.mindPort.bodyApply({ rev: this.mindPort.bodyRead().rev, counterDelta: { todayDecisions: 1 } });
+
+      if (!executed.length) {
+        const snoozeMs = Math.max(60000, Number(tickCfg.idleSnoozeMs) || 3600000);
+        const nextSnoozes = {};
+        for (const [k, v] of Object.entries(snoozes)) {
+          if (Number(v) > now) nextSnoozes[k] = v;
+        }
+        for (const c of candidates) {
+          if (!c.chatKey) continue;
+          nextSnoozes[`${c.chatKey}|${c.id}`] = now + snoozeMs;
+        }
+        this.mindPort.bodyApply({ rev: this.mindPort.bodyRead().rev, snooze: nextSnoozes });
+        const idleRecord = this.mindPort.recordAttempt({
+          momentId, chatKey: '', at: now, action: 'idle',
+          reason: idleReason || '想不出要做什么',
+          candidates: candidates.map((c) => c.id),
+          outcome: 'idle',
+          usage: { total_tokens: loop.usage || 0 }
+        });
+        if (idleRecord?.id) attemptIds.push(idleRecord.id);
+      }
+
+      try {
+        this.mindPort.recordMoment({
+          id: momentId,
+          at: now,
+          runtime: 'free',
+          outcome: executed.length ? 'acted' : 'idle',
+          usage: {
+            self: Number(loop.usage) || 0,
+            subtree: Number(childUsage) || 0
+          },
+          configDigest: digestConfig(cfg),
+          attempts: attemptIds,
+          actions: executed.map((x) => x.action)
+        });
+      } catch { /* 记账失败不影响心跳 */ }
+
+      const results = executed.map((x) => ({ chatKey: x.chatKey, action: x.action, reason: '' }));
+      if (!results.length) results.push({ chatKey: '', action: 'idle', reason: idleReason || 'chose-idle' });
+      return { results, skipped: '', usage: loop.usage || 0, momentId };
+    } finally {
+      this.momentDepth = selfDepth;
+    }
+  }
+
+  /**
+   * 自由时刻可用的只读工具。
+   *
+   * 只给"看"的工具，不给"写"的工具：写要走动作（有体力、有节律、有观测），
+   * 读不该产生副作用。工具表里没有的把 traits.modes 补上即可扩展。
+   */
+  #freeReadTools() {
+    const wanted = new Set([
+      'get_recent_messages', 'get_active_members', 'get_chats',
+      'memory_query', 'web_search'
+    ]);
+    const out = [];
+    for (const tool of listTools()) {
+      if (!wanted.has(tool.id)) continue;
+      if (typeof tool.execute !== 'function') continue;
+      if (tool.defaultEnabled === false) continue;
+      out.push({ ...tool, traits: { ...(tool.traits || {}), modes: ['free'] } });
+      if (out.length >= 4) break;
+    }
+    return out;
   }
 
   /** 自由行动会话的工具表：每个动作一个函数 + finish。 */

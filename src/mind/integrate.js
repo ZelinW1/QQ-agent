@@ -167,3 +167,77 @@ export function applyIntegrate({ store, output, noteIds = [], now = Date.now() }
 
   return { applied, rejected };
 }
+
+/**
+ * L2b：全局反思的提示词。
+ *
+ * 与会话反思的区别：会话反思只看一个会话；这里看**所有会话**沉淀下来的反思，
+ * 目的是发现"跨会话的模式"（她在不同人面前是不是一个人）。
+ *
+ * 与 L4 自我整合的区别：这里只产出"想法"（notes）与一段小结，**不改自我**。
+ * 自我只由 L4 在月度/强事件/积攒足够之后统一改。
+ */
+export function buildGlobalReflectPrompt({ botName = '她', self = {}, reflections = [], relations = [] } = {}) {
+  const name = String(botName || '她').trim() || '她';
+  const system = [
+    `你是${name}。`,
+    '最近你在不同的会话里各自想过一些事。现在你把它们放在一起看看。',
+    '',
+    '你要做两件事：',
+    '1. 找出跨会话的东西：你在不同人面前是不是同一个人？有没有反复出现的念头？',
+    '2. 把值得留下的写成几句"对自己的观察"（notes），不要写别人的事。',
+    '',
+    '规矩：',
+    '- 只写你自己的想法，不要评价具体某个人。',
+    '- 材料不足就少写，甚至留空，这很正常。',
+    '- 只输出 JSON，不要 Markdown，不要解释。',
+    '',
+    '输出格式：',
+    '{',
+    '  "notes": ["……"],',
+    '  "summary": "一两句话，给自己看的"',
+    '}'
+  ].join('\n');
+
+  const parts = ['【你现在怎么看自己】'];
+  const narrative = String(self?.narrative ?? '').trim();
+  parts.push(narrative || '（还没认真想过自己是个什么样的人）');
+
+  if (reflections.length) {
+    parts.push('', `【最近各会话里的反思】（共 ${reflections.length} 条）`);
+    for (const r of reflections.slice(-12)) {
+      const at = Number(r.at) || 0;
+      const date = at ? `${String(new Date(at).getMonth() + 1).padStart(2, '0')}-${String(new Date(at).getDate()).padStart(2, '0')}` : '';
+      const bits = [];
+      if (r.chatKey) bits.push(String(r.chatKey));
+      const produced = r.produced || {};
+      if (Number(produced.selfNotes) > 0) bits.push(`留下 ${produced.selfNotes} 条对自己的念头`);
+      if (Array.isArray(produced.relations) && produced.relations.length) bits.push(`对 ${produced.relations.length} 个人的看法有变化`);
+      parts.push(`- ${date} ${bits.join(' · ') || '（没有产出）'}`);
+    }
+  }
+
+  if (relations.length) {
+    parts.push('', '【你最近对这几个人】');
+    for (const rel of relations.slice(0, 8)) {
+      parts.push(`- ${rel.userId}${rel.nickname ? ` ${rel.nickname}` : ''}${rel.stage ? ` · ${rel.stage}` : ''}`);
+    }
+  }
+
+  parts.push('', '现在，按格式写下你看到的东西。没有就留空。');
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: parts.join('\n') }
+  ];
+}
+
+/** 解析 L2b 输出。 */
+export function parseGlobalReflectOutput(raw) {
+  const data = extractJson(raw);
+  if (!isPlainObject(data)) return { ok: false, reason: '输出不是合法的 JSON 对象' };
+  const notes = Array.isArray(data.notes)
+    ? data.notes.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 6)
+    : [];
+  const summary = String(data.summary ?? '').trim();
+  return { ok: true, empty: !(notes.length || summary), data: { notes, summary } };
+}

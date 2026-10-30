@@ -64,6 +64,17 @@ await check('2 模型自己记了就不再补（不重复灌事件）', async ()
   assert.ok(events.some((e) => String(e.text).includes('出差') && e.actorId === 'self'), '模型写的那条在');
 });
 
+await check('2b 聊天里的工具调用也走管线并留下账本', async () => {
+  const tools = mind.listAttempts({ limit: 20 }).filter((a) => a.kind === 'tool');
+  assert.ok(tools.length >= 1, '至少有一次工具调用被记账');
+  const hit = tools.find((a) => a.action === 'remember_event');
+  assert.ok(hit, 'remember_event 有记录');
+  assert.equal(hit.outcome, 'done', '成功的工具调用结局是 done');
+  assert.ok(String(hit.momentId || '').length > 0, '带 momentId（能追到那一次运行）');
+  const moments = mind.listMoments({ limit: 10 }).filter((m) => m.runtime === 'chat');
+  assert.ok(moments.length >= 2, `聊天每次运行都落 moment（${moments.length}）`);
+  assert.ok(moments.every((m) => typeof m.configDigest === 'string'), 'moment 带配置摘要');
+});
 await check('3 兜底事件会计入"未反思欠账"', async () => {
   const debt = app.orchestrator.mind.countUnreflected('private:777', 0);
   assert.ok(debt >= 1, `欠账应大于 0（实际 ${debt}）`);

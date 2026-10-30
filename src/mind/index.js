@@ -39,7 +39,9 @@ export {
 export {
   buildIntegratePrompt,
   parseIntegrateOutput,
-  applyIntegrate
+  applyIntegrate,
+  buildGlobalReflectPrompt,
+  parseGlobalReflectOutput
 } from './integrate.js';
 
 // 叙事：按周/里程碑写"这段时间我过成了什么样"

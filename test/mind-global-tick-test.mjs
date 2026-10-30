@@ -442,22 +442,24 @@ console.log('\n=== 3. 节拍 ===');
   await orch.tickOnce({ now: now0, chat });
   const second = await orch.tickOnce({ now: now0 + 60000, chat });
   check(calls === 1, `同一节拍内只调一次模型（实际 ${calls}）`);
-  check(second.skipped === 'not-due', `未到点直接跳过（${second.skipped}）`);
+  check(second.skipped === 'too-soon' || second.skipped === 'not-due', `刚醒过就跳过（${second.skipped}）`);
 }
 
-// ── 4. 没候选不花模型调用 ───────────────────────────────────────────────
-console.log('\n=== 4. 没候选 ===');
+// ── 4. 没有候选也要给她选择权（目录，不是门禁）──────────────────────────
+console.log('\n=== 4. 没有候选 ===');
 {
-  const { orch } = mk({
+  const { orch, mind } = mk({
     chats: ['private:111'],
     lastTsOf: { 'private:111': now0 - 60000 },  // 刚聊过，低于 proactiveIdleMs
     unreadOf: {},
     relations: {}
   });
   let called = false;
-  const r = await orch.tickOnce({ now: now0, chat: async () => { called = true; return { message: { content: '{}' } }; } });
-  check(!called, '没有候选时不调模型');
-  check(r.results?.some((x) => x.reason === 'no-candidate'), '结果是 no-candidate');
+  const r = await orch.tickOnce({ now: now0, chat: async () => { called = true; return { message: { content: '今天不想说话' } }; } });
+  // 设计 §7.3：候选只是提示，目录保证总有可做的事。没有候选也要让她自己决定不做。
+  check(called === true, '没有候选时仍然给她一次选择的机会（而不是系统替她决定）');
+  check(r.results?.some((x) => x.action === 'idle'), '她可以选择什么都不做');
+  check(mind.listAttempts({ limit: 3 }).some((a) => a.action === 'idle'), 'idle 也落账（能看出"她想过但没做"）');
 }
 
 console.log(`\n全局唤醒：通过 ${pass}，失败 ${fail}`);

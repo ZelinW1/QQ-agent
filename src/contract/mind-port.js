@@ -38,7 +38,7 @@ export const WRITERS = Object.freeze({
 });
 
 /** bodyApply 接受的键。白名单，未识别的键直接报错——不静默忽略。 */
-const BODY_PATCH_KEYS = ['rev', 'spend', 'counterDelta', 'sleep', 'snooze', 'proactiveAt'];
+const BODY_PATCH_KEYS = ['rev', 'spend', 'counterDelta', 'sleep', 'snooze', 'proactiveAt', 'impulseAt', 'lastFreeWakeAt'];
 const COUNTER_KEYS = ['todayProactive', 'todayDecisions'];
 const SLEEP_KEYS = ['state', 'nightKey', 'since', 'stayUps'];
 
@@ -84,6 +84,7 @@ function toBody(tick = {}) {
     snoozes: { ...snoozes },
     proactiveAt: { ...proactiveAt },
     impulseAt: pickNumber(tick.impulseAt),
+    lastFreeWakeAt: pickNumber(tick.lastFreeWakeAt),
     // 账本字段：运行时做额度/冷却判断要用。
     // 以前这些没进 body，调用方读到的是 undefined ——
     // "今日决策次数""反思冷却""主动间隔"全部形同虚设（不是报错，是静默失效）。
@@ -96,6 +97,8 @@ function toBody(tick = {}) {
     lastReflectAttemptAt: pickNumber(tick.lastReflectAttemptAt),
     lastIntegrateAt: pickNumber(tick.lastIntegrateAt),
     lastNarrativeAt: pickNumber(tick.lastNarrativeAt),
+    lastGlobalReflectAt: pickNumber(tick.lastGlobalReflectAt),
+    todayGlobalReflects: pickNumber(tick.todayGlobalReflects),
     // 动作节律：每个动作的下次可做时间与平均间隔。
     actionStats: plainObject(tick.actionStats) ? { ...tick.actionStats } : {}
   };
@@ -208,6 +211,9 @@ export function createRuntimePort(mind, deps = {}) {
       if (!plainObject(patch.snooze)) return fail('invalid_patch', 'snooze 必须是对象');
       next.snoozes = { ...patch.snooze };
     }
+
+    if (patch.impulseAt !== undefined) next.impulseAt = pickNumber(patch.impulseAt);
+    if (patch.lastFreeWakeAt !== undefined) next.lastFreeWakeAt = pickNumber(patch.lastFreeWakeAt);
 
     if (patch.proactiveAt !== undefined) {
       if (!plainObject(patch.proactiveAt)) return fail('invalid_patch', 'proactiveAt 必须是对象');
@@ -526,7 +532,9 @@ export function createRuntimePort(mind, deps = {}) {
           lastIntegrateAt: pickNumber(tick.lastIntegrateAt),
           todayIntegrates: pickNumber(tick.todayIntegrates),
           today: String(tick.today || ''),
-          lastNarrativeAt: pickNumber(tick.lastNarrativeAt)
+          lastNarrativeAt: pickNumber(tick.lastNarrativeAt),
+          lastGlobalReflectAt: pickNumber(tick.lastGlobalReflectAt),
+          todayGlobalReflects: pickNumber(tick.todayGlobalReflects)
         };
       } catch { return { lastIntegrateAt: 0, todayIntegrates: 0, today: '', lastNarrativeAt: 0 }; }
     },
@@ -548,6 +556,22 @@ export function createRuntimePort(mind, deps = {}) {
         log.error?.(`[mind-port] 关闭观测失败：${error?.message || error}`);
         return fail('store-error', '关闭观测失败');
       }
+    },
+
+    /** 记一条 moment（一次模型调用及其子运行的用量与配置摘要）。 */
+    recordMoment(input = {}) {
+      try {
+        const m = mind.appendMoment?.(input);
+        return m ? ok({ moment: m }) : fail('store-error', 'moment 未写入');
+      } catch (error) {
+        log.error?.(`[mind-port] moment 写入失败：${error?.message || error}`);
+        return fail('store-error', 'moment 写入失败');
+      }
+    },
+
+    /** 最近的 moment（只读）。 */
+    moments({ limit = 20 } = {}) {
+      try { return mind.listMoments?.({ limit }) || []; } catch { return []; }
     },
 
     /** 记一次动作的成/败，用于重算节律（间隔与 nextRipeAt）。 */
@@ -777,7 +801,9 @@ export function createAdminPort(mind) {
     'queryEvents', 'countUnreflected', 'listReflections', 'listActions', 'appendEvent',
     'appendReflection', 'appendAction', 'logSizes', 'clearLogs',
     // B/C/D 期新增的读取：控制台要展示她"惦记什么、做过什么、这几周过成什么样"。
-    'listNarratives', 'listObservations', 'listIntentions', 'listStrongSince', 'undigestedSelfNotes'
+    'listNarratives', 'listObservations', 'listIntentions', 'listStrongSince', 'undigestedSelfNotes',
+    // 维护/对账：只在启动与迁移用，走管理口
+    'voidStaleObservations', 'getStoreVersion', 'setStoreVersion', 'appendMoment', 'listMoments'
   ];
   const port = { apiVersion: MIND_PORT_API, get enabled() { return true; } };
   for (const name of methods) {
@@ -818,6 +844,8 @@ export function createNoopRuntimePort() {
     resolveObservation: nothing,
     markObservationsHit: nothing,
     recordActionStat: nothing,
+    recordMoment: nothing,
+    moments() { return []; },
     openObservations() { return []; },
     integrationState() { return { lastIntegrateAt: 0, todayIntegrates: 0, today: '', lastNarrativeAt: 0 }; },
     self() { return null; },

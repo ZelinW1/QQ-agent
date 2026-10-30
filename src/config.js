@@ -386,6 +386,12 @@ export const DEFAULT_CONFIG = {
     reflectCooldownMs: 7200000,     // 两次反思最小间隔（2 小时）
     reflectMaxEvents: 60,           // 单次反思最多喂多少条事件（控制上下文长度）
     reflectMaxRelations: 8,         // 单次反思最多带几份关系档案
+    // 唤醒时钟（设计 §7.3）：她自己的冲动用指数分布采样；醒来后重抽。
+    wake: {
+      impulseMeanHours: 4,          // 平均 4 小时醒一次（λ0）
+      tooSoonMs: 300000,            // 刚醒过 5 分钟内不重复醒
+      maxGapHours: 6                // 没有任何到期源时的兜底上限
+    },
     // 自动化调度：与心智心跳**相互独立**——没有内心生活的人也照样要发定时消息。
     automation: {
       enabled: true,
@@ -404,7 +410,14 @@ export const DEFAULT_CONFIG = {
       maxPerDay: 2,                 // 一天最多两次（再多就该怀疑是不是在自我感动）
       cooldownMs: 21600000,         // 6 小时：短时间内反复整合只会反复改写
       minNotes: 3,                  // 至少攒了几条笔记才值得跑一次
-      afterChatReflections: 12      // 会话反思累计这么多条，触发一次
+      afterChatReflections: 12,     // 会话反思累计这么多条，触发一次 L4
+      // L2b：全局反思（看跨会话的模式，**不**改自我）。与 L4 分开限流：
+      // L2b 可以一天几次，L4 一个月一次——混在一起会让"她多久变一次"失控。
+      l2b: {
+        maxPerDay: 2,
+        cooldownMs: 21600000,
+        afterChatReflections: 12
+      }
     },
     // —— 作息 ——
     // 夜里睡着：不决策、不进消息、早上醒来再读积压。
