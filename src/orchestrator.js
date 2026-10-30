@@ -2571,8 +2571,9 @@ export class Orchestrator {
 
     try {
       const prev = Number(this.mindPortAdmin.getStoreVersion?.()) || 0;
-      this.mindPortAdmin.setStoreVersion?.(2, { upgradedFrom: prev });
-      out.storeVersion = 2;
+      // 与迁移工具的目标版本一致：3 = 当前结构（v0 旧数据由 mind:migrate 升级）。
+      this.mindPortAdmin.setStoreVersion?.(3, { upgradedFrom: prev });
+      out.storeVersion = 3;
       this.mindPortAdmin.writeBootRecord?.({ at: now, prevAt: prevBootAt, downtimeMs });
       out.downtimeMs = downtimeMs;
       this.mindPort.recordMoment({

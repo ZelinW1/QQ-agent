@@ -151,6 +151,9 @@ src/runtime/automator.js      ✅ 任务执行（走同一条八步管线）
 src/runtime/wake.js           ✅ 唤醒时钟：冲动采样、nextWakeAt、八种门禁（纯函数）
 src/runtime/project-tools.js  ✅ 工具投影：traits.modes、菜单与工具表同源
 src/runtime/agent-loop.js     ✅ 统一模型循环 + 配置摘要
+src/mind/service.js           ✅ 领域服务：反思/整合/叙事的写回（R14 收口）
+src/mind/migrate.js           ✅ 存储迁移：dry-run/备份/校验/原子换名/回滚
+scripts/mind-migrate.mjs      ✅ `npm run mind:migrate` / `mind:rollback`
 ```
 
 没有建的：`tool-registry` 迁入、`permissions`、`capability-bus`、`nested`、
@@ -1106,7 +1109,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | §7.3 唤醒时钟 | `impulseAt` + `nextWakeAt = min(...)` + 门禁 | 已落地：`src/runtime/wake.js`；tick 持久化 `impulseAt`，醒来重抽；门禁 8 种 | ✅ |
 | §4.7 嵌套 / traits.composite | depth/ancestry/预算合并 | `send_proactive` 声明 `composite:{runtime:'chat',maxDepth:1}`；父 moment 记 `usage.subtree`；ancestry 未做（只有 depth） | 🟡 |
 | §8 Moment / usage 分桶 | moments + usage.self/subtree + configDigest | 已落地：chat/free/boot 三类 moment；attempts 带 `momentId` | ✅ |
-| §9 迁移与启动对账 | schemaVersion/备份/回滚/过期观测清理 | 已做：`.schema.json`、过期观测作废、冲动重抽、欠账补偿、boot moment；完整迁移工具（§9.3）未做 | 🟡 |
+| §9 迁移与启动对账 | schemaVersion/备份/回滚/过期观测清理 | 已做：启动对账 + 迁移 CLI（dry-run、备份、校验、原子换名、回滚）；**首启自动迁移未接**（旧数据要手动 `npm run mind:migrate`） | 🟡 |
 
 
 **2026-10-30 第二轮（P0 审查意见）**
@@ -1152,7 +1155,19 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
   用 `now`，于是"判定行"的 at 早于"开观测行"，列表按 at 取大又把 pending 读了回来。
   现在两种字段都认，列表改为"追加日志后写为准"。
 
-**仍未修**：权限 scopes、完整迁移工具（§9.3）、嵌套 ancestry 与预算合并。
+**2026-10-31 第五轮（迁移工具）**
+
+1. `src/mind/migrate.js`：体检（v0 判定、条数统计）→ 复制到 `mind.tmp/` → 补字段
+   （self/relations 的 version/changelog/selfNotes）→ openLoops 转意图 → actions.jsonl
+   回填 actionStats → 校验条数/版本 → 备份到 data 根 → 原子换名 → 写 `migration.json`。
+2. 幂等：`.schema.json` 已达标直接跳过；dry-run 不落盘。
+3. 回滚：换回备份，清掉迁移生成的新文件，保留 `mind.failed-*` 现场。
+4. CLI：`npm run mind:migrate -- --from <dir> --dry-run` / `--in-place` /
+   `npm run mind:rollback -- --to <备份>`。
+5. 启动对账的 storeVersion 对齐到 3。
+
+**仍未修**：首启自动迁移（设计 §9.2 的"检测到 v0 自动跑一次"未接，当前需手动执行；
+避免在 store 打开期间换目录带来竞态）、权限 scopes、嵌套 ancestry 与预算合并。
 **2026-10-30 已修（审查发现的硬伤）**
 
 1. 自由时刻提示词要求"只输出 JSON"、执行侧只认 `tool_calls` —— 已改成工具调用语义（模型照提示词做不再必然 idle）。

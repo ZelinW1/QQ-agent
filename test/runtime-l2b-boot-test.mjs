@@ -122,7 +122,7 @@ console.log('\n=== 4. 启动对账 ===');
   check(obs.verdict === 'void', '作废后不再挂在待复查队列');
   check(out.impulseResampled === true, '过期冲动被重抽');
   check(Number(store.getTick().impulseAt) >= NOW - 1000, '重抽后不会仍停在十天前');
-  check(store.getStoreVersion() === 2, '写上存储版本');
+  check(store.getStoreVersion() === 3, '写上存储版本（与迁移目标一致）');
   check(store.listMoments({ limit: 3 }).some((m) => m.runtime === 'boot'), '落一条 boot moment');
 
   const again = await orch.bootReconcile({ now: NOW });
