@@ -1096,7 +1096,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R17 | D2 自动化 | 已交付；2026-10-30 修复了"默认配置下不调度" | ✅ |
 | R18 | 自动化界面 | 已交付 | ✅ |
 | §4.2.1 兜底事件 | 一次对话时刻至少一条事件 | 2026-10-30 补上（`runtime.chat`）；此前完全没实现 | ✅（新） |
-| §4.5 观测回声 | 每个成功动作开观测、回话即命中、按结局调频 | 2026-10-30 补上 hit/missed + `closeObservationsForChat` + `actionStats/nextRipeAt`；footprint 仅 chat/self | 🟡（新） |
+| §4.5 观测回声 | 每个成功动作开观测、回话即命中、按结局调频 | 已补 echo/utility 两类；回声闭环 + 内部效用信号 + `attempts<5`/0.6×/3×/`dormant` | ✅ |
 | §5.3 聊天工具过管线 | 八步管线覆盖所有工具调用 | 2026-10-30 已接：validate / permission / execute / audit 四步，工具调用落 attempts（`kind:'tool'`） | ✅ |
 | §5.4 权限 scopes | 按范围授权 | 只做了 `traits.modes` 的场合控制；scopes 未实现 | 🟡 |
 | §5.2 工具 schema v3 | `schemaVersion` / `traits` / `kind` / `scopes` / `owner` | `schemaVersion=2` + `traits.modes/scopes[]` 已落地；`kind/owner` 未做 | 🟡 |
@@ -1125,8 +1125,18 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
    做成才了结它；同目标的其他动作不再误关。
 7. 反思/整合/L2b/叙事也落 moment（runtime 分别为 reflect / integrate / narrative）。
 
-**仍未修**：`usage.self` 对象化、内部动作的效用信号（当前仍用回声）、`attempts < 5` 的保守
-策略与 `dormant` 标记、权限 scopes、R14 的 store 别名、完整迁移工具。
+**2026-10-30 第三轮（P1）**
+
+1. 效用信号：动作自己声明 `utility`——`echo`（主动说话，看对方回没回）、`debt`（整理，看欠账
+   有没有变少/有没有产出）、`recall`（回想，看翻出几条）、`none`（记一笔/挂意图/再撑一会儿，
+   不制造假信号）。内部动作不再因为"对方回话"被记成有用。
+2. 观测分两类：`echo` 才吃回声、才会 pending 等窗口；`utility` 在动作结束时立刻判定并关闭。
+3. 节律规则：`attempts < 5` 只做 ±5% 微调（一两次运气不算数）；≥5 次后成功率 ≥0.8 → 间隔
+   ×0.6，≤0.3 → ×3，中间 ×0.9/×1.2；成功率 <0.2 → `dormant`（退场一周，到期自动回来）。
+4. `usage` 对象化：moments 里 `usage.self/subtree` 统一为 `{tokens, calls}`（旧数字自动兼容）。
+5. 菜单过滤 `dormant`（此前只有 `nextRipeAt`）。
+
+**仍未修**：权限 scopes、R14 的 store 别名、完整迁移工具（§9.3）、嵌套 ancestry 与预算合并。
 **2026-10-30 已修（审查发现的硬伤）**
 
 1. 自由时刻提示词要求"只输出 JSON"、执行侧只认 `tool_calls` —— 已改成工具调用语义（模型照提示词做不再必然 idle）。
@@ -1172,7 +1182,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | A1 | `MindPort` + 空实现；只迁 chat 侧 + routes 侧 | `runtime.mindPort = off` | ✅ 已做，无开关 |
 | A2 | 工具 schema v3 + `schemaVersion` 缺省 1 | `tools.schemaV3 = off` | 未做 |
 | A3 | 八步管线强制 + 慢工具超时 | `pipeline.enforce = false` | 管线已落地（C1/C2），超时按 execute 统一 60s |
-| A4 | Moment（含 `usage.self`/`subtree`）+ Usage 分桶 | `runtime.moment = off` | **已做**：chat/free/boot/reflect/integrate/narrative 六类；attempts 带 `momentId`，嵌套带 `parentMomentId/childMomentIds`。`usage` 仍是数字（对象化留到 P1） |
+| A4 | Moment（含 `usage.self`/`subtree`）+ Usage 分桶 | `runtime.moment = off` | **已做**：chat/free/boot/reflect/integrate/narrative 六类；attempts 带 `momentId`，嵌套带 `parentMomentId/childMomentIds`；`usage` 为 `{tokens, calls}` 对象 |
 | A5 | 配置 schema 分层注册 | `config.layered = off` | 未做 |
 
 **验收**

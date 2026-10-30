@@ -132,6 +132,11 @@ console.log('\n=== 3b. 观察闭环与节律 ===');
   check(rows.some((o) => o.chatKey === 'private:1' && o.verdict === 'hit'), '这个会话的观测变成 hit');
   check(rows.some((o) => o.chatKey === 'private:2' && o.verdict === 'pending'), '别的会话不受影响');
 
+  // utility 观测不吃回声：它做完就已经判完，不该被"对方回话"再关一次
+  store.appendObservation({ chatKey: 'private:3', action: 'organize', kind: 'utility', expect: '欠账变少', at: now - 60000 });
+  const closed2 = store.closeObservationsForChat('private:3', { verdict: 'hit', now });
+  check(closed2.closed === 0, '回话只关闭 echo 观测');
+
   // 动作节律：命中缩短间隔，落空拉长间隔
   const a = store.recordActionStat('send_proactive', { ok: true, now });
   check(a.stat.meanIntervalMs < 4 * 3600000, `命中后间隔变短（${a.stat.meanIntervalMs}）`);
@@ -140,6 +145,34 @@ console.log('\n=== 3b. 观察闭环与节律 ===');
   check(b.stat.meanIntervalMs > a.stat.meanIntervalMs, `落空后间隔变长（${a.stat.meanIntervalMs} → ${b.stat.meanIntervalMs}）`);
   check(b.stat.fail === 1 && b.stat.ok === 1, '成/败次数分别累计');
   check(store.getTick().actionStats.send_proactive.nextRipeAt === b.stat.nextRipeAt, '写进 tick（重启后仍然生效）');
+}
+
+// ── 3d. 节律规则：少样本保守、0.6×/3×、dormant ──────────────────────────
+console.log('\n=== 3d. 节律规则 ===');
+{
+  const store = mkStore();
+  const now = Date.now();
+  const H = 3600000;
+
+  // 前 5 次不放大：一次命中只做 5% 微调
+  const first = store.recordActionStat('send_proactive', { ok: true, now });
+  check(first.stat.attempts === 1, '第一次也记 attempts');
+  check(first.stat.meanIntervalMs > 3 * H, `样本不足 5 次不做大幅调频（${Math.round(first.stat.meanIntervalMs / H * 10) / 10}h）`);
+
+  // 连续 5 次命中 → 0.6×（4h → 2.4h 左右）
+  const s2 = mkStore();
+  for (let i = 0; i < 5; i++) s2.recordActionStat('send_proactive', { ok: true, now });
+  const good = s2.getTick().actionStats.send_proactive;
+  check(good.rate >= 0.8, '成功率到 0.8 以上');
+  check(good.meanIntervalMs <= 0.65 * 4 * H, `很有效 → 间隔缩短到 0.6×（${Math.round(good.meanIntervalMs / H * 100) / 100}h）`);
+
+  // 连续 5 次落空 → 3×，并进入 dormant
+  const s3 = mkStore();
+  for (let i = 0; i < 5; i++) s3.recordActionStat('send_proactive', { ok: false, now });
+  const bad = s3.getTick().actionStats.send_proactive;
+  check(bad.meanIntervalMs >= 3 * 4 * H, `基本没用 → 间隔放大（${Math.round(bad.meanIntervalMs / H)}h）`);
+  check(bad.dormant === true, '成功率 < 20% → dormant');
+  check(bad.dormantUntil > now, 'dormant 有一周的退场期');
 }
 // ── 3c. 收到消息即命中：不需要等窗口到期 ────────────────────────────────
 console.log('\n=== 3c. 回声命中 ===');

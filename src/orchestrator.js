@@ -3081,6 +3081,9 @@ export class Orchestrator {
     const menuActions = D.availableActions(state, allActions).filter((a) => {
       if (a.id === 'idle') return false;   // 什么都不做 = 不调工具，不需要一个动作
       const stat = actionStats[a.id];
+      // dormant：试过至少 5 次、成功率不到 20% 的动作暂时退场一周。
+      // 不是永久删除 —— 一周后自动回来，也许那时候情况变了。
+      if (stat?.dormant && Number(stat.dormantUntil) > now) return false;
       return !stat || !Number(stat.nextRipeAt) || Number(stat.nextRipeAt) <= now;
     });
     const blockedMenu = D.blockedActions(state, allActions)
@@ -3213,6 +3216,12 @@ export class Orchestrator {
                 if (intentCandidate && (!intentCandidate.intentionAction || intentCandidate.intentionAction === attempt.name)) {
                   attempt.intentionId = String(intentCandidate.intentionId);
                 }
+                // 整理类动作的效用信号：先记下"整理前欠了多少"，做完再对比。
+                if (attempt.action.utility === 'debt') {
+                  try {
+                    attempt.debtBefore = this.mindPort.reflectionDebt({ chatKey: attempt.target, since: lastReflectAt });
+                  } catch { /* 读不到就按"没变化"判 */ }
+                }
                 // 复合动作执行期间挂上父 moment：子运行落 moment 时会记 parentMomentId。
                 const prevParent = this.parentMomentId;
                 if (attempt.action.composite) this.parentMomentId = momentId;
@@ -3252,20 +3261,66 @@ export class Orchestrator {
                 });
                 if (record?.id) attemptIds.push(record.id);
 
-                // 每个做成了的动作开一条观测；只读工具与"没做成"不开
+                // 观测分两种（设计 §4.5.2）：
+                //   echo   —— 靠对方回话判（只有主动说话这类"有观众"的动作）
+                //   utility —— 动作自己的效用信号，做完立刻判，不等窗口
+                // remember / plan / stay_up 没有短期可观测效用：不开观测、不记节律，
+                // 宁可没有统计，也不拿"对方回了话"冒充它有用。
                 if (ok && attempt.action) {
-                  try {
-                    this.mindPort.openObservation({
-                      attemptId: record?.id || '',
-                      momentId,
-                      intentionId: attempt.intentionId || '',
-                      chatKey: attempt.target || '',
-                      action: attempt.name,
-                      footprint: attempt.target ? 'chat' : 'self',
-                      expect: attempt.name === 'send_proactive' ? '对方应该会回一句' : `${attempt.name} 之后会有点变化`,
-                      now
-                    });
-                  } catch { /* 观察是锦上添花 */ }
+                  const utility = attempt.action.utility || 'echo';
+                  if (utility === 'echo') {
+                    try {
+                      this.mindPort.openObservation({
+                        kind: 'echo',
+                        attemptId: record?.id || '',
+                        momentId,
+                        intentionId: attempt.intentionId || '',
+                        chatKey: attempt.target || '',
+                        action: attempt.name,
+                        footprint: attempt.target ? 'chat' : 'self',
+                        expect: attempt.name === 'send_proactive' ? '对方应该会回一句' : `${attempt.name} 之后会有点变化`,
+                        now
+                      });
+                    } catch { /* 观察是锦上添花 */ }
+                  } else if (utility !== 'none') {
+                    // 效用信号：每个动作自己定义"什么算有用"
+                    let hit = false;
+                    let note = '';
+                    try {
+                      if (utility === 'debt') {
+                        const after = this.mindPort.reflectionDebt({ chatKey: attempt.target, since: lastReflectAt });
+                        const produced = Number(attempt.exec?.produced?.relations?.length || 0)
+                          + Number(attempt.exec?.produced?.selfNotes || 0);
+                        hit = after < Number(attempt.debtBefore ?? after) || produced > 0;
+                        note = hit ? `整理后欠账 ${attempt.debtBefore ?? '?'} → ${after}` : '整理完没变化';
+                      } else if (utility === 'recall') {
+                        const recalled = Number(attempt.exec?.recalled) || 0;
+                        hit = recalled > 0;
+                        note = hit ? `翻出 ${recalled} 条` : '什么都没翻到';
+                      }
+                    } catch { /* 判定失败按没用来 */ }
+                    try {
+                      const ob = this.mindPort.openObservation({
+                        kind: 'utility',
+                        attemptId: record?.id || '',
+                        momentId,
+                        intentionId: attempt.intentionId || '',
+                        chatKey: attempt.target || '',
+                        action: attempt.name,
+                        footprint: 'self',
+                        expect: utility === 'debt' ? '整理完欠账会变少' : '能翻出点东西',
+                        now
+                      });
+                      if (ob?.id) {
+                        this.mindPort.resolveObservation(ob.id, {
+                          verdict: hit ? 'hit' : 'missed',
+                          note: note || (hit ? '有用' : '没用上'),
+                          now
+                        });
+                      }
+                      this.mindPort.recordActionStat(attempt.name, { ok: hit, now });
+                    } catch { /* 观察是锦上添花 */ }
+                  }
                 }
 
                 if (ok && attempt.action) {

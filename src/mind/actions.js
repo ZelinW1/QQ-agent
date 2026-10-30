@@ -21,6 +21,8 @@ export const ACTIONS = [
     label: '主动找她说句话',
     description: '有话想说、有件挂心的事、或者真的很久没联系了才用',
     energy: 25,
+    // 效用信号（设计 §4.5.2）：这个动作有没有用，看"对方回没回"。
+    utility: 'echo',
     // 嵌套运行（设计 §4.7）：这个动作会叫起一次完整的聊天运行。
     // 深度上限 1：她可以在自由时刻找人说话，但那场对话里不能再套一层。
     composite: { runtime: 'chat', maxDepth: 1 },
@@ -41,6 +43,9 @@ export const ACTIONS = [
     label: '整理一下记忆',
     description: '把攒着的事想清楚、更新对人的看法',
     energy: 15,
+    // 效用信号：整理完"没整理的事"有没有变少 / 有没有产出新看法。
+    // 不能拿"对方回没回"判它 —— 整理是给自己做的，不需要观众。
+    utility: 'debt',
     when: (s) => {
       if (Number(s.unreflected) < Number(s.organizeMinEvents || 3)) {
         return { ok: false, reason: '还没攒下多少事' };
@@ -64,6 +69,8 @@ export const ACTIONS = [
     label: '回想一些事',
     description: '翻翻更早的记忆，看看有没有值得想起的',
     energy: 5,
+    // 效用信号：这次回想有没有真的翻出东西。
+    utility: 'recall',
     // 回想不会改变现场（旧事还在那儿），所以做完要给候选打个盹，
     // 否则同一个"有件事没问"会让她每隔十分钟回想一次。
     snoozeMs: 3 * 3600 * 1000,
@@ -76,6 +83,9 @@ export const ACTIONS = [
     label: '记一笔',
     description: '把刚才聊到的、值得留下的写进记忆；拿不准可以先回想一下再写',
     energy: 5,
+    // 写记忆/挂意图/再撑一会儿没有短期可观测的效用：
+    // 宁可没有统计，也不要拿"对方回了话"冒充它有用。
+    utility: 'none',
     async run(ctx, args) {
       return ctx.remember(args || {});
     }
@@ -85,6 +95,7 @@ export const ACTIONS = [
     label: '记下要做的事',
     description: '把"过一会儿/明天想做的事"记下来，到点你会想起来；不用现在做',
     energy: 3,
+    utility: 'none',
     async run(ctx, args) {
       return ctx.plan(args || {});
     }
@@ -94,6 +105,7 @@ export const ACTIONS = [
     label: '再撑一会儿',
     description: '还不想睡，再待一会儿再睡',
     energy: 0,
+    utility: 'none',
     when: (s) => {
       if (Number(s.inSleepWindow) !== 1) return { ok: false, reason: '还不到睡觉的点' };
       if (Number(s.stayUps) >= Number(s.maxStayUp)) return { ok: false, reason: '不能再撑了，该睡了' };

@@ -172,6 +172,11 @@ console.log('\n=== 9. 契约 ===');
   check(send?.composite?.runtime === 'chat', '主动说话声明了嵌套运行（chat）');
   check(Number(send?.composite?.maxDepth) === 1, '嵌套深度上限 1（她可以在自由时刻找人，但那场对话里不能再套）');
   const others = ['organize', 'remember', 'recall', 'plan', 'stay_up'].map((id) => getAction(id));
+  const { getAction: getA } = await import(src('src/mind/actions.js'));
+  check(getA('send_proactive').utility === 'echo', '主动说话靠回声判效用');
+  check(getA('organize').utility === 'debt', '整理靠"欠账变少"判效用（不看有没有人回）');
+  check(getA('recall').utility === 'recall', '回想靠"翻出几条"判效用');
+  check(['remember', 'plan', 'stay_up'].every((id) => getA(id).utility === 'none'), '没有短期效用的动作不制造假信号');
   check(others.every((a) => !a?.composite), '其它动作不嵌套（避免预算层层叠加）');
 
   const { getTool } = await import(src('src/tool-registry.js'));

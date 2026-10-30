@@ -119,7 +119,7 @@ console.log('\n=== 4. 记账 ===');
   check(moments.length === 1, '落了一条 moment');
   const mo = moments[0];
   check(mo.runtime === 'free', 'runtime 标为 free');
-  check(mo.usage.self >= 120, `用量记下（${mo.usage.self}）`);
+  check(mo.usage.self.tokens >= 120, `用量记下（${mo.usage.self.tokens}）`);
   check(typeof mo.configDigest === 'string' && mo.configDigest.length > 0, '带配置摘要（能分清"她变了"还是"配置变了"）');
   check((mo.attempts || []).length >= 1, 'moment 关联到 attempt');
 
@@ -165,8 +165,8 @@ console.log('\n=== 6. 嵌套 ===');
   ];
   await orch.tickOnce({ now: NOW, chat: async (m, t) => replies.shift()(m, t) });
   const mo = mind.listMoments({ limit: 1 })[0];
-  check(mo.usage.subtree === 500, `子运行（聊天）的用量计入 subtree（${mo.usage.subtree}）`);
-  check(mo.usage.self > 0 && mo.usage.self < mo.usage.subtree, '父/子用量分开记');
+  check(mo.usage.subtree.tokens === 500, `子运行（聊天）的用量计入 subtree（${mo.usage.subtree.tokens}）`);
+  check(mo.usage.self.tokens > 0 && mo.usage.self.tokens < mo.usage.subtree.tokens, '父/子用量分开记');
   check(mo.actions.includes('send_proactive'), '动作记在 moment 上');
   check((mo.childMomentIds || []).includes('mo_child_1'), '父 moment 记得住子时刻');
 }

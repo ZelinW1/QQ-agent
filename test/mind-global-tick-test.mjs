@@ -427,6 +427,23 @@ console.log('\n=== 2l. 动作节律 ===');
   const r = await orch.tickOnce({ now: now0, chat: async () => { calls++; return { message: replies.shift() || { content: '' } }; } });
   check(calls >= 1, '这一轮仍然会调模型（还有别的动作可选）');
   check(!(r.results || []).some((x) => x.action === 'send_proactive'), '歇着的动作不会被选中执行');
+
+  // dormant：成功率长期过低 → 一周内不再尝试
+  const { orch: o2, mind: m2 } = mk({
+    chats: ['private:111'],
+    lastTsOf: { 'private:111': now0 - 3 * H },
+    unreadOf: {},
+    relations: { 111: { nickname: '王哥' } }
+  });
+  m2.updateTick({
+    actionStats: {
+      send_proactive: { ok: 0, fail: 6, attempts: 6, rate: 0, lastAt: now0, meanIntervalMs: 12 * H, nextRipeAt: now0 - 1, dormant: true, dormantUntil: now0 + 6 * 86400000 }
+    }
+  });
+  o2.wake = async () => ({ ok: true });
+  let called2 = 0;
+  const r2 = await o2.tickOnce({ now: now0, chat: async () => { called2++; return { message: { content: '算了' } }; } });
+  check(!(r2.results || []).some((x) => x.action === 'send_proactive'), 'dormant 的动作不在菜单里');
 }
 // ── 3. 同一次唤醒不会重复决策 ───────────────────────────────────────────
 console.log('\n=== 3. 节拍 ===');

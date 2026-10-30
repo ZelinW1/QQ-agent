@@ -60,6 +60,17 @@ const LIMITS = {
 
 // ── 小工具 ───────────────────────────────────────────────────────────────
 
+/** usage 归一化：数字 → `{tokens, calls}`，对象原样补齐（旧数据是数字）。 */
+function normUsage(value) {
+  if (value && typeof value === 'object') {
+    return {
+      tokens: Number(value.tokens ?? value.totalTokens ?? value.total_tokens) || 0,
+      calls: Number(value.calls) || 0
+    };
+  }
+  return { tokens: Number(value) || 0, calls: 0 };
+}
+
 function isPlainObject(v) {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 }
@@ -930,9 +941,11 @@ export class MindStore {
       at,
       runtime: String(input.runtime || 'free'),
       outcome: String(input.outcome || 'done'),
+      // usage 统一成对象：数字与对象都能进（旧数据是数字），出来一律是对象。
+      // 这样"花了多少 token / 调了几次模型"可以并存，不用再加字段。
       usage: {
-        self: Number(input.usage?.self) || 0,
-        subtree: Number(input.usage?.subtree) || 0
+        self: normUsage(input.usage?.self),
+        subtree: normUsage(input.usage?.subtree)
       },
       configDigest: String(input.configDigest || ''),
       parentMomentId: String(input.parentMomentId || ''),
@@ -1046,6 +1059,9 @@ export class MindStore {
       // 无法回写到具体动作的节律统计上（成长也就无从谈起）。
       action: str(input.action, 40),
       footprint: str(input.footprint, 40),
+      // echo = 靠对方回声判；utility = 动作自己的效用信号，立刻判。
+      // 内部动作（整理/回想）不能用回声，否则"没人回"会被误判成"整理没用"。
+      kind: ['echo', 'utility'].includes(input.kind) ? input.kind : 'echo',
       expect: str(input.expect, 200),
       dueAt: at + windowMs,
       checkAfterAt: at + Math.min(windowMs, LIMITS.observationCheckMs),
@@ -1093,6 +1109,8 @@ export class MindStore {
     const actions = [];
     for (const ob of latest.values()) {
       if (ob.verdict !== 'pending' || String(ob.chatKey || '') !== key) continue;
+      // 只有回声观测会被"对方回话"关闭；效用观测在动作结束时已经判完。
+      if (ob.kind && ob.kind !== 'echo') continue;
       appendJsonl(this.#observationsFile(), {
         ...ob,
         verdict,
@@ -1124,16 +1142,42 @@ export class MindStore {
     const cur = stats[id] && typeof stats[id] === 'object' ? { ...stats[id] } : {};
     const at = Number(now) || Date.now();
     const HOUR = 3600000;
-    const mean = Math.max(HOUR / 2, Math.min(24 * HOUR, Number(cur.meanIntervalMs) || 4 * HOUR));
-    const nextMean = ok
-      ? Math.max(HOUR / 2, Math.round(mean * 0.9))
-      : Math.min(24 * HOUR, Math.round(mean * 1.2));
+    const MIN = 30 * 60000;
+    const MAX = 24 * HOUR;
+    const DEF = 4 * HOUR;
+
+    const okCount = (Number(cur.ok) || 0) + (ok ? 1 : 0);
+    const failCount = (Number(cur.fail) || 0) + (ok ? 0 : 1);
+    const attempts = okCount + failCount;
+    const rate = attempts > 0 ? okCount / attempts : 0;
+
+    // 样本太少（<5）时不做大幅调频：一两次运气不代表"这招有用/没用"。
+    // 这条规则是防"她刚学会一个动作就以为自己擅长/永远放弃"。
+    let mean = Math.max(MIN, Math.min(MAX, Number(cur.meanIntervalMs) || DEF));
+    if (attempts >= 5) {
+      if (rate >= 0.8) mean = Math.max(MIN, Math.round(mean * 0.6));        // 很有效 → 更频繁
+      else if (rate <= 0.3) mean = Math.min(MAX, Math.round(mean * 3));      // 基本没用 → 明显退避
+      else mean = Math.round(mean * (ok ? 0.9 : 1.2));                       // 中间地带小幅调整
+    } else {
+      // 前 5 次只微调（±5%），主要用于把 nextRipeAt 排开，避免连续重试。
+      mean = Math.max(MIN, Math.min(MAX, Math.round(mean * (ok ? 0.95 : 1.05))));
+    }
+
+    // dormant：试了至少 5 次、成功率不到 20% → 暂时退场一周。
+    // 不是永久删除：一周后自动回到菜单，也许那时候情况变了。
+    const dormant = attempts >= 5 && rate < 0.2;
+    const dormantUntil = dormant ? at + 7 * 86400000 : 0;
+
     stats[id] = {
-      ok: (Number(cur.ok) || 0) + (ok ? 1 : 0),
-      fail: (Number(cur.fail) || 0) + (ok ? 0 : 1),
+      ok: okCount,
+      fail: failCount,
+      attempts,
+      rate: Number(rate.toFixed(3)),
       lastAt: at,
-      meanIntervalMs: nextMean,
-      nextRipeAt: at + nextMean
+      meanIntervalMs: mean,
+      nextRipeAt: at + mean,
+      dormant,
+      dormantUntil
     };
     this.updateTick({ actionStats: stats });
     return { ok: true, stat: stats[id] };

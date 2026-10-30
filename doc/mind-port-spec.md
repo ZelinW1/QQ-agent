@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **A1 已交付**（`2df1990..a09e48b`），C 期补了口子。剩余偏差：`recordAttempt` 只写 attempts、不自动开观测（观测由编排器显式开）；`recordOutcome` 未实现；事件 `momentId/attemptId` 已落盘但聊天写入尚未填值。 |
+| 状态 | **A1 已交付**（`2df1990..a09e48b`），C 期补了口子。剩余偏差：`recordAttempt` 只写 attempts、不自动开观测（观测由编排器显式开）；`recordOutcome` 未实现；事件 `momentId/attemptId` 已落盘但聊天写入尚未填值。观测分 `echo`/`utility` 两类；`recordActionStat` 采用 `attempts<5` 保守、0.6×/3×、`dormant` 规则。 |
 | 对应设计 | [action-runtime-design.md §3.3](./action-runtime-design.md#33-mindport领域端口)、§12 A 期 |
 | 读者 | 实现 A1 的开发者；以及评审"领域层是否真的解耦"的人 |
 | 最后更新 | 2026-10-29 |
