@@ -551,7 +551,7 @@ export function createRuntimePort(mind, deps = {}) {
     markObservationsHit(chatKey, nowAt = now()) {
       try {
         const r = mind.closeObservationsForChat?.(chatKey, { verdict: 'hit', now: nowAt });
-        return ok({ closed: Number(r?.closed) || 0 });
+        return ok({ closed: Number(r?.closed) || 0, actions: Array.isArray(r?.actions) ? r.actions : [] });
       } catch (error) {
         log.error?.(`[mind-port] 关闭观测失败：${error?.message || error}`);
         return fail('store-error', '关闭观测失败');
@@ -803,7 +803,8 @@ export function createAdminPort(mind) {
     // B/C/D 期新增的读取：控制台要展示她"惦记什么、做过什么、这几周过成什么样"。
     'listNarratives', 'listObservations', 'listIntentions', 'listStrongSince', 'undigestedSelfNotes',
     // 维护/对账：只在启动与迁移用，走管理口
-    'voidStaleObservations', 'getStoreVersion', 'setStoreVersion', 'appendMoment', 'listMoments'
+    'voidStaleObservations', 'getStoreVersion', 'setStoreVersion', 'appendMoment', 'listMoments',
+    'decayActionStats', 'readBootRecord', 'writeBootRecord'
   ];
   const port = { apiVersion: MIND_PORT_API, get enabled() { return true; } };
   for (const name of methods) {

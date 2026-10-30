@@ -46,9 +46,10 @@
 | C 期 | `bd9b92a` `59d5719` `46b99fa` `05f3f33` | 八步管线；自由时刻换引擎（素材进提示词、动作过管线、留尝试与观察）；编排器零 store 直连；`QQ_AGENT_NO_MIND=1` 领域缺席守门 |
 | D 期 | （见 §12 R16–R18） | 延时意图：`plan` 挂意图 → 到期候选 → 做成即了结；观察队列闭环（hit/missed + 节律调频）；自动化：cron + 任务表 + 独立调度 + 失败退避 + 设置页 |
 | 审查修复 | 2026-10-30 | 提示词/工具循环一致化、自动化独立调度、月度兜底重入、兜底事件、观测回声闭环、账本与额度失效的一批修复 |
+| C 主干 P0 修复 | 2026-10-30 | 命中回写节律（void 不计）、只读工具走统一可用性、permission 顺序与超时、父子 moment、停机对账、意图动作关联 |
 | C 主干 | 2026-10-30 | `src/runtime/wake.js`（impulseAt/nextWakeAt/门禁）、`agent-loop.js`（统一循环）、`project-tools.js`（traits 投影 + 只读工具）、`moments` 与 usage 分桶、chat 工具过管线、启动对账、L2b 与 L4 拆分 |
 
-当前规模：69 个测试入口（`npm test`）；`src/orchestrator.js` 约 3.5k 行、`src/contract/mind-port.js` 约 800 行、
+当前规模：70 个测试入口（`npm test`）；`src/orchestrator.js` 约 3.5k 行、`src/contract/mind-port.js` 约 800 行、
 `src/runtime/` 9 个模块（管线 / 素材 / 观察 / cron / 自动化 / 唤醒 / 投影 / 循环）。设计里 A 期的硬指标（删掉 `src/mind/` 仍能启动）**已达成**。
 
 自己验证一遍（不需要读代码）：

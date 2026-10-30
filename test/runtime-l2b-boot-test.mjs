@@ -129,5 +129,33 @@ console.log('\n=== 4. 启动对账 ===');
   check(again.skipped === true, '同一进程只对账一次');
 }
 
+// ── 5. 按停机时长对账 ───────────────────────────────────────────────────
+console.log('\n=== 5. 停机对账 ===');
+{
+  const store = mkStore();
+  const orch = mkOrch(store);
+  const downtime = 2 * 86400000;
+  // 上一次启动是两天前
+  store.writeBootRecord({ at: NOW - downtime, downtimeMs: 0 });
+  // 停机期间就到期的一条观测：补判只会是编的 → 作废
+  store.appendObservation({ chatKey: 'private:1', action: 'send_proactive', expect: '会回', at: NOW - 4 * 86400000, windowMs: 24 * H });
+  store.appendObservation({ chatKey: 'private:2', action: 'send_proactive', expect: '会回', at: NOW - 1 * 86400000, windowMs: 72 * H });
+
+  // 节律：停机前学的均值 12h
+  store.updateTick({
+    actionStats: { send_proactive: { ok: 3, fail: 1, lastAt: NOW - downtime, meanIntervalMs: 12 * H, nextRipeAt: NOW + 12 * H } }
+  });
+
+  const out = await orch.bootReconcile({ now: NOW });
+  check(out.downtimeMs >= downtime - 1000, `对账算出停机时长（${Math.round(out.downtimeMs / H)} 小时）`);
+  check(out.voided === 1, `只作废"停机前就已到期"的那条（${out.voided}）`);
+  const rows = store.listObservations({ limit: 10 });
+  check(rows.find((o) => o.chatKey === 'private:2')?.verdict === 'pending', '停机期间才到期的那条先留着（还能判）');
+  check(out.statsDecayed === 1, '停机超过 6 小时 → 节律向默认值衰减');
+  const mean = Number(store.getTick().actionStats.send_proactive.meanIntervalMs);
+  check(mean < 12 * H && mean > 4 * H, `12h 的均值衰减到默认与旧值之间（${Math.round(mean / H)}h）`);
+  const saved = store.readBootRecord();
+  check(Number(saved.downtimeMs) >= downtime - 1000, 'boot 记录里存下停机时长（下次可追溯）');
+}
 console.log(`\nL2b 与对账：通过 ${pass}，失败 ${fail}`);
 if (fail > 0) process.exit(1);

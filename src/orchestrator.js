@@ -116,6 +116,8 @@ export class Orchestrator {
     this.globalReflecting = false;     // 正在做全局反思（L2b，防重入）
     this.bootReconciled = false;       // 启动对账每进程只跑一次
     this.activeChatMomentId = '';      // 当前聊天运行所属的 moment（工具记账用）
+    this.parentMomentId = '';          // 嵌套运行时，父 moment 的 id
+    this.lastChatMomentId = '';        // 最近一次聊天运行所属的 moment（wake 返回值用）
     // 自动化任务表：与心智数据同级，但**不属于领域**（它是配置，不是她的经历）。
     this.automations = createAutomationStore({ dir: automationDir || DATA_DIR });
     this.tickTimer = null;             // 心跳主循环（60s 扫描一次）
@@ -263,8 +265,14 @@ export class Orchestrator {
     if (this.asleep) return;
     // 醒着收到消息 = 有活动。用于睡眠的"安静宽限"：刚还在聊天就不会立刻睡着。
     this.lastActivityAt = Date.now();
-    // 对方回话了：把这个会话里等回应的观测一次关成 hit（回声闭环）。
-    try { this.mindPort.markObservationsHit?.(chatKey); } catch { /* 不影响收消息 */ }
+    // 对方回话了：把这个会话里等回应的观测一次关成 hit，并**当场回写节律**。
+    // 只关不记等于白关：她的动作间隔不会因为"有人回她"而变短，"成长"就只是日志。
+    try {
+      const hit = this.mindPort.markObservationsHit?.(chatKey);
+      for (const action of (hit?.actions || [])) {
+        this.mindPort.recordActionStat(action, { ok: true, now: Date.now() });
+      }
+    } catch { /* 不影响收消息 */ }
     // 运行中 / 倒计时中：消息保持未读（不判定、不重置），由会话结束的
     // drain 路径补判定（见 wake 末尾的 drain 注释）。
     if (this.runningChats.has(chatKey)) return;
@@ -825,8 +833,9 @@ export class Orchestrator {
       sessionId: session?.id || '',
       status: session?.status || '',
       rounds: Number(session?.rounds) || 0,
-      // 用量带上：嵌套运行（自由时刻叫人说话）要把子运行的消耗算进父级 moment。
+      // 用量与 momentId 带上：嵌套运行要把子运行的消耗与子时刻记进父级。
       usage: session?.usage || null,
+      momentId: this.lastChatMomentId || '',
       sent: (Array.isArray(session?.sent) ? session.sent : [])
         .filter((x) => x?.type === 'text' && String(x.text || '').trim())
         .map((x) => String(x.text).slice(0, 300))
@@ -967,6 +976,8 @@ export class Orchestrator {
     const chatMomentId = `mo_${runStartedAt}_${randInt(1000, 9999)}`;
     const prevMomentId = this.activeChatMomentId || '';
     this.activeChatMomentId = chatMomentId;
+    // wake 的返回值不在 #runAgent 作用域里：用实例字段把子时刻 id 传出去。
+    this.lastChatMomentId = chatMomentId;
     // ── 会话级配置快照（一次运行解析一次）────────────────────────────────
     // 这是"一处解析 + 边界注入"的注入点：下面所有需要"分会话判据"的地方
     // （能否看图/联网、工具启停、技能启停、上下文条数）都从它取，
@@ -1452,18 +1463,21 @@ export class Orchestrator {
         let result = null;
         {
           const startedAt = Date.now();
-          const toolAttempt = { name, def: null, result: null };
+          // def 必须在建管线之前解析：超时值是在 createPipeline 时读取的，
+          // 放到 validate 里再填 def，超时永远是默认值。
+          const defPre = toolDefs.find((d) => d.id === name || d.name === name) || null;
+          const toolAttempt = { name, def: defPre, result: null };
           const toolPipe = createPipeline({
             steps: {
               validate: () => {
-                const def = toolDefs.find((d) => d.id === name || d.name === name) || null;
-                if (!def) return { ok: false, code: 'unknown-tool', message: `没有这个工具：${name}` };
-                toolAttempt.def = def;
+                if (!defPre) return { ok: false, code: 'unknown-tool', message: `没有这个工具：${name}` };
+                toolAttempt.def = defPre;
                 return undefined;
               },
               permission: () => {
                 // 场合权限：工具的 traits.modes 里没有 chat 就不许在聊天里调用。
-                const modes = toolAttempt.def?.traits?.modes;
+                // 用构造时解析好的 def（permission 早于 validate，不能等它填）。
+                const modes = defPre?.traits?.modes;
                 if (Array.isArray(modes) && modes.length && !modes.includes('chat')) {
                   return { ok: false, code: 'not-permitted', message: '这个工具不在聊天场合开放' };
                 }
@@ -1500,7 +1514,7 @@ export class Orchestrator {
                 } catch { /* 记账失败不影响工具结果 */ }
               }
             },
-            executeTimeoutMs: Math.max(1000, Number(toolAttempt.def?.timeoutMs) || 120000)
+            executeTimeoutMs: Math.max(1000, Number(defPre?.timeoutMs) || 120000)
           });
           const outcome = await toolPipe.run({});
           result = outcome.ok && toolAttempt.result
@@ -1624,6 +1638,7 @@ export class Orchestrator {
         outcome: session.sent.length > 0 ? 'acted' : 'idle',
         usage: { self: Number(session.usage?.totalTokens) || 0, subtree: 0 },
         configDigest: digestConfig(cfg),
+        parentMomentId: this.parentMomentId || '',
         attempts: [],
         actions: (Array.isArray(session.sent) ? session.sent : []).map((x) => x?.type || '').filter(Boolean).slice(0, 20)
       });
@@ -1999,6 +2014,14 @@ export class Orchestrator {
       rawSummary: raw.slice(0, 300)
     });
 
+    // 反思也是一次时刻：用量单独记，才能回答"她一天想几次、花在哪"。
+    this.mindPort.recordMoment({
+      at: now, runtime: 'reflect', outcome: 'ok',
+      usage: { self: Number(res?.usage?.total_tokens ?? res?.usage?.totalTokens) || 0, subtree: 0 },
+      configDigest: digestConfig(getConfig()),
+      attempts: [], actions: []
+    });
+
     return { ok: true, empty: parsed.empty === true, applied, rejected };
   }
 
@@ -2065,6 +2088,12 @@ export class Orchestrator {
         usage: res?.usage || null
       });
       store.updateTick({ today, todayGlobalReflects: usedToday + 1, lastGlobalReflectAt: now });
+      this.mindPort.recordMoment({
+        at: now, runtime: 'integrate', outcome: 'ok',
+        usage: { self: Number(res?.usage?.total_tokens ?? res?.usage?.totalTokens) || 0, subtree: 0 },
+        configDigest: digestConfig(cfg),
+        attempts: [], actions: []
+      });
       return { ok: true, notes: added, empty: parsed.empty === true };
     } finally {
       this.globalReflecting = false;
@@ -2151,6 +2180,13 @@ export class Orchestrator {
         rawSummary: raw.slice(0, 300)
       });
 
+      this.mindPort.recordMoment({
+        at: now, runtime: 'integrate', outcome: 'ok',
+        usage: { self: Number(res?.usage?.total_tokens ?? res?.usage?.totalTokens) || 0, subtree: 0 },
+        configDigest: digestConfig(getConfig()),
+        attempts: [], actions: []
+      });
+
       // 整合完成之后顺手看一眼：是不是该写周记了、是不是该做月度兜底。
       this.maybeNarrative();
       return { ok: true, empty: parsed.empty === true, applied, rejected };
@@ -2232,6 +2268,12 @@ export class Orchestrator {
         title: parsed.data.title || '',
         period: { from, to: now },
         usage: res?.usage || null
+      });
+      this.mindPort.recordMoment({
+        at: now, runtime: 'narrative', outcome: 'ok',
+        usage: { self: Number(res?.usage?.total_tokens ?? res?.usage?.totalTokens) || 0, subtree: 0 },
+        configDigest: digestConfig(getConfig()),
+        attempts: [], actions: []
       });
       return { ok: true, narrative: r.narrative };
     } finally {
@@ -2514,11 +2556,32 @@ export class Orchestrator {
     const cfg = getConfig();
     const m = cfg.mind || {};
     const meanMs = Math.max(900000, (Number(m.wake?.impulseMeanHours) || 4) * 3600000);
-    const out = { ok: true, voided: 0, impulseResampled: false, reflected: false, storeVersion: 0 };
+    const out = { ok: true, voided: 0, impulseResampled: false, reflected: false, storeVersion: 0, downtimeMs: 0, statsDecayed: 0 };
+
+    // 停机时长：上一次启动记录的时刻。没有记录说明是首次启动或旧数据。
+    let downtimeMs = 0;
+    let prevBootAt = 0;
+    try {
+      const prev = this.mindPortAdmin.readBootRecord?.();
+      prevBootAt = Number(prev?.at) || 0;
+      if (prevBootAt > 0) downtimeMs = Math.max(0, Number(now) - prevBootAt);
+    } catch { /* 读不到就当作首次启动 */ }
 
     try {
-      out.voided = this.mindPortAdmin.voidStaleObservations?.({ olderThanMs: 7 * 86400000, now })?.voided || 0;
+      // 过期观测的截止线取"7 天前"与"上次启动时刻"里更晚的那个：
+      // 停机期间到期的观测，世界发生了什么没人看见，补判只会是编的。
+      out.voided = this.mindPortAdmin.voidStaleObservations?.({
+        olderThanMs: 7 * 86400000, now, beforeAt: prevBootAt
+      })?.voided || 0;
     } catch { /* 单步失败不影响其它 */ }
+
+    // 停机超过 6 小时：把学到的动作节律向默认值衰减一半。
+    // 否则停机一周后，"最近做成的频率"描述的还是一周前的她。
+    if (downtimeMs > 6 * 3600000) {
+      try {
+        out.statsDecayed = this.mindPortAdmin.decayActionStats?.({ now })?.adjusted || 0;
+      } catch { /* 不影响其它步骤 */ }
+    }
 
     let body = this.mindPort.bodyRead();
     const impulseAt = Number(body.impulseAt) || 0;
@@ -2548,6 +2611,8 @@ export class Orchestrator {
       const prev = Number(this.mindPortAdmin.getStoreVersion?.()) || 0;
       this.mindPortAdmin.setStoreVersion?.(2, { upgradedFrom: prev });
       out.storeVersion = 2;
+      this.mindPortAdmin.writeBootRecord?.({ at: now, prevAt: prevBootAt, downtimeMs });
+      out.downtimeMs = downtimeMs;
       this.mindPort.recordMoment({
         id: `mo_boot_${now}`,
         at: now,
@@ -2877,7 +2942,11 @@ export class Orchestrator {
       drainDueObservations({
         port: this.mindPort,
         now,
-        onResolved: ({ action, verdict }) => this.mindPort.recordActionStat(action, { ok: verdict === 'hit', now })
+        // 只有 hit / missed 参与调频；void（判不了）不能当成失败去惩罚动作。
+        onResolved: ({ action, verdict }) => {
+          if (verdict === 'void') return;
+          this.mindPort.recordActionStat(action, { ok: verdict === 'hit', now });
+        }
       });
       body = this.mindPort.bodyRead();
     } catch { /* 观测失败不影响心跳 */ }
@@ -2973,7 +3042,8 @@ export class Orchestrator {
         text: `你之前说要做的事：${it.text}`,
         chatKey: String(it.chatKey || ''),
         name: '',
-        intentionId: it.id
+        intentionId: it.id,
+        intentionAction: String(it.action || '')
       });
     }
     if (sleep.inWindow && !sleep.asleep) {
@@ -3051,6 +3121,7 @@ export class Orchestrator {
     const executed = [];
     let idleReason = '';
     let childUsage = 0;
+    const childMomentIds = [];
     const attemptIds = [];
     const callModel = typeof chat === 'function'
       ? (msgs, tls) => chat(msgs, tls)
@@ -3073,9 +3144,20 @@ export class Orchestrator {
                 return undefined;
               },
               permission: () => {
+                // 注意：pipeline 的顺序是 permission 在 validate 之前。
+                // 这里必须**自己按名字解析**，不能等 validate 填 attempt.action ——
+                // 否则 modes 检查永远看不到动作，等于没生效。
                 const allow = Array.isArray(m.traits?.act) && m.traits.act.length ? m.traits.act : null;
-                if (allow && attempt.action && !allow.includes(attempt.action.id)) {
+                const namedAction = menuActions.find((a) => a.id === attempt.name) || null;
+                const namedRead = readTools.find((t) => t.id === attempt.name) || null;
+                if (allow && namedAction && !allow.includes(namedAction.id)) {
                   return { ok: false, code: 'not-permitted', message: '这个场合不允许做这件事' };
+                }
+                if (namedRead) {
+                  const modes = namedRead.traits?.modes;
+                  if (Array.isArray(modes) && modes.length && !modes.includes('free')) {
+                    return { ok: false, code: 'not-permitted', message: '这个工具不在自由场合开放' };
+                  }
                 }
                 return undefined;
               },
@@ -3107,6 +3189,11 @@ export class Orchestrator {
                 return undefined;
               },
               execute: async () => {
+                // 先定目标：只读工具也需要知道"哪个会话"（翻消息/查成员都要）。
+                // 以前目标在动作分支里才算，读工具拿到的 chatKey 永远是空串。
+                attempt.target = attempt.action
+                  ? this.#pickTargetChat({ args: attempt.args }, candidates, roster.top)
+                  : (String(attempt.args.chatKey || '').trim() || String(roster.top[0]?.chatKey || ''));
                 if (attempt.readTool) {
                   const ctx = {
                     store: this.store,
@@ -3116,20 +3203,34 @@ export class Orchestrator {
                     config: cfg,
                     onebot: this.onebot,
                     emit: this.emit,
-                    chatProfile: resolveChatProfile(attempt.target || roster.top[0]?.chatKey || 'private:0')
+                    chatProfile: resolveChatProfile(attempt.target || 'private:0')
                   };
                   attempt.exec = await attempt.readTool.execute(ctx, attempt.args);
                   return undefined;
                 }
-                attempt.target = this.#pickTargetChat({ args: attempt.args }, candidates, roster.top);
-                attempt.intentionId = String(candidates.find((c) => c.intentionId && c.chatKey === attempt.target)?.intentionId || '');
-                const exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now });
+                // 只有"这条意图打算用的动作"才算了结它；同目标的其他动作不算。
+                const intentCandidate = candidates.find((c) => c.intentionId && c.chatKey === attempt.target);
+                if (intentCandidate && (!intentCandidate.intentionAction || intentCandidate.intentionAction === attempt.name)) {
+                  attempt.intentionId = String(intentCandidate.intentionId);
+                }
+                // 复合动作执行期间挂上父 moment：子运行落 moment 时会记 parentMomentId。
+                const prevParent = this.parentMomentId;
+                if (attempt.action.composite) this.parentMomentId = momentId;
+                let exec;
+                try {
+                  exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now });
+                } finally {
+                  this.parentMomentId = prevParent;
+                }
                 attempt.exec = exec;
                 if (exec && exec.ok === false) {
                   attempt.error = String(exec.reason || '没有做成');
                   return { ok: false, code: 'not-done', message: attempt.error };
                 }
-                if (Number(exec?.usage?.total_tokens) > 0) childUsage += Number(exec.usage.total_tokens);
+                // wake() 返回的是 session.usage（camelCase）；这里两种命名都认。
+                const childTokens = Number(exec?.usage?.totalTokens ?? exec?.usage?.total_tokens) || 0;
+                if (childTokens > 0) childUsage += childTokens;
+                if (exec?.momentId) childMomentIds.push(String(exec.momentId));
                 return undefined;
               },
               audit: (_c, result) => {
@@ -3259,6 +3360,7 @@ export class Orchestrator {
           },
           configDigest: digestConfig(cfg),
           attempts: attemptIds,
+          childMomentIds,
           actions: executed.map((x) => x.action)
         });
       } catch { /* 记账失败不影响心跳 */ }
@@ -3278,17 +3380,24 @@ export class Orchestrator {
    * 读不该产生副作用。工具表里没有的把 traits.modes 补上即可扩展。
    */
   #freeReadTools() {
-    const wanted = new Set([
-      'get_recent_messages', 'get_active_members', 'get_chats',
-      'memory_query', 'web_search'
-    ]);
+    const cfg = getConfig();
+    const wanted = ['get_recent_messages', 'get_active_members', 'get_chats', 'memory_query', 'web_search'];
     const out = [];
-    for (const tool of listTools()) {
-      if (!wanted.has(tool.id)) continue;
-      if (typeof tool.execute !== 'function') continue;
-      if (tool.defaultEnabled === false) continue;
+    for (const id of wanted) {
+      const tool = listTools().find((t) => t.id === id);
+      if (!tool || typeof tool.execute !== 'function') continue;
+      // 可用性必须走**同一套**口径：否则会出现"聊天里看不见、自由时刻却能调"，
+      // 或者反过来 —— memory_query 在心智开启时就该被 hideWithMind 藏掉，
+      // 不能因为自由时刻手写了一份工具表而绕过去。
+      const st = getToolAvailability(id, {
+        toolsCfg: cfg.tools || {},
+        mindEnabled: cfg.mind?.enabled === true,
+        searchEnabled: cfg.webSearch?.enabled !== false,
+        visionEnabled: Boolean(cfg.api?.vision),
+        runtimeContext: {}
+      });
+      if (!st.enabled) continue;
       out.push({ ...tool, traits: { ...(tool.traits || {}), modes: ['free'] } });
-      if (out.length >= 4) break;
     }
     return out;
   }
@@ -3437,7 +3546,9 @@ export class Orchestrator {
       text: text.slice(0, 160),
       dueAt: now + Math.round(hours * 3600000),
       chatKey: target,
-      kind: 'delayed_check'
+      kind: 'delayed_check',
+      // 默认按"主动找他说话"来算；以后 plan 支持别的动作时再传。
+      action: String(args.action || 'send_proactive').slice(0, 40)
     });
     if (!r?.ok) return { ok: false, reason: r?.message || '没能记下来' };
     return {

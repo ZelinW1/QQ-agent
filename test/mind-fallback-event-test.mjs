@@ -80,6 +80,33 @@ await check('3 兜底事件会计入"未反思欠账"', async () => {
   assert.ok(debt >= 1, `欠账应大于 0（实际 ${debt}）`);
 });
 
+await check('4 收到回复 = 观测命中，动作节律当场变短', async () => {
+  // 先挂一条"等着看有没有回应"的观测（相当于她昨晚主动说过话）
+  mind.appendObservation({
+    chatKey: 'private:777', action: 'send_proactive', expect: '会回', at: Date.now() - 3600000
+  });
+  const before = mind.getTick().actionStats?.send_proactive?.meanIntervalMs ?? null;
+
+  llm.state.script[llm.state.requests.length] = { content: '在的' };
+  pushPrivate(777, '小王', '我回来了', 93003);
+  await waitSessionDone('我回来了');
+  await waitFor(() => Boolean(mind.getTick().actionStats?.send_proactive), 3000, '节律被回写');
+
+  const stat = mind.getTick().actionStats.send_proactive;
+  assert.ok(stat, '命中后写入了动作节律');
+  assert.ok(before === null || stat.meanIntervalMs < before, '间隔变短（或首次建立）');
+  assert.ok(mind.listObservations({ limit: 5 }).some((o) => o.verdict === 'hit'), '观测已关闭为 hit');
+});
+
+await check('5 嵌套运行：子时刻记得住父时刻', async () => {
+  app.orchestrator.parentMomentId = 'mo_parent_probe';
+  llm.state.script[llm.state.requests.length] = { content: '嗯' };
+  pushPrivate(777, '小王', '再说一句', 93004);
+  await waitSessionDone('再说一句');
+  const child = mind.listMoments({ limit: 10 }).find((m) => m.parentMomentId === 'mo_parent_probe');
+  assert.ok(child, '聊天 moment 带上 parentMomentId');
+  app.orchestrator.parentMomentId = '';
+});
 console.log(`\n兜底事件：通过 ${pass.length}，失败 ${fail.length}`);
 await env.teardown();
 process.exit(fail.length ? 1 : 0);

@@ -163,6 +163,10 @@ console.log('\n=== 3c. 回声命中 ===');
 
   const rows = store.listObservations({ limit: 5 });
   check(rows[0]?.verdict === 'hit', '收到消息 → 该会话的观测当场命中');
+  const stat = store.getTick().actionStats?.send_proactive;
+  check(Boolean(stat), '命中同时回写了动作节律（不只是关掉观测）');
+  check(Number(stat?.meanIntervalMs) < 4 * 3600000, `命中后期望间隔变短（${stat?.meanIntervalMs}）`);
+  check(Number(stat?.ok) >= 1, '计一次成功');
 }
 // ── 4. 静态：写入路径真的换了 ───────────────────────────────────────────
 console.log('\n=== 4. 写入路径 ===');

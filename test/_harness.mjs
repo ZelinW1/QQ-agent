@@ -297,7 +297,7 @@ export function createMockLLM() {
 }
 
 // ── 启动一套完整环境（mock 全起 + app） ──────────────────────────────────
-export async function bootApp({ config = {}, script = [], mind = undefined } = {}) {
+export async function bootApp({ config = {}, script = [], mind = undefined, setup = null } = {}) {
   const dataDir = makeDataDir('qq-agent-cov-');
   const onebotHttp = createMockOneBotHttp();
   const onebotHttpPort = await listen(onebotHttp.server);
@@ -344,6 +344,10 @@ export async function bootApp({ config = {}, script = [], mind = undefined } = {
   }
   writeConfig(dataDir, merged);
 
+  // 数据目录与配置都就绪之后、应用加载之前：让测试可以注册临时工具。
+  // 必须先于 import app：否则工具注册会先把 config.js 带上默认数据目录，
+  // 后面的 app 读到的配置就不是这份测试配置了（表现为 OneBot 连不上）。
+  if (typeof setup === 'function') await setup();
   const { createApp } = await import('../src/app.js');
   const app = createApp({ log: () => {}, mind });
   const port = await app.start();

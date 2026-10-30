@@ -132,7 +132,7 @@ console.log('\n=== 5. 只读工具 ===');
 {
   const { buildToolDefs } = await import(src('src/tools.js'));
   buildToolDefs();
-  const { orch } = mk();
+  const { orch, mind } = mk();
   let sawTools = null;
   const replies = [
     async (msgs, tools) => {
@@ -146,14 +146,19 @@ console.log('\n=== 5. 只读工具 ===');
   check(names.includes('get_recent_messages'), '自由时刻能看见只读工具（不只是动作）');
   check(names.includes('finish'), 'finish 始终在');
   check(!names.includes('send_message'), '聊天专用工具不会混进自由时刻');
+  check(names.includes('web_search'), 'web_search 不会被前 4 个工具挤掉（不再写死上限）');
+  check(!names.includes('memory_query'), 'memory_query 不会绕过 hideWithMind 混进自由时刻');
   check(r.skipped === '', '只读工具执行不会让这一轮失败');
+  const toolAttempt = mind.listAttempts({ limit: 5 }).find((a) => a.kind === 'read');
+  check(Boolean(toolAttempt), '只读工具调用也落账（kind=read）');
+  check(toolAttempt.chatKey === 'private:111', '只读工具也拿到了会话目标（以前是空串）');
 }
 
 // ── 6. 嵌套预算：子运行的用量算进父 moment ──────────────────────────────
 console.log('\n=== 6. 嵌套 ===');
 {
   const { orch, mind } = mk();
-  orch.wake = async () => ({ ok: true, sent: ['在的'], usage: { total_tokens: 500 } });
+  orch.wake = async () => ({ ok: true, sent: ['在的'], usage: { totalTokens: 500 }, momentId: 'mo_child_1' });
   const replies = [
     async () => ({ message: { tool_calls: [{ id: 's1', type: 'function', function: { name: 'send_proactive', arguments: '{"chatKey":"private:111","reason":"想问问"}' } }] }, usage: { total_tokens: 80 } }),
     async () => ({ message: { content: '好了' } })
@@ -163,6 +168,7 @@ console.log('\n=== 6. 嵌套 ===');
   check(mo.usage.subtree === 500, `子运行（聊天）的用量计入 subtree（${mo.usage.subtree}）`);
   check(mo.usage.self > 0 && mo.usage.self < mo.usage.subtree, '父/子用量分开记');
   check(mo.actions.includes('send_proactive'), '动作记在 moment 上');
+  check((mo.childMomentIds || []).includes('mo_child_1'), '父 moment 记得住子时刻');
 }
 
 console.log(`\n自由时刻骨架：通过 ${pass}，失败 ${fail}`);

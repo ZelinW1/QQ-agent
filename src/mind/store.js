@@ -936,6 +936,8 @@ export class MindStore {
       },
       configDigest: String(input.configDigest || ''),
       parentMomentId: String(input.parentMomentId || ''),
+      // 这一次时刻叫起来的子时刻（嵌套运行）：父与子都能互相追到。
+      childMomentIds: Array.isArray(input.childMomentIds) ? input.childMomentIds.slice(0, 20) : [],
       attempts: Array.isArray(input.attempts) ? input.attempts.slice(0, 50) : [],
       actions: Array.isArray(input.actions) ? input.actions.slice(0, 20) : []
     };
@@ -984,6 +986,9 @@ export class MindStore {
       source: ['chat', 'free', 'user'].includes(input.source) ? input.source : 'chat',
       chatKey: String(input.chatKey || ''),
       kind: str(input.kind, 40) || 'follow_up',
+      // 这条意图"打算怎么完成"：不记的话，只要对同一个人做了任何动作，
+      // 都会被当成"事办完了"（remember 也能关掉"问问他搬家"）。
+      action: str(input.action, 40),
       status: 'open',
       resolvedAt: 0,
       note: ''
@@ -1085,6 +1090,7 @@ export class MindStore {
       if (!prev || Number(row.at) >= Number(prev.at)) latest.set(row.id, { ...(prev || {}), ...row });
     }
     let closed = 0;
+    const actions = [];
     for (const ob of latest.values()) {
       if (ob.verdict !== 'pending' || String(ob.chatKey || '') !== key) continue;
       appendJsonl(this.#observationsFile(), {
@@ -1095,8 +1101,10 @@ export class MindStore {
         at: Number(now) || Date.now()
       });
       closed += 1;
+      // 把动作带出去：命中要回写节律（调用方负责，store 不替它决定语义）。
+      if (ob.action) actions.push(String(ob.action));
     }
-    return { ok: true, closed };
+    return { ok: true, closed, actions };
   }
 
   /**
@@ -1136,8 +1144,13 @@ export class MindStore {
    * 为什么要作废而不是补判：那时候的"有没有变化"已经无法从现有事件里判准；
    * 留一条 pending 只会让队列越积越长。
    */
-  voidStaleObservations({ olderThanMs = 7 * 86400000, now = Date.now() } = {}) {
-    const deadline = Number(now) - Math.max(86400000, Number(olderThanMs) || 0);
+  voidStaleObservations({ olderThanMs = 7 * 86400000, now = Date.now(), beforeAt = 0 } = {}) {
+    // 截止线取两者更晚的：既不能留太久（7 天），也不能留着"停机期间就到期"的观测——
+    // 那段时间世界发生了什么没人看见，补判只会是编的。
+    const deadline = Math.max(
+      Number(now) - Math.max(86400000, Number(olderThanMs) || 0),
+      Number(beforeAt) || 0
+    );
     const latest = new Map();
     for (const row of readJsonl(this.#observationsFile())) {
       if (!row || !row.id) continue;
@@ -1155,6 +1168,40 @@ export class MindStore {
     return { ok: true, voided };
   }
 
+  /**
+   * 停机之后把学到的节律向默认值衰减一半。
+   *
+   * 为什么：动作间隔是"最近做成的频率"学出来的；停机一周后，那个频率描述的
+   * 是一周前的她。完全不衰减会让一次坏运气永久影响之后的行为。
+   */
+  decayActionStats({ now = Date.now(), defaultMs = 4 * 3600000 } = {}) {
+    const tick = this.getTick();
+    const stats = (tick.actionStats && typeof tick.actionStats === 'object') ? { ...tick.actionStats } : {};
+    const keys = Object.keys(stats);
+    if (!keys.length) return { ok: true, adjusted: 0 };
+    const def = Math.max(1800000, Number(defaultMs) || 4 * 3600000);
+    for (const id of keys) {
+      const cur = stats[id] && typeof stats[id] === 'object' ? { ...stats[id] } : {};
+      const mean = Math.max(1800000, Math.min(24 * 3600000, Number(cur.meanIntervalMs) || def));
+      const next = Math.round(mean + (def - mean) * 0.5);
+      cur.meanIntervalMs = next;
+      const ripe = Number(cur.nextRipeAt) || 0;
+      cur.nextRipeAt = ripe ? Math.min(ripe, Number(now) + next) : Number(now) + next;
+      stats[id] = cur;
+    }
+    this.updateTick({ actionStats: stats });
+    return { ok: true, adjusted: keys.length };
+  }
+
+  /** 上一次启动记录（对账用）。 */
+  readBootRecord() {
+    return readJson(path.join(this.root, '.boot.json'), null);
+  }
+
+  writeBootRecord(record) {
+    writeJsonAtomic(path.join(this.root, '.boot.json'), { ...(record || {}), at: Number(record?.at) || Date.now() });
+    return { ok: true };
+  }
   /** 存储结构版本：升级时用它判断要不要迁移/对账。 */
   getStoreVersion() {
     const raw = readJson(path.join(this.root, '.schema.json'), null);

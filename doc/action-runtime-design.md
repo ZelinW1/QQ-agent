@@ -1109,6 +1109,24 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | §9 迁移与启动对账 | schemaVersion/备份/回滚/过期观测清理 | 已做：`.schema.json`、过期观测作废、冲动重抽、欠账补偿、boot moment；完整迁移工具（§9.3）未做 | 🟡 |
 | R14 store 别名 | 编排器零直连 | `this.mind.xxx()` 为 0，但 reflect/integrate/narrative 仍用 `const store = this.mind` 别名 | 🟡 |
 
+**2026-10-30 第二轮（P0 审查意见）**
+
+1. 观测命中直接回写节律：`closeObservationsForChat` 带出被关闭的 action，`onIncoming` 当场
+   `recordActionStat(ok:true)`；`void` 不参与统计（判不了不等于失败）。
+2. 只读工具：执行前先确定 `target` 并给 `ctx.chatKey`；`#freeReadTools` 改走
+   `getToolAvailability`（与聊天同一口径），去掉 4 个上限，`memory_query` 不再绕过 `hideWithMind`。
+3. 管线顺序：permission 早于 validate，改为自己按名字解析工具/动作再判 `traits.modes`；
+   聊天工具超时在构造管线前解析（此前永远取默认值）。
+4. 嵌套记账：`wake()` 返回 `session.usage`（camelCase）与 `momentId`；子聊天 moment 记
+   `parentMomentId`，父 moment 记 `childMomentIds`；用量两种字段名都认。
+5. 启动对账按停机时长：截止线取 `max(7 天前, 上次启动时刻)`；停机 > 6h 时把动作节律向
+   默认值衰减一半；boot 记录写入 `.boot.json` 供下次追溯。
+6. 意图关联：Intention 增加 `action`（默认 `send_proactive`），只有"这条意图打算用的动作"
+   做成才了结它；同目标的其他动作不再误关。
+7. 反思/整合/L2b/叙事也落 moment（runtime 分别为 reflect / integrate / narrative）。
+
+**仍未修**：`usage.self` 对象化、内部动作的效用信号（当前仍用回声）、`attempts < 5` 的保守
+策略与 `dormant` 标记、权限 scopes、R14 的 store 别名、完整迁移工具。
 **2026-10-30 已修（审查发现的硬伤）**
 
 1. 自由时刻提示词要求"只输出 JSON"、执行侧只认 `tool_calls` —— 已改成工具调用语义（模型照提示词做不再必然 idle）。
@@ -1146,14 +1164,15 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 > **这张表是原计划的分步与开关，实际交付以 §12 为准。** 落地时合并成三刀：
 > 端口化（A1）、领域写入收窄（B2）、自由时刻换引擎（C2）——每一步都**没有留开关**，
 > 因为都不存在"第二套可切"的行为：要么经端口、要么不经，没有中间态。
-> A2（工具 schema v3）/ A4（Moment）/ A5（配置分层）**未做**，见 §12 末尾的"未做"清单。
+> A2（工具 schema v3）/ A4（Moment）/ A5（配置分层）**部分落地**。A4 的 A4-1/2/3 已在 C 期主干里实现（`moments.jsonl`、
+> `usage.self/subtree`、`configDigest`），但 `usage` 还是数字不是对象，见 §12 末尾的"未做"清单。
 
 | 步 | 内容 | 原计划的回滚开关 | 实际 |
 |---|---|---|---|
 | A1 | `MindPort` + 空实现；只迁 chat 侧 + routes 侧 | `runtime.mindPort = off` | ✅ 已做，无开关 |
 | A2 | 工具 schema v3 + `schemaVersion` 缺省 1 | `tools.schemaV3 = off` | 未做 |
 | A3 | 八步管线强制 + 慢工具超时 | `pipeline.enforce = false` | 管线已落地（C1/C2），超时按 execute 统一 60s |
-| A4 | Moment（含 `usage.self`/`subtree`）+ Usage 分桶 | `runtime.moment = off` | 未做 |
+| A4 | Moment（含 `usage.self`/`subtree`）+ Usage 分桶 | `runtime.moment = off` | **已做**：chat/free/boot/reflect/integrate/narrative 六类；attempts 带 `momentId`，嵌套带 `parentMomentId/childMomentIds`。`usage` 仍是数字（对象化留到 P1） |
 | A5 | 配置 schema 分层注册 | `config.layered = off` | 未做 |
 
 **验收**
