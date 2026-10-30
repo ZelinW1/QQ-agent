@@ -300,7 +300,9 @@ console.log('\n=== 8. 接线检查 ===');
   check(/this\.#maybeReflect\(chatKey\);/.test(srcText), '运行结束后确实调用了 #maybeReflect');
   check(/#maybeReflect\(chatKey\) \{/.test(srcText), '#maybeReflect 已定义');
   check(/this\.reflectForChat\(chatKey\)/.test(srcText), '#maybeReflect 会触发 reflectForChat');
-  check(srcText.includes("store.updateTick({ lastReflectAttemptAt: now })"), '失败时记录尝试时间');
+  // 失败时推进尝试时间这件事已经移进领域服务（R14：运行时不留 store 直连）
+  const svcText = fs.readFileSync(path.join(ROOT, 'src/mind/service.js'), 'utf8');
+  check(svcText.includes('lastReflectAttemptAt'), '失败时记录尝试时间（领域服务）');
 }
 
 console.log(`\n心智反思：通过 ${pass}，失败 ${fail}`);

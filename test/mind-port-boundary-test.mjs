@@ -79,9 +79,16 @@ console.log('\n=== 3b. 编排器只经端口 ===');
   const orch = read('src/orchestrator.js');
   const calls = [...orch.matchAll(/this\.mind\.(\w+)\s*\(/g)].map((m) => m[1]);
   check(calls.length === 0, 'orchestrator 没有 this.mind.xxx() 直连', [...new Set(calls)].join('、'));
-  // 它还可以把 store 当作**值**交出去（applyReflection 这类领域函数要它），
-  // 但不能自己调方法 —— 那才是绕过写入规程的入口。
+  // 只剩"把 store 当值交出去"也不行：反思/整合/叙事的写回全部收进领域服务，
+  // 运行时要改领域只能经端口或服务。
+  check(!/const\s+store\s*=\s*this\.mind/.test(orch), 'orchestrator 没有 store 别名');
+  check(!/D\.apply(Reflection|Integrate)\s*\(/.test(orch), '领域写回不再由编排器直接调用');
+  check(/this\.mindService\(\)/.test(orch), '反思/整合/叙事经领域服务');
   check(/this\.mindPort\./.test(orch), '确实在用端口（反向确认这条不是空转）');
+
+  // 服务本身属于领域层：可以拿 store，但不能 import 运行时。
+  const svc = read('src/mind/service.js');
+  check(!/from\s+['"]\.\.\/(orchestrator|runtime|contract)/.test(svc), '领域服务不反向依赖运行时');
 }
 // ── 3c. 运行时不得静态依赖领域 ──────────────────────────────────────────
 console.log('\n=== 3c. 领域缺席也能启动 ===');

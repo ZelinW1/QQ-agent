@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **C 期主干已落地**（唤醒时钟 / 统一循环 / 工具投影 / Moment / 嵌套 / 启动对账 / L2b 与 L4 拆分）。仍未做：权限 scopes、完整的 traits 字段、R14 的 store 别名收口。以 §12「验收状态」为准 |
+| 状态 | **C 期主干 + P0/P1 + R14 已落地**（唤醒时钟 / 统一循环 / 工具投影 / Moment / 嵌套 / 启动对账 / L2b 与 L4 / 领域服务）。仍未做：权限 scopes、完整 traits 字段、完整迁移工具、嵌套 ancestry。以 §12「验收状态」为准 |
 | 目标版本 | 0.6 |
 | 代码基准 | `ef5a8ec`（重构起点）→ 当前 HEAD（含 2026-10-30 审查后的修复） |
 | 读者 | 参与本模块实现与验收的开发者 |
@@ -1090,7 +1090,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | R11 | 叙事 + 月度兜底 | 叙事已交付；月度兜底曾有重入 bug（已修） | 🟡 |
 | R12 | C1 八步管线 | 只有通用壳；生产自由侧只注入 5 步，聊天工具完全绕过管线 | 🟡 |
 | R13 | C2 自由时刻换引擎 | 素材只到 self/叙事/意图；没有 scene/recent/relations；工具表仍是手写 7 个动作 | 🟡 |
-| R14 | 编排器零 store 直连 | 字面正则通过，但 `reflectForChat` / `runIntegrate` / `runNarrative` 用 `const store = this.mind` 别名直调 | ⛔（名义成立） |
+| R14 | 编排器零 store 直连 | 2026-10-31 已收口：写回移进 `src/mind/service.js`；无 `this.mind.xxx()`、无 store 别名、不直接调 `applyReflection/applyIntegrate` | ✅ |
 | R15 | C4 领域缺席 | 已交付 | ✅ |
 | R16 | D1 延时意图 | 已交付；`plan` 动作、到期唤醒、做成即了结 | ✅ |
 | R17 | D2 自动化 | 已交付；2026-10-30 修复了"默认配置下不调度" | ✅ |
@@ -1107,7 +1107,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | §4.7 嵌套 / traits.composite | depth/ancestry/预算合并 | `send_proactive` 声明 `composite:{runtime:'chat',maxDepth:1}`；父 moment 记 `usage.subtree`；ancestry 未做（只有 depth） | 🟡 |
 | §8 Moment / usage 分桶 | moments + usage.self/subtree + configDigest | 已落地：chat/free/boot 三类 moment；attempts 带 `momentId` | ✅ |
 | §9 迁移与启动对账 | schemaVersion/备份/回滚/过期观测清理 | 已做：`.schema.json`、过期观测作废、冲动重抽、欠账补偿、boot moment；完整迁移工具（§9.3）未做 | 🟡 |
-| R14 store 别名 | 编排器零直连 | `this.mind.xxx()` 为 0，但 reflect/integrate/narrative 仍用 `const store = this.mind` 别名 | 🟡 |
+
 
 **2026-10-30 第二轮（P0 审查意见）**
 
@@ -1136,7 +1136,23 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 4. `usage` 对象化：moments 里 `usage.self/subtree` 统一为 `{tokens, calls}`（旧数字自动兼容）。
 5. 菜单过滤 `dormant`（此前只有 `nextRipeAt`）。
 
-**仍未修**：权限 scopes、R14 的 store 别名、完整迁移工具（§9.3）、嵌套 ancestry 与预算合并。
+**2026-10-31 第四轮（R14）**
+
+1. 领域服务 `src/mind/service.js`：反思 / L2b / L4 / 叙事的写回（改关系、写自我、压事件、
+   更新账本、写日志）全部收进领域层；编排器只调用服务方法。
+2. 编排器里不再有 `const store = this.mind`，也不直接调 `D.applyReflection/applyIntegrate`；
+   端口补了 `eventsSince / undigestedNotes / latestNarrative` 三个读口。
+3. 边界测试加强：禁止 store 别名、禁止直接调领域写回，并要求服务不反向依赖运行时。
+
+**顺手修的两个 bug（都是"功能看着有、实际不生效"）**
+
+- `state.unreflected` 数的是"候选里有没有 reflect_pending"（最多 1），而 `organize` 的门槛
+  是 3 —— 这个动作从上线起就没被选中过；改成统计各会话的真实欠账条数。
+- 观测的时间戳倒挂：`appendObservation` 只认 `at`，运行时传 `now` 被忽略；`resolveObservation`
+  用 `now`，于是"判定行"的 at 早于"开观测行"，列表按 at 取大又把 pending 读了回来。
+  现在两种字段都认，列表改为"追加日志后写为准"。
+
+**仍未修**：权限 scopes、完整迁移工具（§9.3）、嵌套 ancestry 与预算合并。
 **2026-10-30 已修（审查发现的硬伤）**
 
 1. 自由时刻提示词要求"只输出 JSON"、执行侧只认 `tool_calls` —— 已改成工具调用语义（模型照提示词做不再必然 idle）。
@@ -1146,7 +1162,7 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 5. 观测只有表没有闭环 —— 已补 hit/missed、回话关闭、`actionStats` + `nextRipeAt`（菜单按它过滤）。
 6. 账本正确性：`bodyRead()` 缺 `today/lastReflectAt/actionStats` 等字段（额度与冷却静默失效）、反思只取最新 60 条会丢事件、`countUnreflected` 把摘要算进去、意图被无关动作误关、`lastAction` 读 `undefined`、同一轮内计数不更新、失败也占行动额度 —— 已逐条修。
 
-**仍未修（本轮没动的）**：上面标 ⛔ 的全部，以及 R14 的 store 别名直调。
+**仍未修（本轮没动的）**：上面标 ⛔ 的全部；R14 已于 2026-10-31 收口（见第四轮）。
 
 **本期未做（设计里写了、代码里没有）**
 

@@ -1047,7 +1047,10 @@ export class MindStore {
    * 判不了"有没有用"。所以给一个窗口（默认 72 小时），窗口到期才复查。
    */
   appendObservation(input = {}) {
-    const at = Number(input.at) || Date.now();
+    // 两种调用约定都认：at（存储字段）与 now（运行时习惯）。
+    // 只认 at 时，运行时传 now 会被忽略，open 与 resolve 的时间戳一前一后倒挂，
+    // 列表合并（按 at 取大）就会把已经判定的行又读回 pending。
+    const at = Number(input.at) || Number(input.now) || Date.now();
     const windowMs = Number(input.windowMs) || LIMITS.observationWindowMs;
     const observation = {
       id: nowId('ob', at),
@@ -1266,8 +1269,8 @@ export class MindStore {
     const latest = new Map();
     for (const row of readJsonl(this.#observationsFile())) {
       if (!row || !row.id) continue;
-      const prev = latest.get(row.id);
-      if (!prev || Number(row.at) >= Number(prev.at)) latest.set(row.id, { ...(prev || {}), ...row });
+      // 追加日志：后写的一行就是最新状态，不比 at（判定行的时间可能早于开观测行）。
+      latest.set(row.id, { ...(latest.get(row.id) || {}), ...row });
     }
     const all = [...latest.values()].sort((a, b) => Number(b.at) - Number(a.at));
     return all.slice(0, Math.max(1, Number(limit) || 20));

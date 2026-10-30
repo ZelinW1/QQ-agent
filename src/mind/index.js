@@ -36,6 +36,7 @@ export {
 } from './reflect.js';
 
 // 全局整合：会话级反思的上一层（唯一能自动改写自我的地方）
+export { createMindService } from './service.js';
 export {
   buildIntegratePrompt,
   parseIntegrateOutput,

@@ -94,7 +94,8 @@ console.log('\n=== 3. 门禁 ===');
   check(r3.skipped === 'tired', `体力不足不醒（${r3.skipped}）`);
 
   const { orch: o4, mind: m4 } = mk();
-  m4.updateTick({ today: new Date().toISOString().slice(0, 10), todayDecisions: 999 });
+  const { todayKey } = await import(src('src/util.js'));
+  m4.updateTick({ today: todayKey(), todayDecisions: 999 });
   const r4 = await o4.tickOnce({ now: NOW, chat: idleChat });
   check(r4.skipped === 'decision-cap', `决策次数用完不醒（${r4.skipped}）`);
 }
@@ -171,5 +172,31 @@ console.log('\n=== 6. 嵌套 ===');
   check((mo.childMomentIds || []).includes('mo_child_1'), '父 moment 记得住子时刻');
 }
 
+// ── 7. 内部动作的效用信号（整理 → 欠账变少）─────────────────────────────
+console.log('\n=== 7. 效用信号 ===');
+{
+  const { orch, mind } = mk();
+  // 攒够"该整理"的门槛（默认 reflectAfterEvents=8）
+  for (let i = 0; i < 8; i++) {
+    mind.appendEvent({ chatKey: 'private:111', actorId: '111', actorName: '王哥', text: `第 ${i} 件事`, ts: NOW - (20 - i) * 60000 });
+  }
+  const before = mind.getTick().lastReflectAt || 0;
+  const replies = [
+    async () => ({ message: { tool_calls: [{ id: 'o1', type: 'function', function: { name: 'organize', arguments: '{"reason":"该整理了"}' } }] } }),
+    // organize 内部的反思调用（chat 注入）
+    async () => ({ message: { content: '{"relations":[]}' }, usage: { total_tokens: 60 } }),
+    async () => ({ message: { content: '整理完了' } })
+  ];
+  await orch.tickOnce({ now: NOW, chat: async (m, tl) => replies.shift()(m, tl) });
+
+  const stat = mind.getTick().actionStats.organize;
+  check(Boolean(stat), '整理动作有了节律统计');
+  check(stat.ok >= 1, '这次整理记为有用（欠账变少）');
+  check((mind.getTick().lastReflectAt || 0) > before, '反思窗口确实前移');
+  const obs = mind.listObservations({ limit: 10 }).find((o) => o.action === 'organize');
+  check(Boolean(obs), '整理也落了一条观测');
+  check(obs.kind === 'utility', '整理用效用信号，不挂回声窗口');
+  check(obs.verdict === 'hit', '观测当场判为有用（不需要等谁回话）');
+}
 console.log(`\n自由时刻骨架：通过 ${pass}，失败 ${fail}`);
 if (fail > 0) process.exit(1);

@@ -408,6 +408,23 @@ export function createRuntimePort(mind, deps = {}) {
       } catch { return []; }
     },
 
+    /** 反思窗口：某个会话从 fromTs 之后的全部事件（不做 limit 截断，调用方自己取最早一批）。 */
+    eventsSince({ chatKey, fromTs = 0 } = {}) {
+      try {
+        const list = mind.queryEvents?.({ chatKey, fromTs }) || [];
+        return list.filter((e) => Number(e.ts) > Number(fromTs));
+      } catch { return []; }
+    },
+
+    /** 还没被整合消化的自我笔记（L4 的材料）。 */
+    undigestedNotes() {
+      try { return mind.undigestedSelfNotes?.() || []; } catch { return []; }
+    },
+
+    /** 最新一段叙事（写下一段时要避免重复自己）。 */
+    latestNarrative() {
+      try { return mind.latestNarrative?.() || null; } catch { return null; }
+    },
     recentEvents({ chatKey = '', limit = 5, sinceTs = 0 } = {}) {
       try {
         const events = mind.queryEvents?.({
@@ -847,6 +864,9 @@ export function createNoopRuntimePort() {
     recordActionStat: nothing,
     recordMoment: nothing,
     moments() { return []; },
+    eventsSince() { return []; },
+    undigestedNotes() { return []; },
+    latestNarrative() { return null; },
     openObservations() { return []; },
     integrationState() { return { lastIntegrateAt: 0, todayIntegrates: 0, today: '', lastNarrativeAt: 0 }; },
     self() { return null; },

@@ -844,6 +844,18 @@ export class Orchestrator {
   }
 
   /**
+   * 领域服务（反思/整合/叙事的写回）。懒加载：领域被删掉时为 null，
+   * 调用方已经先判过 this.mind，不会走到这里。
+   */
+  mindService() {
+    if (!this.mind) return null;
+    // 缓存放在另一个字段：字段名不能与方法名相同，否则 this.mindService
+    // 永远先拿到方法本身（第一次调用会返回一个函数）。
+    if (!this.mindDomain) this.mindDomain = D.createMindService?.(this.mind) || null;
+    return this.mindDomain;
+  }
+
+  /**
    * 兜底事件：这一轮对话没写任何事件时，补一条"聊过了"。
    *
    * 为什么必须由系统补：模型不调 `remember_event` 是常态。如果只靠它自觉，
@@ -1935,8 +1947,8 @@ export class Orchestrator {
    * @returns {Promise<{ok:boolean, reason?:string, empty?:boolean, applied?:object, rejected?:object[]}>}
    */
   async reflectForChat(chatKey, { chat = null } = {}) {
-    const store = this.mind;
-    if (!store) return { ok: false, reason: '心智未接入' };
+    const svc = this.mindService();
+    if (!svc) return { ok: false, reason: '心智未接入' };
     const cfg = getConfig();
     const m = cfg.mind || {};
 
@@ -1950,7 +1962,7 @@ export class Orchestrator {
     // 传 limit 等于丢掉老事件。积压超过 maxEvents 时，那些老事件既没被反思，
     // 又会因为 lastReflectAt 前移而永远轮不到 —— 静默丢记忆。
     // 这里改成先取全窗口、再取最早的一批，剩下的下一轮继续。
-    const all = store.queryEvents({ chatKey, fromTs: since + 1 })
+    const all = this.mindPort.eventsSince({ chatKey, fromTs: since + 1 })
       .filter((e) => !(Array.isArray(e.summaryOf) && e.summaryOf.length));
     const events = all.slice(0, maxEvents);
     if (!events.length) return { ok: false, reason: '没有需要整理的事' };
@@ -1960,12 +1972,12 @@ export class Orchestrator {
       .filter((id) => id && id !== 'self'))]
       .slice(0, Math.max(1, Number(m.reflectMaxRelations) || 8));
     const relations = actorIds
-      .map((id) => store.getRelation(id))
-      .filter((r) => r.updatedAt || r.names.length || r.knownFor.length || r.openLoops.length);
+      .map((id) => this.mindPort.relation(id))
+      .filter((r) => r && (r.updatedAt || r.names?.length || r.knownFor?.length || r.openLoops?.length));
 
     const messages = D.buildReflectPrompt({
       botName: cfg.persona?.botName,
-      self: store.getSelf(),
+      self: this.mindPort.self(),
       relations,
       events
     });
@@ -1977,42 +1989,18 @@ export class Orchestrator {
     const newestTs = Math.max(...events.map((e) => Number(e.ts) || 0));
 
     if (!parsed.ok) {
-      store.updateTick({ lastReflectAttemptAt: now });
-      store.appendReflection({
-        // scope 让全局整合能把"会话级"与"全局"分开取（设计 §4.3）
-        scope: 'chat',
-        chatKey, at: now, ok: false, reason: parsed.reason,
-        eventCount: events.length,
-        rawSummary: raw.slice(0, 300)
-      });
+      // scope 让全局整合能把"会话级"与"全局"分开取（设计 §4.3）
+      svc.recordReflectFailure({ chatKey, now, reason: parsed.reason, eventCount: events.length, raw });
       return { ok: false, reason: parsed.reason };
     }
 
-    const { applied, rejected } = parsed.empty
-      ? { applied: { self: false, relations: [], compacted: 0, summaryId: null }, rejected: [] }
-      : D.applyReflection({ store, chatKey, output: parsed.data, inputEvents: events, now });
-
-    const today = todayKey();
-    const sameDay = tick.today === today;
-    store.updateTick({
-      today,
-      todayReflections: (sameDay ? (Number(tick.todayReflections) || 0) : 0) + 1,
-      lastReflectAt: newestTs,
-      lastReflectAttemptAt: now
+    const { applied, rejected } = svc.applyReflectResult({
+      chatKey, since, newestTs, tick, events,
+      output: parsed.data, empty: parsed.empty === true,
+      usage: res?.usage || null, raw, now
     });
     // 反思成功之后顺手看一眼：笔记攒够了没有。整合自己会再判额度与冷却。
     this.maybeIntegrateGlobal();
-    store.appendReflection({
-      scope: 'chat',
-      chatKey, at: now, ok: true, empty: parsed.empty === true,
-      window: { from: since, to: newestTs },
-      eventCount: events.length,
-      produced: applied,
-      rejected: rejected.length,
-      rejectedDetail: rejected.slice(0, 10),
-      usage: res?.usage || null,
-      rawSummary: raw.slice(0, 300)
-    });
 
     // 反思也是一次时刻：用量单独记，才能回答"她一天想几次、花在哪"。
     this.mindPort.recordMoment({
@@ -2035,8 +2023,8 @@ export class Orchestrator {
    * 等于让"最近聊得最多的那个人"决定她是谁。
    */
   async runGlobalReflection({ chat = null, force = false } = {}) {
-    const store = this.mind;
-    if (!store) return { ok: false, reason: '心智未接入' };
+    const svc = this.mindService();
+    if (!svc) return { ok: false, reason: '心智未接入' };
     if (this.globalReflecting) return { ok: false, reason: '正在做全局反思' };
 
     const cfg = getConfig();
@@ -2071,7 +2059,7 @@ export class Orchestrator {
       const parsed = D.parseGlobalReflectOutput(String(res?.message?.content ?? ''));
       const now = Date.now();
       if (!parsed.ok) {
-        store.appendReflection({ scope: 'global', kind: 'l2b', at: now, ok: false, reason: parsed.reason });
+        svc.recordGlobalReflectionFailure({ now, reason: parsed.reason });
         return { ok: false, reason: parsed.reason };
       }
 
@@ -2081,13 +2069,12 @@ export class Orchestrator {
         const r = writer.writeSelfNotes(parsed.data.notes, { momentId: '' });
         added = Number(r?.added) || 0;
       }
-      store.appendReflection({
-        scope: 'global', kind: 'l2b', at: now, ok: true, empty: parsed.empty === true,
-        produced: { notes: added }, summary: parsed.data.summary || '',
+      svc.applyGlobalReflection({
+        now, notesAdded: added, empty: parsed.empty === true,
+        summary: parsed.data.summary || '',
         reflectionCount: reflections.length,
         usage: res?.usage || null
       });
-      store.updateTick({ today, todayGlobalReflects: usedToday + 1, lastGlobalReflectAt: now });
       this.mindPort.recordMoment({
         at: now, runtime: 'integrate', outcome: 'ok',
         usage: { self: Number(res?.usage?.total_tokens ?? res?.usage?.totalTokens) || 0, subtree: 0 },
@@ -2113,8 +2100,8 @@ export class Orchestrator {
    * @param {boolean} [opts.force] 忽略额度/材料门槛（仅测试与手动触发用）
    */
   async runIntegrate({ chat = null, force = false } = {}) {
-    const store = this.mind;
-    if (!store) return { ok: false, reason: '心智未接入' };
+    const svc = this.mindService();
+    if (!svc) return { ok: false, reason: '心智未接入' };
     if (this.integrating) return { ok: false, reason: '正在整合' };
 
     const cfg = getConfig();
@@ -2125,7 +2112,7 @@ export class Orchestrator {
     const tick = this.mindPort.bodyRead();
     const today = todayKey();
     const ledger = this.mindPort.integrationState(); const used = ledger.today === today ? ledger.todayIntegrates : 0;
-    const notes = typeof store.undigestedSelfNotes === 'function' ? store.undigestedSelfNotes() : [];
+    const notes = this.mindPort.undigestedNotes();
     if (!force) {
       if (used >= Math.max(1, Number(ic.maxPerDay) || 2)) return { ok: false, reason: 'quota' };
       const cooldown = Number.isFinite(Number(ic.cooldownMs)) ? Number(ic.cooldownMs) : 21600000;
@@ -2140,10 +2127,10 @@ export class Orchestrator {
       .filter((r) => r.scope === 'chat' && r.ok === true);
     const messages = D.buildIntegratePrompt({
       botName: cfg.persona?.botName,
-      self: store.getSelf(),
+      self: this.mindPort.self(),
       notes,
       reflections,
-      relations: store.listRelations()
+      relations: this.mindPort.relations()
     });
 
     this.integrating = true;
@@ -2154,30 +2141,13 @@ export class Orchestrator {
       const now = Date.now();
 
       if (!parsed.ok) {
-        store.appendReflection({
-          scope: 'global', at: now, ok: false, reason: parsed.reason,
-          noteCount: notes.length, rawSummary: raw.slice(0, 300)
-        });
+        svc.recordIntegrationFailure({ now, reason: parsed.reason, noteCount: notes.length, raw });
         return { ok: false, reason: parsed.reason };
       }
 
-      const { applied, rejected } = parsed.empty
-        ? { applied: { self: false, digested: 0 }, rejected: [] }
-        : D.applyIntegrate({ store, output: parsed.data, noteIds: notes.map((n) => n.id), now });
-
-      store.updateTick({
-        today,
-        todayIntegrates: (this.mindPort.integrationState().today === today ? this.mindPort.integrationState().todayIntegrates : 0) + 1,
-        lastIntegrateAt: now
-      });
-      store.appendReflection({
-        scope: 'global', at: now, ok: true, empty: parsed.empty === true,
-        noteCount: notes.length,
-        produced: applied,
-        rejected: rejected.length,
-        rejectedDetail: rejected.slice(0, 10),
-        usage: res?.usage || null,
-        rawSummary: raw.slice(0, 300)
+      const { applied, rejected } = svc.applyIntegration({
+        now, output: parsed.data, noteIds: notes.map((n) => n.id),
+        empty: parsed.empty === true, usage: res?.usage || null, raw
       });
 
       this.mindPort.recordMoment({
@@ -2206,8 +2176,8 @@ export class Orchestrator {
    * @param {boolean} [opts.force] 忽略材料门槛（手动重写用）
    */
   async runNarrative({ chat = null, force = false } = {}) {
-    const store = this.mind;
-    if (!store) return { ok: false, reason: '心智未接入' };
+    const svc = this.mindService();
+    if (!svc) return { ok: false, reason: '心智未接入' };
     if (this.narrating) return { ok: false, reason: '正在写叙事' };
 
     const cfg = getConfig();
@@ -2219,17 +2189,17 @@ export class Orchestrator {
     const now = Date.now();
     const last = this.mindPort.integrationState().lastNarrativeAt;
     const from = last || (now - Math.max(86400000, Number(nc.everyMs) || 7 * 24 * 3600 * 1000));
-    const reflections = store.listReflections({ limit: 60 })
-      .filter((r) => r.scope === 'global' && r.ok === true && Number(r.at) >= from);
+    const reflections = this.mindPort.reflections({ limit: 60, scope: 'global' })
+      .filter((r) => r.ok === true && Number(r.at) >= from);
     const strong = this.mindPort.strongSince(from);
     if (!force && reflections.length + strong.length < Math.max(1, Number(nc.minMaterials) || 1)) {
       return { ok: false, reason: 'no-material' };
     }
 
-    const previous = store.latestNarrative?.()?.text || '';
+    const previous = this.mindPort.latestNarrative()?.text || '';
     const messages = D.buildNarrativePrompt({
       botName: cfg.persona?.botName,
-      self: store.getSelf(),
+      self: this.mindPort.self(),
       period: { from, to: now },
       reflections,
       strong,
@@ -2244,31 +2214,23 @@ export class Orchestrator {
       if (!parsed.ok) return { ok: false, reason: parsed.reason };
       if (parsed.empty) {
         // 没写出东西也算成功：不重试，只是这段时间确实没什么可写的。
-        store.updateTick({ lastNarrativeAt: now });
+        svc.markNarrativeEmpty({ now });
         return { ok: true, empty: true };
       }
 
-      const r = store.appendNarrative({
+      // 标题只进反思日志（叙事文件保持"她自己写的那段话"这一件事）
+      const r = svc.appendNarrative({
         title: parsed.data.title,
         text: parsed.data.text,
-        source: 'integrate.global',
-        at: now,
         period: { from, to: now },
         materials: {
           reflections: reflections.map((x) => x.id),
           strong: strong.map((x) => `${x.kind}@${x.at}`)
-        }
-      });
-      if (!r.ok) return { ok: false, reason: r.reason };
-
-      // 标题只进反思日志（叙事文件保持"她自己写的那段话"这一件事）
-      store.updateTick({ lastNarrativeAt: now });
-      store.appendReflection({
-        scope: 'global', kind: 'narrative', at: now, ok: true, empty: false,
-        title: parsed.data.title || '',
-        period: { from, to: now },
+        },
+        now,
         usage: res?.usage || null
       });
+      if (!r.ok) return { ok: false, reason: r.reason };
       this.mindPort.recordMoment({
         at: now, runtime: 'narrative', outcome: 'ok',
         usage: { self: Number(res?.usage?.total_tokens ?? res?.usage?.totalTokens) || 0, subtree: 0 },
@@ -3059,7 +3021,11 @@ export class Orchestrator {
       maxProactive: Math.max(1, Number(tickCfg.maxProactivePerDay) || 6),
       minProactiveGapMs: Math.max(0, Number(tickCfg.minProactiveGapMs) || 3600000),
       lastProactiveAt: Math.max(0, ...roster.top.map((r) => Number(this.lastProactiveAt.get(r.chatKey)) || 0)),
-      unreflected: candidates.filter((c) => c.id === 'reflect_pending').length,
+      // 欠账是**总条数**，不是"候选里有没有这一项"。
+      // 以前这里数候选（最多 1），organize 的门槛（≥3）永远达不到 —— 这个动作从来没被选中过。
+      unreflected: roster.top.reduce(
+        (n, r) => n + (this.mindPort.reflectionDebt({ chatKey: r.chatKey, since: lastReflectAt }) || 0), 0
+      ),
       organizeMinEvents: Math.min(3, Math.max(1, Number(m.reflectAfterEvents) || 8)),
       lastReflectAttemptAt: Number(body.lastReflectAttemptAt) || 0,
       reflectCooldownMs: Math.max(60000, Number(m.reflectCooldownMs) || 7200000),
@@ -3227,7 +3193,7 @@ export class Orchestrator {
                 if (attempt.action.composite) this.parentMomentId = momentId;
                 let exec;
                 try {
-                  exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now });
+                  exec = await this.#runMindAction(attempt.action, attempt.target, { args: attempt.args }, { now, chat });
                 } finally {
                   this.parentMomentId = prevParent;
                 }
@@ -3288,7 +3254,10 @@ export class Orchestrator {
                     let note = '';
                     try {
                       if (utility === 'debt') {
-                        const after = this.mindPort.reflectionDebt({ chatKey: attempt.target, since: lastReflectAt });
+                        // 用**最新的** lastReflectAt 算"整理后"：整理已经把窗口前移了，
+                        // 拿动作开始前的 since 去查，前后永远相等（判定永远失败）。
+                        const sinceNow = Number(this.mindPort.bodyRead()?.lastReflectAt) || 0;
+                        const after = this.mindPort.reflectionDebt({ chatKey: attempt.target, since: sinceNow });
                         const produced = Number(attempt.exec?.produced?.relations?.length || 0)
                           + Number(attempt.exec?.produced?.selfNotes || 0);
                         hit = after < Number(attempt.debtBefore ?? after) || produced > 0;
@@ -3508,13 +3477,15 @@ export class Orchestrator {
   }
 
   /** 执行一个动作。ctx 里只给能力，不给她直接碰编排器内部。 */
-  async #runMindAction(action, chatKey, decision, { now }) {    if (!action) return { done: false, reason: '未知动作' };
+  async #runMindAction(action, chatKey, decision, { now, chat = null }) {    if (!action) return { done: false, reason: '未知动作' };
     const ctx = {
       chatKey,
       now,
       store: this.mind,
       proactive: () => this.wake(chatKey, { proactive: true }),
-      reflect: () => this.reflectForChat(chatKey),
+      // 测试/嵌入时可以注入 chat，让"整理"不必真的打网络；
+      // 平时 chat 为 null，reflect 自己走 #memoryChat。
+      reflect: () => this.reflectForChat(chatKey, chat ? { chat } : {}),
       recall: () => this.#recallForChat(chatKey, decision.args, now),
       // "记一笔"：把刚才的事写进她自己的记忆（事件），不是强制流程，
       // 只是自由时间里一个可选动作。
