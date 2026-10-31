@@ -277,3 +277,21 @@ export function rollbackMind({ dataDir, backupDir, now = Date.now() } = {}) {
   }
   return { ok: true, restoredFrom: backup, movedTo: failedDir };
 }
+
+/**
+ * 首启检测（设计 §9.2）：目录存在、版本落后、且确实有内容 → 自动迁移一次。
+ *
+ * 为什么要有"有内容"这个条件：全新安装会创建空目录，空迁移除了制造备份什么也不做。
+ * 由装配根在打开 store 之前调用（迁移会换目录，store 打开后换会有竞态）。
+ *
+ * @param {{dataDir:string, mindDir?:string, now?:number}} opts
+ */
+export function autoMigrateIfNeeded({ dataDir, mindDir = null, now = Date.now() } = {}) {
+  const root = path.resolve(String(mindDir || path.join(String(dataDir || ''), 'mind')));
+  const info = inspectMind(root);
+  if (!info.ok) return { ok: true, skipped: true, reason: '没有心智目录' };
+  if (!info.needsMigration) return { ok: true, skipped: true, reason: '已是当前版本', version: info.version };
+  const total = info.counts.events + info.counts.relations + info.counts.actions + info.counts.intentions;
+  if (total === 0) return { ok: true, skipped: true, reason: '空目录，无需迁移', version: info.version };
+  return migrateMind({ fromDir: root, dataDir: dataDir || path.dirname(root), apply: true, now });
+}

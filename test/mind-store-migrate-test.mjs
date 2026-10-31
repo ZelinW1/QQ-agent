@@ -16,7 +16,7 @@ const check = (cond, msg, detail = '') => {
   else { fail++; console.log('  ✗ ' + msg); if (detail) console.log('      ' + detail); }
 };
 
-const { inspectMind, migrateMind, rollbackMind, TARGET_STORE_VERSION } = await import(src('src/mind/migrate.js'));
+const { inspectMind, migrateMind, rollbackMind, autoMigrateIfNeeded, TARGET_STORE_VERSION } = await import(src('src/mind/migrate.js'));
 
 const NOW = Date.now();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-'));
@@ -115,5 +115,22 @@ console.log('\n=== 4. 回滚 ===');
   check(fs.existsSync(r.movedTo), '回滚保留现场（mind.failed-*）');
 }
 
+// ── 5. 首启自动迁移 ─────────────────────────────────────────────────────
+console.log('\n=== 5. 首启 ===');
+{
+  // 回滚后目录又是 v0、且有内容 → 首启检测应当自动迁移
+  const auto = autoMigrateIfNeeded({ dataDir, now: NOW + 10000 });
+  check(auto.applied === true, '有内容的 v0 目录 → 首启自动迁移');
+  check(JSON.parse(fs.readFileSync(path.join(mindDir, '.schema.json'), 'utf8')).storeVersion === TARGET_STORE_VERSION, '自动迁移也写版本');
+  const again = autoMigrateIfNeeded({ dataDir, now: NOW + 20000 });
+  check(again.skipped === true, '已达标 → 跳过');
+
+  const emptyData = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-empty-'));
+  fs.mkdirSync(path.join(emptyData, 'mind'), { recursive: true });
+  const empty = autoMigrateIfNeeded({ dataDir: emptyData, now: NOW });
+  check(empty.skipped === true && String(empty.reason).includes('空目录'), '空目录不做无意义迁移');
+  const none = autoMigrateIfNeeded({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'mig-none-')), now: NOW });
+  check(none.skipped === true, '没有心智目录 → 跳过');
+}
 console.log(`\n迁移：通过 ${pass}，失败 ${fail}`);
 if (fail > 0) process.exit(1);

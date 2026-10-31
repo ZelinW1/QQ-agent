@@ -163,6 +163,8 @@ function registerAllTools() {
   // 消息发送类
   registerTool({
     id: 'send_message',
+    // 以她的身份发消息：能力范围 chat.send（内置工具默认 allow）。
+    traits: { modes: ['chat'], scopes: ['chat.send'] },
     name: '发送消息',
     description: '发送消息到当前聊天（本工具只能发到本次会话对应的群/私聊；要发到别处用 send_to）。messages 传字符串=发一条；传字符串数组=分多条发送（推荐，更像真人）。只有需要明确"我回的是哪条"时才传 replyToMessageId 引用；需要点名某人才传 atUserId。不要在字符串内部用空格分句。',
     category: 'messaging',
@@ -755,6 +757,7 @@ function registerAllTools() {
 
   registerTool({
     id: 'web_search',
+    traits: { modes: ['chat', 'free'], scopes: ['net.fetch'] },
     name: '联网搜索',
     description: '联网搜索（Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、自己不确定的事实。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
     category: 'web',

@@ -41,6 +41,7 @@ import { buildFreeMaterials, renderMaterials } from './runtime/materials.js';
 import { drainDueObservations } from './runtime/observe.js';
 import { checkGates, describeGate, sampleImpulseAt, nextWakeAt } from './runtime/wake.js';
 import { projectFreeTools } from './runtime/project-tools.js';
+import { checkScopes } from './runtime/permissions.js';
 import { runAgentLoop, digestConfig } from './runtime/agent-loop.js';
 import { createAutomationStore, dueTasks } from './runtime/automation-store.js';
 import { runAutomation } from './runtime/automator.js';
@@ -117,6 +118,7 @@ export class Orchestrator {
     this.bootReconciled = false;       // 启动对账每进程只跑一次
     this.activeChatMomentId = '';      // 当前聊天运行所属的 moment（工具记账用）
     this.parentMomentId = '';          // 嵌套运行时，父 moment 的 id
+    this.momentAncestry = [];          // 运行时祖先链（free → chat …），防嵌套成环
     this.lastChatMomentId = '';        // 最近一次聊天运行所属的 moment（wake 返回值用）
     // 自动化任务表：与心智数据同级，但**不属于领域**（它是配置，不是她的经历）。
     this.automations = createAutomationStore({ dir: automationDir || DATA_DIR });
@@ -986,6 +988,9 @@ export class Orchestrator {
     const runStartedAt = Date.now();
     // 聊天也落 moment：一次运行 = 一次时刻，工具调用与用量都挂在它下面。
     const chatMomentId = `mo_${runStartedAt}_${randInt(1000, 9999)}`;
+    // 上一次运行异常退出可能留下没弹掉的 'chat'：开跑前清掉，避免祖先链越积越长。
+    this.momentAncestry = (this.momentAncestry || []).filter((x) => x !== 'chat');
+    this.momentAncestry.push('chat');
     const prevMomentId = this.activeChatMomentId || '';
     this.activeChatMomentId = chatMomentId;
     // wake 的返回值不在 #runAgent 作用域里：用实例字段把子时刻 id 传出去。
@@ -1493,6 +1498,11 @@ export class Orchestrator {
                 if (Array.isArray(modes) && modes.length && !modes.includes('chat')) {
                   return { ok: false, code: 'not-permitted', message: '这个工具不在聊天场合开放' };
                 }
+                // 能力范围：deny 优先；ask 在没有审批通道时按拒绝处理（fail closed）。
+                const scopeCheck = checkScopes(defPre, cfg);
+                if (!scopeCheck.ok) {
+                  return { ok: false, code: scopeCheck.code, message: scopeCheck.message };
+                }
                 if (blocked) return { ok: false, code: 'blocked-by-skill', message: blocked.reason || '该工具调用被 Skill 拒绝' };
                 return undefined;
               },
@@ -1648,14 +1658,16 @@ export class Orchestrator {
         at: runStartedAt,
         runtime: 'chat',
         outcome: session.sent.length > 0 ? 'acted' : 'idle',
-        usage: { self: Number(session.usage?.totalTokens) || 0, subtree: 0 },
+        usage: { self: { tokens: Number(session.usage?.totalTokens) || 0, calls: Number(session.usage?.calls) || 1 }, subtree: { tokens: 0, calls: 0 } },
         configDigest: digestConfig(cfg),
         parentMomentId: this.parentMomentId || '',
+        ancestry: [...this.momentAncestry],
         attempts: [],
         actions: (Array.isArray(session.sent) ? session.sent : []).map((x) => x?.type || '').filter(Boolean).slice(0, 20)
       });
     } catch { /* 记账失败不影响对话 */ }
     this.activeChatMomentId = prevMomentId;
+    if (this.momentAncestry[this.momentAncestry.length - 1] === 'chat') this.momentAncestry.pop();
 
     // 兜底事件（设计 §4.2.1）：一次对话时刻至少要留下一条记录。
     // 模型不主动记是常态，没有这条，反思的"欠账"永远不会涨 ——
@@ -3097,6 +3109,7 @@ export class Orchestrator {
       ? (msgs, tls) => chat(msgs, tls)
       : (msgs, tls) => chatCompletion({ messages: msgs, tools: tls, toolChoice: 'auto', temperature: 0.2 });
 
+    this.momentAncestry.push('free');
     try {
       const loop = await runAgentLoop({
         callModel,
@@ -3128,6 +3141,10 @@ export class Orchestrator {
                   if (Array.isArray(modes) && modes.length && !modes.includes('free')) {
                     return { ok: false, code: 'not-permitted', message: '这个工具不在自由场合开放' };
                   }
+                  const scopeCheck = checkScopes(namedRead, cfg);
+                  if (!scopeCheck.ok) {
+                    return { ok: false, code: scopeCheck.code, message: scopeCheck.message };
+                  }
                 }
                 return undefined;
               },
@@ -3154,6 +3171,10 @@ export class Orchestrator {
                   const runtime = String(composite.runtime || 'chat');
                   if (!['chat', 'free', 'integrate', 'automate'].includes(runtime)) {
                     return { ok: false, code: 'bad-composite', message: `不认识的嵌套运行时：${runtime}` };
+                  }
+                  // 祖先链里已经有这个运行时 = 成环（free → free 或 chat → free → chat）。
+                  if ((this.momentAncestry || []).includes(runtime)) {
+                    return { ok: false, code: 'cycle', message: '这个运行时已经在嵌套链里了' };
                   }
                 }
                 return undefined;
@@ -3380,10 +3401,11 @@ export class Orchestrator {
           runtime: 'free',
           outcome: executed.length ? 'acted' : 'idle',
           usage: {
-            self: Number(loop.usage) || 0,
-            subtree: Number(childUsage) || 0
+            self: { tokens: Number(loop.usage) || 0, calls: 1 },
+            subtree: { tokens: Number(childUsage) || 0, calls: childMomentIds.length }
           },
           configDigest: digestConfig(cfg),
+          ancestry: [...this.momentAncestry],
           attempts: attemptIds,
           childMomentIds,
           actions: executed.map((x) => x.action)
@@ -3395,6 +3417,7 @@ export class Orchestrator {
       return { results, skipped: '', usage: loop.usage || 0, momentId };
     } finally {
       this.momentDepth = selfDepth;
+      this.momentAncestry.pop();
     }
   }
 

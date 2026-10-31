@@ -100,12 +100,15 @@ await check('4 收到回复 = 观测命中，动作节律当场变短', async ()
 
 await check('5 嵌套运行：子时刻记得住父时刻', async () => {
   app.orchestrator.parentMomentId = 'mo_parent_probe';
+  app.orchestrator.momentAncestry = ['free'];
   llm.state.script[llm.state.requests.length] = { content: '嗯' };
   pushPrivate(777, '小王', '再说一句', 93004);
   await waitSessionDone('再说一句');
   const child = mind.listMoments({ limit: 10 }).find((m) => m.parentMomentId === 'mo_parent_probe');
   assert.ok(child, '聊天 moment 带上 parentMomentId');
+  assert.deepEqual(child.ancestry, ['free', 'chat'], '祖先链记下它是被谁叫起来的');
   app.orchestrator.parentMomentId = '';
+  app.orchestrator.momentAncestry = [];
 });
 console.log(`\n兜底事件：通过 ${pass.length}，失败 ${fail.length}`);
 await env.teardown();

@@ -951,6 +951,8 @@ export class MindStore {
       parentMomentId: String(input.parentMomentId || ''),
       // 这一次时刻叫起来的子时刻（嵌套运行）：父与子都能互相追到。
       childMomentIds: Array.isArray(input.childMomentIds) ? input.childMomentIds.slice(0, 20) : [],
+      // 祖先链：这一次时刻是由哪些运行时一路叫起来的（防环、也方便说清"这次是谁触发的"）。
+      ancestry: Array.isArray(input.ancestry) ? input.ancestry.slice(0, 8).map(String) : [],
       attempts: Array.isArray(input.attempts) ? input.attempts.slice(0, 50) : [],
       actions: Array.isArray(input.actions) ? input.actions.slice(0, 20) : []
     };

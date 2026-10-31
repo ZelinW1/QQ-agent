@@ -170,6 +170,7 @@ console.log('\n=== 6. 嵌套 ===');
   check(mo.usage.self.tokens > 0 && mo.usage.self.tokens < mo.usage.subtree.tokens, '父/子用量分开记');
   check(mo.actions.includes('send_proactive'), '动作记在 moment 上');
   check((mo.childMomentIds || []).includes('mo_child_1'), '父 moment 记得住子时刻');
+  check(mo.usage.subtree.calls === 1, `子用量记了调用次数（${mo.usage.subtree.calls}）`);
 }
 
 // ── 7. 内部动作的效用信号（整理 → 欠账变少）─────────────────────────────

@@ -1482,6 +1482,19 @@ export function createApp({ log = console.log, mind: mindOverride } = {}) {
   }
 
   async function start() {
+    // 首启迁移（设计 §9.2）：旧数据目录先升级再干活。
+    // store 已经在 createApp 里构造，但它只记路径、不持有句柄；这里换完目录后
+    // 所有读写都会落到新目录，等价于"打开前迁移"。失败只记日志，不阻塞启动。
+    try {
+      const { autoMigrateIfNeeded } = await import('./mind/migrate.js');
+      const migrated = autoMigrateIfNeeded({ dataDir: DATA_DIR });
+      if (migrated?.applied) {
+        log(`[mind] 数据已迁移到 v${migrated.plan?.toVersion}（备份：${migrated.backupDir}）`);
+      } else if (migrated && !migrated.skipped) {
+        log(`[mind] 迁移未完成：${migrated.reason || '未知原因'}`);
+      }
+    } catch { /* 领域被删除或迁移失败：按现状启动 */ }
+
     // ── 启动顺序（2026-09-18 按耗时画像重排）────────────────────────────
     // 旧顺序的瓶颈：HTTP → 遥测 → Skill加载(串行import) → SnowLuma启动(最长20s等端口)
     //              → OneBot连接 → 就绪日志。Skill 与 SnowLuma 互不依赖却串行，

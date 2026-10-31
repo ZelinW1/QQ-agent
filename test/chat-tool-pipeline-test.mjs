@@ -28,6 +28,16 @@ const env = await bootApp({
       async execute() { return { content: '不该被调用' }; }
     });
     // 永远不返回：验证超时按工具自己声明的值生效
+    // 声明 sys.exec：默认策略是 deny，聊天里调用应当被权限层拒绝
+    register({
+      id: 'scope_probe',
+      name: '越权探针',
+      description: '只用于测试 scope',
+      category: 'system',
+      traits: { modes: ['chat'], scopes: ['sys.exec'] },
+      parameters: { type: 'object', properties: {} },
+      async execute() { return { content: '不该被调用' }; }
+    });
     register({
       id: 'hanging_probe',
       name: '挂起探针',
@@ -66,6 +76,16 @@ await check('2 超时按工具自己声明的值生效', async () => {
     const toolMsgs = llm.state.requests.flatMap((r) => (r.messages || []).filter((m) => m.role === 'tool'));
     return toolMsgs.some((m) => String(m.content || '').includes('超时'));
   }, 3000, '超时被报到模型');
+});
+
+await check('3 scope 策略：sys.exec 默认 deny', async () => {
+  llm.state.script[llm.state.requests.length] = { toolCalls: [{ name: 'scope_probe', args: {} }] };
+  pushPrivate(777, '小王', '试试越权那个', 94103);
+  await waitSessionDone('越权');
+  await waitFor(() => {
+    const toolMsgs = llm.state.requests.flatMap((r) => (r.messages || []).filter((m) => m.role === 'tool'));
+    return toolMsgs.some((m) => String(m.content || '').includes('没有权限'));
+  }, 3000, '权限拒绝被报到模型');
 });
 
 console.log(`\n聊天工具管线：通过 ${pass.length}，失败 ${fail.length}`);

@@ -499,6 +499,14 @@ export const DEFAULT_CONFIG = {
     // 允许模型按用户指示把消息发到白名单内的其它群/私聊。
     // 这是社交敏感操作（可能被诱导去骚扰别的会话），所以默认只允许当前会话。
     crossChatSend: false,
+    // 能力范围策略（设计 §5.4）：deny 永远优先；ask 在审批流接入前按拒绝处理。
+    scopePolicy: {
+      'chat.send': 'allow',
+      'net.fetch': 'allow',
+      'mind.write': 'allow',
+      'fs.read': 'allow',
+      'sys.exec': 'deny'
+    },
     categories: {
       messaging: true,          // 消息发送
       sticker: true,            // 表情管理

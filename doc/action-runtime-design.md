@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **C 期主干 + P0/P1 + R14 已落地**（唤醒时钟 / 统一循环 / 工具投影 / Moment / 嵌套 / 启动对账 / L2b 与 L4 / 领域服务）。仍未做：权限 scopes、完整 traits 字段、完整迁移工具、嵌套 ancestry。以 §12「验收状态」为准 |
+| 状态 | **C 期主干 + P0/P1 + R14 已落地**（唤醒时钟 / 统一循环 / 工具投影 / Moment / 嵌套 / 启动对账 / L2b 与 L4 / 领域服务）。仍未做：token 预算硬合并、审批 UI/收据（D 期）、完整 traits 字段（kind/owner）。以 §12「验收状态」为准 |
 | 目标版本 | 0.6 |
 | 代码基准 | `ef5a8ec`（重构起点）→ 当前 HEAD（含 2026-10-30 审查后的修复） |
 | 读者 | 参与本模块实现与验收的开发者 |
@@ -1101,15 +1101,15 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
 | §4.2.1 兜底事件 | 一次对话时刻至少一条事件 | 2026-10-30 补上（`runtime.chat`）；此前完全没实现 | ✅（新） |
 | §4.5 观测回声 | 每个成功动作开观测、回话即命中、按结局调频 | 已补 echo/utility 两类；回声闭环 + 内部效用信号 + `attempts<5`/0.6×/3×/`dormant` | ✅ |
 | §5.3 聊天工具过管线 | 八步管线覆盖所有工具调用 | 2026-10-30 已接：validate / permission / execute / audit 四步，工具调用落 attempts（`kind:'tool'`） | ✅ |
-| §5.4 权限 scopes | 按范围授权 | 只做了 `traits.modes` 的场合控制；scopes 未实现 | 🟡 |
+| §5.4 权限 scopes | scope / policy / identity | 已做 A 期三样：`traits.scopes` + `tools.scopePolicy`（deny 优先、ask 在无审批通道时 fail closed、identity 用注册表定义）；审批 UI 与收据留给 D 期 | ✅ |
 | §5.2 工具 schema v3 | `schemaVersion` / `traits` / `kind` / `scopes` / `owner` | `schemaVersion=2` + `traits.modes/scopes[]` 已落地；`kind/owner` 未做 | 🟡 |
 | §6.1/6.2 profiles / projectTools / 菜单投影 | 运行时数据化 | 用 `src/runtime/project-tools.js` 投影菜单与工具表（同源）；没有独立的 profiles 表 | 🟡 |
 | §6.2.1 自由时间读工具 | 能读消息/搜索 | 已接 4 个只读工具（`get_recent_messages` 等），按 `traits.modes` 过滤 | ✅ |
 | §7.1/7.2 统一执行器 | 一个 `runAgent` 四种策略 | `src/runtime/agent-loop.js` 统一循环；free 已接，chat 仍是自己的循环（未完全合并） | 🟡 |
 | §7.3 唤醒时钟 | `impulseAt` + `nextWakeAt = min(...)` + 门禁 | 已落地：`src/runtime/wake.js`；tick 持久化 `impulseAt`，醒来重抽；门禁 8 种 | ✅ |
-| §4.7 嵌套 / traits.composite | depth/ancestry/预算合并 | `send_proactive` 声明 `composite:{runtime:'chat',maxDepth:1}`；父 moment 记 `usage.subtree`；ancestry 未做（只有 depth） | 🟡 |
+| §4.7 嵌套 / traits.composite | depth/ancestry/预算合并 | depth + ancestry（祖先链、成环拒绝）+ 子用量 `{tokens,calls}`；token 预算合并仍只是记账，不做硬截断 | 🟡 |
 | §8 Moment / usage 分桶 | moments + usage.self/subtree + configDigest | 已落地：chat/free/boot 三类 moment；attempts 带 `momentId` | ✅ |
-| §9 迁移与启动对账 | schemaVersion/备份/回滚/过期观测清理 | 已做：启动对账 + 迁移 CLI（dry-run、备份、校验、原子换名、回滚）；**首启自动迁移未接**（旧数据要手动 `npm run mind:migrate`） | 🟡 |
+| §9 迁移与启动对账 | schemaVersion/备份/回滚/过期观测清理 | 已做：启动对账、迁移 CLI、**首启自动迁移**（有内容的 v0/旧版本自动升级；空目录跳过） | ✅ |
 
 
 **2026-10-30 第二轮（P0 审查意见）**
@@ -1166,8 +1166,19 @@ npm run mind:rollback -- --to "D:\QQ Agent\data\.backup-20261029"
    `npm run mind:rollback -- --to <备份>`。
 5. 启动对账的 storeVersion 对齐到 3。
 
-**仍未修**：首启自动迁移（设计 §9.2 的"检测到 v0 自动跑一次"未接，当前需手动执行；
-避免在 store 打开期间换目录带来竞态）、权限 scopes、嵌套 ancestry 与预算合并。
+**2026-10-31 第六轮（scopes / 首启 / ancestry）**
+
+1. 权限 A 期三样：
+   - `src/runtime/permissions.js`：scope/policy 纯函数，deny 永远优先，ask 在审批通道前按拒绝处理；
+   - 配置 `tools.scopePolicy`（内置默认 allow、`sys.exec` 默认 deny、扩展未知 scope 默认 ask）；
+   - 内置工具声明 scope（send_message=chat.send、web_search=net.fetch）；
+   - 聊天与自由两条管线都在 permission 步调用 checkScopes，拒绝原因进 attempts。
+2. 首启自动迁移：`autoMigrateIfNeeded` + `app.start()` 最前面执行；有内容的旧目录自动升级，
+   空目录/无目录跳过；失败只记日志不影响启动。
+3. 嵌套 ancestry：moment 记录 `ancestry`，祖先里已有同一运行时则拒绝（`cycle`）；
+   子用量变成 `{tokens, calls}`，父 moment 用 childMomentIds 计调用次数。
+
+**仍未修**：token 预算的硬合并（当前只记账）、审批 UI / 收据（D 期）。
 **2026-10-30 已修（审查发现的硬伤）**
 
 1. 自由时刻提示词要求"只输出 JSON"、执行侧只认 `tool_calls` —— 已改成工具调用语义（模型照提示词做不再必然 idle）。
